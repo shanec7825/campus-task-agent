@@ -61,7 +61,7 @@ jobs:
         run: bash tests/backend/run_all.sh
 
   frontend:
-    name: Frontend types, build and voice tests
+    name: Frontend build, voice and public source security checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -80,12 +80,4 @@ jobs:
         working-directory: frontend
       - run: bash tests/frontend/run_all.sh
 
-  security:
-    name: Public source security checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
       - run: bash tests/security/test_security_redline.sh

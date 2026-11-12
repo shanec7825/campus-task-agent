@@ -43,3 +43,26 @@
   若重吐内容又被 ITN 改写成不同字面（如"十一月"→"11月"），文本层仍无法识别——此时按既定结论
   **不再修文本层，直接启用 Plan B（取消自动续接、停顿即结算并提示）**，需用户拍板。
 - 本轮为极简执行，**没有回归数字**；真机效果以用户自测为准。
+
+## 5 静态契约检查口径同步（CI 修复轮）
+
+`tests/frontend/check_contracts.py` 第 ㉔ 项（`C-VOICEUI@5 §2/§3`）的断言口径已按本轮
+「展示 / 发送分层」更新，标题与通过文案改为「仅定稿追加路径接入」。旧口径要求
+`applyInterim` 也调用 `trimResumedTranscript`，与本轮实现相反，现已删除。
+
+现行断言（7 条）：
+
+1. `utils/voiceSlicer.ts` 导出 `trimRestartOverlap`，且文件内无 `import`（纯函数、零依赖）。
+2. `useVoiceComposer.ts` 从 `utils/voiceSlicer` 引入 `trimRestartOverlap`。
+3. `trimResumedTranscript()` 调用 `trimRestartOverlap(`。
+4. `applyInterim()` 含 `pushLiveText(transcript)`，且不含 `trimResumedTranscript(` /
+   `fullText.value` / `sentIndex` / `scheduleSlices(` / `enqueue(` / `streamParse(`
+   ——临时结果只展示，不落缓冲、不切片、不发 AI。
+5. `applyFinal()` 含 `trimResumedTranscript(` 且首次出现早于 `fullText.value +=`；
+   含 `if (!frameText)` 空帧守卫，守卫分支内有 `return` 且无 `fullText.value +=`。
+6. `replaceTail()` 内不出现 `trimResumedTranscript(` / `trimRestartOverlap(`。
+7. 文件含 `RESUMED_RESTART_FRAME_BUDGET = 3`；`resetLocalBuffer()` 含
+   `resumedRestartFrames = 0`。
+
+> 本节只记录检查口径的更新，不写任何未发生的验证结论。
+> `useVoiceComposer.ts` / `voiceSlicer.ts` 未做任何改动。

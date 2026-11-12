@@ -1994,7 +1994,12 @@ def check_voice_v5_dedup_chain(rel_path: str, src_dir: Path) -> str:
 
 
 def check_trim_restart_overlap(rel_slicer: str, rel_composer: str, src_dir: Path) -> str:
-    """㉔ `C-VOICEUI@5 §2/§3`（D3）：纯函数导出 + 只接在追加分支。"""
+    """㉔ `C-VOICEUI@5 §2/§3`（D3）：纯函数导出 + 仅定稿追加路径接入。
+
+    第六轮 G1 起展示与发送分层：`applyInterim` 只调用 `pushLiveText`，**不落缓冲、
+    不切片、不发 AI**；只有 ITN 定稿帧（`applyFinal`）先裁剪再追加。检查口径随之
+    从「interim 与 final 都必须裁剪」改为「interim 只展示、final 先裁剪再追加」。
+    """
     slicer_text = strip_ts_comments(load_text(src_dir / rel_slicer))
     composer = strip_ts_comments(load_text(src_dir / rel_composer))
 
@@ -2005,7 +2010,11 @@ def check_trim_restart_overlap(rel_slicer: str, rel_composer: str, src_dir: Path
     if re.search(r"^\s*import\s", slicer_text, re.MULTILINE):
         problems.append(f"{rel_slicer} 出现 import 语句（Q8：voiceSlicer 必须零 import）")
 
-    if re.search(r"import\s*\{[^}]*\btrimRestartOverlap\b", composer) is None:
+    import_pattern = (
+        r"import\s*\{[^}]*\btrimRestartOverlap\b[^}]*\}\s*from\s*"
+        r"['\"][^'\"]*utils/voiceSlicer['\"]"
+    )
+    if re.search(import_pattern, composer) is None:
         problems.append(
             f"{rel_composer} 未从 utils/voiceSlicer 引入 `trimRestartOverlap`"
             "（C-VOICEUI@5 §3 接入层）"
@@ -2022,25 +2031,89 @@ def check_trim_restart_overlap(rel_slicer: str, rel_composer: str, src_dir: Path
             "未调用 `trimRestartOverlap()`"
         )
 
-    for name in ("applyInterim", "applyFinal"):
-        try:
-            body, line = function_body(composer, name)
-        except ContractError as exc:
-            problems.append(f"{rel_composer} 缺少函数 `{name}()`：{exc}")
-            continue
-        if "trimResumedTranscript(" not in body:
+    try:
+        interim_body, interim_line = function_body(composer, "applyInterim")
+    except ContractError as exc:
+        problems.append(f"{rel_composer} 缺少函数 `applyInterim()`：{exc}")
+        interim_body, interim_line = "", 0
+    if interim_body:
+        if "pushLiveText(transcript)" not in interim_body:
             problems.append(
-                f"{render_location(rel_composer, line)} {name}() 未接入续接重吐裁剪"
-                "（C-VOICEUI@5 §3：只允许在追加路径裁剪）"
+                f"{render_location(rel_composer, interim_line)} applyInterim() 未调用 "
+                "`pushLiveText(transcript)`（interim 只做实时显示）"
             )
-            continue
-        append_index = body.find("fullText.value +=")
-        trim_index = body.find("trimResumedTranscript(")
-        if append_index >= 0 and trim_index > append_index:
+        forbidden = (
+            "trimResumedTranscript(",
+            "fullText.value",
+            "sentIndex",
+            "scheduleSlices(",
+            "enqueue(",
+            "streamParse(",
+        )
+        hits = [token for token in forbidden if token in interim_body]
+        if hits:
             problems.append(
-                f"{render_location(rel_composer, line)} {name}() 的裁剪调用晚于追加语句"
+                f"{render_location(rel_composer, interim_line)} applyInterim() 体仍出现 "
+                + " / ".join(f"`{token}`" for token in hits)
+                + "（第六轮 G1：临时结果只展示，不落缓冲、不切片、不发 AI）"
+            )
+
+    try:
+        final_body, final_line = function_body(composer, "applyFinal")
+    except ContractError as exc:
+        problems.append(f"{rel_composer} 缺少函数 `applyFinal()`：{exc}")
+        final_body, final_line = "", 0
+    if final_body:
+        trim_index = final_body.find("trimResumedTranscript(")
+        append_index = final_body.find("fullText.value +=")
+        if trim_index < 0:
+            problems.append(
+                f"{render_location(rel_composer, final_line)} applyFinal() 未接入续接重吐裁剪"
+                "（C-VOICEUI@5 §3：仅定稿追加路径先裁剪再追加）"
+            )
+        elif append_index < 0:
+            problems.append(
+                f"{render_location(rel_composer, final_line)} applyFinal() 缺少定稿追加语句 "
+                "`fullText.value +=`（C-VOICEUI@5 §3：定稿是唯一写入缓冲的入口）"
+            )
+        elif trim_index > append_index:
+            problems.append(
+                f"{render_location(rel_composer, final_line)} applyFinal() 的裁剪调用晚于追加语句"
                 "（R25-AC6：必须先裁剪再追加）"
             )
+
+        guard_index = final_body.find("if (!frameText)")
+        if guard_index < 0:
+            problems.append(
+                f"{render_location(rel_composer, final_line)} applyFinal() 缺少空帧守卫 "
+                "`if (!frameText)`"
+            )
+        else:
+            guard_open = final_body.find("{", guard_index)
+            if guard_open < 0:
+                problems.append(
+                    f"{render_location(rel_composer, final_line)} applyFinal() 的 "
+                    "`if (!frameText)` 之后未找到分支体 `{`"
+                )
+            else:
+                try:
+                    guard_body = extract_balanced_braces(final_body, guard_open)
+                except ContractError as exc:
+                    problems.append(
+                        f"{render_location(rel_composer, final_line)} applyFinal() 的空帧守卫分支"
+                        f"无法解析：{exc}"
+                    )
+                else:
+                    if re.search(r"\breturn\b", guard_body) is None:
+                        problems.append(
+                            f"{render_location(rel_composer, final_line)} applyFinal() 的空帧守卫"
+                            "分支缺少 `return`（空帧必须直接返回）"
+                        )
+                    if "fullText.value +=" in guard_body:
+                        problems.append(
+                            f"{render_location(rel_composer, final_line)} applyFinal() 的空帧守卫"
+                            "分支内出现 `fullText.value +=`（空帧不得写入缓冲）"
+                        )
 
     try:
         replace_body, replace_line = function_body(composer, "replaceTail")
@@ -2077,7 +2150,8 @@ def check_trim_restart_overlap(rel_slicer: str, rel_composer: str, src_dir: Path
         raise ContractError("；".join(problems))
     return (
         f"{rel_slicer} 导出零 import 纯函数 `trimRestartOverlap()`；{rel_composer} 在 "
-        "applyInterim / applyFinal 的追加语句前调用 `trimResumedTranscript()`（窗口 3 帧），"
+        "applyInterim 只调用 `pushLiveText(transcript)`（不落缓冲、不切片、不发 AI），"
+        "applyFinal 在追加语句前调用 `trimResumedTranscript()`（窗口 3 帧）且空帧守卫内不追加，"
         "resetLocalBuffer() 复位 `resumedRestartFrames = 0`，replaceTail 路径 0 命中"
     )
 
@@ -2129,7 +2203,7 @@ CHECKS = CHECKS + (
         lambda: check_voice_v5_dedup_chain("composables/useVoiceComposer.ts", SRC_DIR),
     ),
     (
-        "㉔ C-VOICEUI@5 §2/§3 trimRestartOverlap 导出 + 仅追加路径接入 + resetLocalBuffer 复位",
+        "㉔ C-VOICEUI@5 §2/§3 trimRestartOverlap 导出 + 仅定稿追加路径接入 + resetLocalBuffer 复位",
         lambda: check_trim_restart_overlap(
             "utils/voiceSlicer.ts", "composables/useVoiceComposer.ts", SRC_DIR
         ),

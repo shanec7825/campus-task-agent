@@ -863,7 +863,7 @@ onMounted(async () => {
 .audit-hint {
   margin: 4px 0 12px;
   font-size: 13px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   line-height: 1.6;
 }
 

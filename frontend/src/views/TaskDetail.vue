@@ -891,12 +891,12 @@ watch(
 }
 
 .member-table :deep(.is-me) {
-  background: #f5f9ff;
+  background: var(--el-color-primary-light-9);
 }
 
 .member-name {
   font-weight: 500;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 
 .row-tag {
@@ -904,7 +904,7 @@ watch(
 }
 
 .member-reason {
-  color: #f56c6c;
+  color: var(--el-color-danger);
   font-size: 13px;
 }
 
