@@ -1,0 +1,11 @@
+# 后端依赖（宽版本下限，不锁定小版本；依据 plan.md 2.3 D6）
+# Python 3.14 若缺少预编译轮子导致安装失败，请改用 Python 3.11 / 3.12 创建 venv。
+fastapi>=0.110
+uvicorn[standard]>=0.29
+sqlalchemy>=2.0
+pydantic>=2.6
+openai>=1.30
+# APScheduler 4.x 的 API 与 3.x 不兼容，故限制主版本 < 4（非死 pin）
+apscheduler>=3.10,<4
+python-dotenv>=1.0
+jieba>=0.42

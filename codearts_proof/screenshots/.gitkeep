@@ -1,0 +1,6 @@
+codearts_proof / screenshots
+
+用途：各阶段截图合集（Agent Team 任务面板、子 Agent 状态、页面效果、排错现场）。
+不提交大文件：截图请压缩为 png/jpg 后入库，单个文件建议 < 500KB。
+索引：请把每张截图对应的阶段与说明登记到 codearts_proof/LOG.md 或对应 ai_dialogue/stage*.md 中。
+当前状态：目录占位，截图待各阶段负责人补录。

@@ -1,0 +1,7 @@
+codearts_proof / prompts / 业务Agent
+
+用途：归档应用内业务 Agent（提炼助手 / 审核助手 / 催办管家规则）的 System Prompt 版本演进。
+命名建议：extractor_v1.md、extractor_v2.md、reviewer_v1.md ……
+与代码的对应关系：Prompt 正文唯一来源是 backend/app/agents/prompts.py；
+本目录保存"某一版本文本 + 修改原因"，便于复核评分点「Prompt 质量」。
+当前状态：目录占位，版本文件待真实迭代后归档（未发生的迭代不写入）。

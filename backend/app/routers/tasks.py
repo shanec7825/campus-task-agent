@@ -1,0 +1,973 @@
+"""任务路由（契约 `C-TASKS@1` / `C-TASK-API@1`，owner = T2）。
+
+错误码总表在本模块（计划 `2.2.4`），其他路由（``checkin``）复用同一份常量。
+状态机流转集合由 ``services/task_state.py`` 提供（全后端唯一实现），本模块的
+:func:`_ensure_transition` 是所有手工状态变更前的统一校验入口，非法流转统一
+``ApiError(4090, "任务当前状态不允许该操作")``，且**先校验后写库**。
+
+逐人执行语义（`C-MEMBER@1`）：进度 / 提交 / 验收均以 ``task_members`` 行为粒度，
+任务级 ``status`` 由 :func:`member_service.sync_task_status` 按成员状态派生。
+
+写库顺序约束（实现要点 2）：单请求内最多保留一次业务 ``commit``；
+``verify`` 的「任务状态 + 成员状态 + 积分流水 + 用户余额 + 通知」在同一事务内提交。
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any, Iterable, Literal
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.deps import get_current_user
+from app.errors import ApiError, ok
+from app.models import ProgressLog, Task, TaskApplication, User
+from app.schemas import (
+    AssignIn,
+    Draft,
+    ProgressIn,
+    ProgressOut,
+    TaskBrief,
+    TaskCreate,
+    TaskDetailOut,
+    TaskOut,
+    TaskUpdate,
+    VerifyIn,
+    VerifyOut,
+)
+from app.services import application_service
+from app.services import credit as credit_service
+from app.services import member_service, notify_service
+from app.services.task_state import ALLOWED_TRANSITIONS
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+# --------------------------------------------------------------------------- #
+# 错误码总表（计划 `2.2.4`，全后端唯一实现位置）
+# --------------------------------------------------------------------------- #
+ERR_INVALID_PARAM = 4001  # 参数校验失败
+ERR_UNAUTHORIZED = 4010  # 未登录
+ERR_DEPENDENCY = 4020  # 前置依赖未完成
+ERR_FORBIDDEN = 4030  # 权限不足
+ERR_NOT_FOUND = 4040  # 资源不存在
+ERR_CONFLICT = 4090  # 状态冲突
+
+# --------------------------------------------------------------------------- #
+# 状态机（R3-AC1）：合法流转集合由 `services/task_state.py` 定义，
+# 本模块只做写库前校验；前端只做展示与置灰。
+# --------------------------------------------------------------------------- #
+
+# 允许指派的源状态（`2.2.4` 指派规则）
+ASSIGN_ALLOWED_STATUSES: frozenset[str] = frozenset({"published", "claimed"})
+
+# PATCH 允许修改的列（`2.2.4` 修改规则；parent_id 不在白名单内）
+_TASK_UPDATE_FIELDS: tuple[str, ...] = (
+    "description",
+    "location",
+    "start_time",
+    "deadline",
+    "quota",
+    "volunteer_hours",
+    "claim_type",
+    "assignee_id",
+    "depends_on",
+    "sop_guide",
+    "style_note",
+    "credit_reward",
+)
+
+# 未提供 reminder_rule 时的兜底规则（`2.2.2` 关键映射表）
+DEFAULT_REMINDER_RULE: dict[str, Any] = {"days_before": 1, "day_of": True, "on_overdue": True}
+
+
+def _ensure_transition(task: Task, target: str) -> None:
+    """校验 ``task.status → target`` 是否合法，非法统一抛 4090（R3-AC2）。"""
+    allowed = ALLOWED_TRANSITIONS.get(task.status, frozenset())
+    if target not in allowed:
+        logger.info("非法流转被拒绝 task_id=%s %s -> %s", task.id, task.status, target)
+        raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+
+
+def _get_task_or_404(db: Session, task_id: int) -> Task:
+    """按 id 取任务，不存在抛 4040。"""
+    task = db.get(Task, task_id)
+    if task is None:
+        raise ApiError(ERR_NOT_FOUND, "任务不存在")
+    return task
+
+
+def _now_local() -> str:
+    """服务器本地时间，格式与全库口径一致：``YYYY-MM-DD HH:MM:SS``。"""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _my_member_status(members: Iterable[dict[str, Any]], current_user_id: int) -> str | None:
+    """从成员载荷里取「当前用户」的成员状态；非 approved 成员返回 ``None``。"""
+    for item in members:
+        if int(item.get("user_id", 0)) == int(current_user_id):
+            return str(item.get("status") or member_service.MEMBER_NOT_STARTED)
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# 任务序列化（TaskOut / TaskDetailOut 的派生字段计算）
+# --------------------------------------------------------------------------- #
+def _names_map(db: Session, tasks: Iterable[Task]) -> dict[int, str]:
+    """批量取 ``user_id -> display_name``，避免逐行查询（N+1）。"""
+    ids: set[int] = set()
+    for task in tasks:
+        ids.add(int(task.publisher_id))
+        if task.assignee_id is not None:
+            ids.add(int(task.assignee_id))
+    if not ids:
+        return {}
+    rows = db.query(User.id, User.display_name).filter(User.id.in_(ids)).all()
+    return {int(row[0]): str(row[1]) for row in rows}
+
+
+def _dep_status_map(db: Session, tasks: Iterable[Task]) -> dict[int, str]:
+    """批量取前置依赖任务的 ``id -> status``，供 ``is_claimable`` 计算。"""
+    dep_ids = {int(task.depends_on) for task in tasks if task.depends_on is not None}
+    if not dep_ids:
+        return {}
+    rows = db.query(Task.id, Task.status).filter(Task.id.in_(dep_ids)).all()
+    return {int(row[0]): str(row[1]) for row in rows}
+
+
+def _is_claimable(
+    task: Task,
+    current_user_id: int,
+    dep_status: dict[int, str],
+    approved_count: int,
+    my_status: str | None,
+) -> bool:
+    """`C-APPLY@1` 的可报名公式（前端置灰用，真正校验以后端 A1 六条顺序为准）。
+
+    ``claim_type`` 不再参与判定（``assign`` 任务同样可被学生报名，由发布者决定）。
+    """
+    if str(task.status) not in ("published", "claimed"):
+        return False
+    if task.quota is not None and int(approved_count) >= int(task.quota):
+        return False
+    if int(task.publisher_id) == int(current_user_id):
+        return False
+    if task.depends_on is not None and dep_status.get(int(task.depends_on)) != "verified":
+        return False
+    return my_status not in application_service.BLOCKING_STATUSES
+
+
+def _my_status_map(
+    db: Session,
+    tasks: Iterable[Task],
+    current_user_id: int,
+    approved_names: dict[int, list[tuple[int, str]]],
+) -> dict[int, str | None]:
+    """批量取 ``task_id -> 当前用户的报名状态``（一次 IN 查询，禁止 N+1）。
+
+    legacy 回退与 ``application_service.user_application_status`` 保持一致：
+    无报名行但本人是 ``assignee_id`` 且该任务尚无 approved 行时视为 ``approved``；
+    该条件等价于「``approved_users_bulk`` 的结果里含本人」。
+    """
+    task_ids = [int(task.id) for task in tasks if task.id is not None]
+    if not task_ids:
+        return {}
+
+    rows = (
+        db.query(TaskApplication.task_id, TaskApplication.status)
+        .filter(
+            TaskApplication.user_id == int(current_user_id),
+            TaskApplication.task_id.in_(task_ids),
+        )
+        .all()
+    )
+    own: dict[int, str] = {int(row[0]): str(row[1]) for row in rows}
+
+    result: dict[int, str | None] = {}
+    for task in tasks:
+        task_id = int(task.id)
+        status = own.get(task_id)
+        if status is None:
+            approved_pairs = approved_names.get(task_id) or []
+            if any(int(user_id) == int(current_user_id) for user_id, _ in approved_pairs):
+                status = application_service.APPROVED
+        result[task_id] = status
+    return result
+
+
+def _task_payload(
+    task: Task,
+    names: dict[int, str],
+    dep_status: dict[int, str],
+    current_user_id: int,
+    *,
+    approved_names: dict[int, list[tuple[int, str]]],
+    counts: dict[str, int],
+    my_status: str | None,
+    members: list[dict[str, Any]] | None = None,
+    my_member_status: str | None = None,
+) -> dict[str, Any]:
+    """构造与 ``TaskOut`` 完全对齐的字典（含报名派生字段与逐人成员载荷）。
+
+    Args:
+        task: 任务实体。
+        names: ``user_id -> display_name`` 映射（发布者名称）。
+        dep_status: 前置任务 ``id -> status`` 映射。
+        current_user_id: 当前用户（用于 ``is_claimable`` 与本人状态）。
+        approved_names: ``task_id -> [(user_id, display_name)]``（含 legacy 回退）。
+        counts: ``{"pending": n, "approved": m}``（含 legacy 回退）。
+        my_status: 当前用户对该任务的报名状态（无记录为 ``None``）。
+        members: ``task.members`` 载荷（逐人执行状态）。
+        my_member_status: 当前用户的成员状态（非成员为 ``None``）。
+    """
+    task_id = int(task.id)
+    assignee_names = [str(name) for _, name in (approved_names.get(task_id) or [])]
+    applied_count = int(counts.get(application_service.PENDING, 0))
+    approved_count = int(counts.get(application_service.APPROVED, 0))
+
+    raw: dict[str, Any] = {
+        "id": task.id,
+        "parent_id": task.parent_id,
+        "title": task.title,
+        "description": task.description,
+        "location": task.location,
+        "start_time": task.start_time,
+        "deadline": task.deadline,
+        "quota": task.quota,
+        "volunteer_hours": task.volunteer_hours,
+        "status": task.status,
+        "claim_type": task.claim_type,
+        "publisher_id": task.publisher_id,
+        "assignee_id": task.assignee_id,
+        "depends_on": task.depends_on,
+        "sop_guide": task.sop_guide,
+        "style_note": task.style_note,
+        "extras": task.extras or {},
+        "reminder_rule": task.reminder_rule,
+        "credit_reward": task.credit_reward,
+        "created_at": task.created_at,
+        # 首位 approved 兼容字段（`C-APPLY@1` 多负责人规则表）
+        "assignee_name": assignee_names[0] if assignee_names else None,
+        "publisher_name": names.get(int(task.publisher_id), ""),
+        "is_claimable": _is_claimable(
+            task, current_user_id, dep_status, approved_count, my_status
+        ),
+        "applied_count": applied_count,
+        "approved_count": approved_count,
+        "my_application_status": my_status,
+        "assignee_names": assignee_names,
+        "members": members or [],
+        "my_member_status": my_member_status,
+    }
+    return TaskOut.model_validate(raw).model_dump()
+
+
+def _single_task_payload(db: Session, task: Task, current_user_id: int) -> dict[str, Any]:
+    """单个任务的序列化入口：批量 approved / 计数 / 本人状态 / 成员载荷各一次查询。"""
+    approved_names = application_service.approved_users_bulk(db, [task])
+    counts = application_service.status_counts_bulk(db, [int(task.id)])
+    my_status = _my_status_map(db, [task], current_user_id, approved_names).get(int(task.id))
+    members = member_service.members_payload_bulk(db, [task]).get(int(task.id), [])
+    return _task_payload(
+        task,
+        _names_map(db, [task]),
+        _dep_status_map(db, [task]),
+        current_user_id,
+        approved_names=approved_names,
+        counts=counts.get(int(task.id), {}),
+        my_status=my_status,
+        members=members,
+        my_member_status=_my_member_status(members, current_user_id),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 知识库入库（T3 提供实现；本任务只负责调用，失败不得回滚任务发布）
+# --------------------------------------------------------------------------- #
+def _index_task_safe(db: Session, task: Task) -> None:
+    """调用 ``kb_service.index_task``（`C-KB@1`），失败只记日志。
+
+    T3 尚未交付时该函数仍为 ``NotImplementedError`` 桩，因此这里捕获全部异常；
+    任务发布本身已在调用前提交，任何入库失败都不会回滚已发布的任务。
+    """
+    task_id = task.id
+    try:
+        # 延迟导入：T3 交付前也能正常启动（模块级导入会让发布流程在启动期失败）
+        from app.services.kb_service import index_task
+
+        index_task(db, task)
+        db.commit()
+    except Exception:
+        logger.warning("知识库入库失败（不影响任务发布）task_id=%s", task_id, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:  # rollback 本身失败时保持原状，绝不向上冒泡
+            logger.warning("知识库入库失败后 rollback 异常 task_id=%s", task_id, exc_info=True)
+
+
+def _my_participating_task_ids(db: Session, user_id: int) -> list[int]:
+    """当前用户作为 **approved 成员** 参与的任务 id（整页一次 IN 查询，禁止 N+1）。
+
+    ``scope=mine`` 不能只看 ``tasks.assignee_id``：该列只是「首位 approved」的兼容字段，
+    第 2 名及以后的 approved 成员在单负责人语义下会被漏掉（真实缺陷）。
+    """
+    rows = (
+        db.query(TaskApplication.task_id)
+        .filter(
+            TaskApplication.user_id == int(user_id),
+            TaskApplication.status == application_service.APPROVED,
+        )
+        .all()
+    )
+    return [int(row[0]) for row in rows]
+
+
+# --------------------------------------------------------------------------- #
+# #1 列表
+# --------------------------------------------------------------------------- #
+@router.get("")
+def list_tasks(
+    status: str | None = Query(default=None, description="单值过滤；逗号分隔按 IN 处理"),
+    scope: Literal["all", "mine"] = Query(default="all"),
+    include_sub: bool = Query(default=False),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """任务列表：状态 / 范围 / 是否含子任务过滤，``created_at DESC, id DESC`` 排序。
+
+    ``scope=mine`` 的语义（多负责人模型）：我是发布者 **或** 我是任一 approved 成员
+    **或** （legacy）``tasks.assignee_id == 我``；``scope=all`` 行为不变。
+    """
+    query = db.query(Task)
+
+    if status:
+        values = [item.strip() for item in status.split(",") if item.strip()]
+        if values:
+            query = query.filter(Task.status.in_(values))
+
+    if scope == "mine":
+        conditions = [
+            Task.publisher_id == current_user.id,
+            # legacy 回退：P1 数据没有报名行，只靠 assignee_id
+            Task.assignee_id == current_user.id,
+        ]
+        participating_ids = _my_participating_task_ids(db, current_user.id)
+        if participating_ids:
+            conditions.append(Task.id.in_(participating_ids))
+        query = query.filter(or_(*conditions))
+
+    if not include_sub:
+        query = query.filter(Task.parent_id.is_(None))
+
+    tasks = query.order_by(Task.created_at.desc(), Task.id.desc()).all()
+
+    # 批量派生（整页一次）：approved 成员 / 状态计数 / 本人状态 / 成员载荷，禁止循环查库
+    names = _names_map(db, tasks)
+    dep_status = _dep_status_map(db, tasks)
+    approved_names = application_service.approved_users_bulk(db, tasks)
+    counts = application_service.status_counts_bulk(db, tasks)
+    my_status = _my_status_map(db, tasks, current_user.id, approved_names)
+    members_by_task = member_service.members_payload_bulk(db, tasks)
+    items = []
+    for task in tasks:
+        members = members_by_task.get(int(task.id), [])
+        items.append(
+            _task_payload(
+                task,
+                names,
+                dep_status,
+                current_user.id,
+                approved_names=approved_names,
+                counts=counts.get(int(task.id), {}),
+                my_status=my_status.get(int(task.id)),
+                members=members,
+                my_member_status=_my_member_status(members, current_user.id),
+            )
+        )
+    return ok({"items": items})
+
+
+# --------------------------------------------------------------------------- #
+# #2 发布
+# --------------------------------------------------------------------------- #
+@router.post("")
+def create_task(
+    payload: TaskCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """发布任务（手动兜底，R2.1-AC1）；成功后调用知识库增量入库。"""
+    title = payload.title.strip()
+    if not title:
+        raise ApiError(ERR_INVALID_PARAM, "任务标题不能为空")
+    if payload.quota is not None and payload.quota < 1:
+        raise ApiError(ERR_INVALID_PARAM, "需求人数必须大于 0")
+    if payload.credit_reward is not None and payload.credit_reward < 0:
+        raise ApiError(ERR_INVALID_PARAM, "完成奖励积分不能为负数")
+
+    # 子任务：发布者必须与父任务一致（`2.2.4` 发布规则）
+    parent: Task | None = None
+    if payload.parent_id is not None:
+        parent = db.get(Task, payload.parent_id)
+        if parent is None:
+            raise ApiError(ERR_INVALID_PARAM, "父任务不存在")
+        if int(parent.publisher_id) != int(current_user.id):
+            raise ApiError(ERR_FORBIDDEN, "只能在自己的任务下创建子任务")
+
+    # 依赖：必须存在且与当前任务同 parent_id（同批子任务间依赖）
+    if payload.depends_on is not None:
+        dependency = db.get(Task, payload.depends_on)
+        if dependency is None or dependency.parent_id != payload.parent_id:
+            raise ApiError(ERR_INVALID_PARAM, "依赖任务必须与当前任务属于同一父任务")
+
+    # 指派：仅 claim_type=assign 且提供 assignee_id 时生效，状态直接置 claimed
+    assignee_id: int | None = None
+    task_status = "published"
+    if payload.claim_type == "assign" and payload.assignee_id is not None:
+        if int(payload.assignee_id) == int(current_user.id):
+            raise ApiError(ERR_FORBIDDEN, "不能指派自己")
+        if db.get(User, payload.assignee_id) is None:
+            raise ApiError(ERR_INVALID_PARAM, "指派的用户不存在")
+        assignee_id = int(payload.assignee_id)
+        task_status = "claimed"
+
+    reminder_rule = (
+        payload.reminder_rule.model_dump() if payload.reminder_rule is not None else dict(DEFAULT_REMINDER_RULE)
+    )
+
+    task = Task(
+        parent_id=payload.parent_id,
+        title=title,
+        description=payload.description,
+        location=payload.location,
+        start_time=payload.start_time,
+        deadline=payload.deadline,
+        quota=payload.quota,
+        volunteer_hours=payload.volunteer_hours,
+        status=task_status,
+        claim_type=payload.claim_type,
+        publisher_id=current_user.id,
+        assignee_id=assignee_id,
+        depends_on=payload.depends_on,
+        sop_guide=payload.sop_guide,
+        style_note=payload.style_note,
+        extras=payload.extras,
+        reminder_rule=reminder_rule,
+        credit_reward=payload.credit_reward,
+    )
+    db.add(task)
+    db.flush()
+
+    # 直接指派：同一事务内补齐 approved 报名行与 not_started 成员行（`C-TASK-API@1`）
+    if assignee_id is not None:
+        now = _now_local()
+        db.add(
+            TaskApplication(
+                task_id=int(task.id),
+                user_id=int(assignee_id),
+                status=application_service.APPROVED,
+                reason=None,
+                created_at=now,
+                decided_at=now,
+                decided_by=int(current_user.id),
+            )
+        )
+        member_service.ensure_member(db, task, int(assignee_id))
+
+    db.commit()
+    db.refresh(task)
+
+    # 先固化响应快照（后续知识库入库失败可能 rollback 使 ORM 对象过期）
+    data = _single_task_payload(db, task, current_user.id)
+
+    if assignee_id is not None:
+        notify_service.create_notification(
+            db,
+            user_id=assignee_id,
+            task_id=task.id,
+            level="info",
+            title="你被指派了新任务",
+            content=f"你被指派《{task.title}》，截止 {task.deadline or '未设置'}。",
+        )
+
+    _index_task_safe(db, task)
+    return ok(data)
+
+
+# --------------------------------------------------------------------------- #
+# #3 详情
+# --------------------------------------------------------------------------- #
+@router.get("/{task_id}")
+def get_task(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """任务详情：含子任务、进度记录与 ``sop_guide``。"""
+    task = _get_task_or_404(db, task_id)
+
+    children = (
+        db.query(Task)
+        .filter(Task.parent_id == task.id)
+        .order_by(Task.created_at.asc(), Task.id.asc())
+        .all()
+    )
+
+    logs = (
+        db.query(ProgressLog)
+        .filter(ProgressLog.task_id == task.id)
+        .order_by(ProgressLog.created_at.asc(), ProgressLog.id.asc())
+        .all()
+    )
+    log_user_ids = {int(log.user_id) for log in logs}
+    user_names: dict[int, str] = {}
+    if log_user_ids:
+        rows = db.query(User.id, User.display_name).filter(User.id.in_(log_user_ids)).all()
+        user_names = {int(row[0]): str(row[1]) for row in rows}
+
+    payload = _single_task_payload(db, task, current_user.id)
+    payload["children"] = [TaskBrief.model_validate(child).model_dump() for child in children]
+    payload["progress"] = [
+        ProgressOut.model_validate(
+            {
+                "id": log.id,
+                "task_id": log.task_id,
+                "user_id": log.user_id,
+                "user_name": user_names.get(int(log.user_id), ""),
+                "content": log.content,
+                "created_at": log.created_at,
+            }
+        ).model_dump()
+        for log in logs
+    ]
+    return ok(TaskDetailOut.model_validate(payload).model_dump())
+
+
+# --------------------------------------------------------------------------- #
+# #4 修改
+# --------------------------------------------------------------------------- #
+@router.patch("/{task_id}")
+def patch_task(
+    task_id: int,
+    payload: TaskUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """修改任务：省略字段 = 不修改；显式 ``null`` = 清空该列；``extras={}`` = 清空对象。"""
+    task = _get_task_or_404(db, task_id)
+    if int(task.publisher_id) != int(current_user.id):
+        raise ApiError(ERR_FORBIDDEN, "只有发布者可以修改任务")
+
+    provided = payload.model_fields_set
+
+    # title：显式提供时不允许为空
+    if "title" in provided:
+        title = (payload.title or "").strip()
+        if not title:
+            raise ApiError(ERR_INVALID_PARAM, "任务标题不能为空")
+        task.title = title
+
+    if "quota" in provided and payload.quota is not None and payload.quota < 1:
+        raise ApiError(ERR_INVALID_PARAM, "需求人数必须大于 0")
+    if "credit_reward" in provided and payload.credit_reward is not None and payload.credit_reward < 0:
+        raise ApiError(ERR_INVALID_PARAM, "完成奖励积分不能为负数")
+
+    # 指派对象必须存在（4040）；不能指派自己（4030）
+    if "assignee_id" in provided and payload.assignee_id is not None:
+        if int(payload.assignee_id) == int(current_user.id):
+            raise ApiError(ERR_FORBIDDEN, "不能指派自己")
+        if db.get(User, payload.assignee_id) is None:
+            raise ApiError(ERR_NOT_FOUND, "指派的用户不存在")
+
+    # 依赖必须存在且同 parent_id（4001）
+    if "depends_on" in provided and payload.depends_on is not None:
+        dependency = db.get(Task, payload.depends_on)
+        if dependency is None or dependency.parent_id != task.parent_id:
+            raise ApiError(ERR_INVALID_PARAM, "依赖任务必须与当前任务属于同一父任务")
+
+    for field in _TASK_UPDATE_FIELDS:
+        if field not in provided:
+            continue
+        value = getattr(payload, field)
+        # claim_type 为 NOT NULL 列：显式 null 视为不修改
+        if field == "claim_type" and value is None:
+            continue
+        setattr(task, field, value)
+
+    # extras：{} 表示清空对象；null 视为不修改（`2.2.4` 修改语义 + 实现要点 4）
+    if "extras" in provided and payload.extras is not None:
+        task.extras = payload.extras
+
+    # reminder_rule：显式 null 表示清空为 null
+    if "reminder_rule" in provided:
+        rule = payload.reminder_rule
+        task.reminder_rule = rule.model_dump() if rule is not None else None
+
+    # status：仅允许改为 cancelled（overdue 为调度器语义，前端不主动调用）
+    if "status" in provided and payload.status is not None:
+        if payload.status != "cancelled":
+            raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+        _ensure_transition(task, "cancelled")
+        task.status = "cancelled"
+
+    # 改期 / 取消后按成员状态重算聚合状态：未来截止时间可把 overdue 拉回进行中（R4）
+    if "deadline" in provided or "status" in provided:
+        member_service.sync_task_status(db, task)
+
+    db.commit()
+    db.refresh(task)
+    return ok(_single_task_payload(db, task, current_user.id))
+
+
+# --------------------------------------------------------------------------- #
+# #5 认领
+# --------------------------------------------------------------------------- #
+@router.post("/{task_id}/claim")
+def claim_task(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """认领（`C-APPLY@1` A6 兼容别名）：与 ``POST /apply`` 完全等价。
+
+    新语义下 ``claim`` 不再修改 ``assignee_id``、不再置 ``claimed``，只写入一条
+    ``pending`` 报名，等待发布者审批（P1 单负责人行为已由 D1 作废）。
+
+    实现要点：与 ``routers/applications.py::create_application`` 共用同一函数，
+    延迟导入以避免 ``tasks → applications → tasks`` 的模块级循环导入。
+    """
+    # 延迟导入：模块级导入会构成循环（applications 顶层依赖本模块的错误码与序列化）
+    from app.routers.applications import create_application
+
+    task = _get_task_or_404(db, task_id)
+    return ok(create_application(db, task, current_user))
+
+
+# --------------------------------------------------------------------------- #
+# #6 指派
+# --------------------------------------------------------------------------- #
+@router.post("/{task_id}/assign")
+def assign_task(
+    task_id: int,
+    payload: AssignIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """指派任务（仅发布者）：按 `C-APPLY@1` D9 语义「直接通过某成员」。
+
+    - 有该成员的 ``pending`` 报名 ⇒ 置 ``approved``（写 ``decided_at/decided_by``）；
+    - 无报名记录 ⇒ 新建一条 ``approved`` 记录（不再只覆盖 ``assignee_id``）；
+    - 同样受名额约束（``4090``）；``assignee_id`` 为空时写入，``published → claimed``。
+    """
+    # 延迟导入：与 claim 一致，规避模块级循环导入
+    from app.routers.applications import assign_approved
+
+    task = _get_task_or_404(db, task_id)
+    if int(task.publisher_id) != int(current_user.id):
+        raise ApiError(ERR_FORBIDDEN, "只有发布者可以指派任务")
+
+    target_user = db.get(User, payload.user_id)
+    if target_user is None:
+        raise ApiError(ERR_NOT_FOUND, "指派的用户不存在")
+    if task.status not in ASSIGN_ALLOWED_STATUSES:
+        raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+
+    # 状态机先校验后写库（名额与重复通过校验在 assign_approved 内完成）
+    if task.status == "published":
+        _ensure_transition(task, "claimed")
+
+    task.claim_type = "assign"
+    assign_approved(db, task, target_user, current_user)
+
+    db.refresh(task)
+    return ok(_single_task_payload(db, task, current_user.id))
+
+
+# --------------------------------------------------------------------------- #
+# #7 进度
+# --------------------------------------------------------------------------- #
+@router.post("/{task_id}/progress")
+def add_progress(
+    task_id: int,
+    payload: ProgressIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """逐人提交进度记录（仅 approved 成员）：只推进本人成员状态。"""
+    task = _get_task_or_404(db, task_id)
+    if not application_service.is_approved_participant(db, task, int(current_user.id)):
+        raise ApiError(ERR_FORBIDDEN, "只有任务成员可以提交进度")
+    if str(task.status) == "cancelled":
+        raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+
+    log = ProgressLog(task_id=task.id, user_id=current_user.id, content=payload.content)
+    db.add(log)
+    member_service.record_progress(db, task, int(current_user.id))
+
+    db.commit()
+    db.refresh(log)
+
+    return ok(
+        ProgressOut.model_validate(
+            {
+                "id": log.id,
+                "task_id": log.task_id,
+                "user_id": log.user_id,
+                "user_name": current_user.display_name,
+                "content": log.content,
+                "created_at": log.created_at,
+            }
+        ).model_dump()
+    )
+
+
+# --------------------------------------------------------------------------- #
+# #8 提交
+# --------------------------------------------------------------------------- #
+@router.post("/{task_id}/submit")
+def submit_task(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """成员提交完成（逐人语义）：只把**本人**成员状态置为 ``submitted``。
+
+    重复提交由 ``record_submit`` 幂等处理（返回 ``changed=False``），不重复通知发布者；
+    通知去重键为 ``submit:{task_id}:{user_id}:{submitted_at}``（`C-TASK-API@1`）。
+    """
+    task = _get_task_or_404(db, task_id)
+    if not application_service.is_approved_participant(db, task, int(current_user.id)):
+        raise ApiError(ERR_FORBIDDEN, "只有任务成员可以提交完成")
+    if str(task.status) == "cancelled":
+        raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+
+    member, changed = member_service.record_submit(db, task, int(current_user.id))
+    if changed:
+        notify_service.create_notification(
+            db,
+            user_id=int(task.publisher_id),
+            task_id=int(task.id),
+            level="info",
+            title="有新任务待验收",
+            content=f"《{task.title}》有新提交，请验收。",
+            commit=False,
+            dedupe_key=f"submit:{int(task.id)}:{int(current_user.id)}:{member.submitted_at}",
+        )
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        notify_service.discard_pending(db)
+        raise
+    notify_service.publish_committed(db)
+    db.refresh(task)
+
+    return ok(_single_task_payload(db, task, current_user.id))
+
+
+# --------------------------------------------------------------------------- #
+# #9 验收
+# --------------------------------------------------------------------------- #
+def _verify_targets(
+    members: list[member_service.MemberView], payload: VerifyIn
+) -> list[int]:
+    """确定本次验收 / 退回的成员集合（`C-TASK-API@1` 目标选择规则）。"""
+    if payload.user_id is not None:
+        target_id = int(payload.user_id)
+        if target_id not in {member.user_id for member in members}:
+            raise ApiError(ERR_INVALID_PARAM, "该用户不是任务成员")
+        return [target_id]
+
+    submitted = [
+        member.user_id
+        for member in members
+        if member.status == member_service.MEMBER_SUBMITTED
+    ]
+    if len(submitted) == 1:
+        return submitted
+    if len(submitted) > 1:
+        if not payload.pass_:
+            raise ApiError(ERR_INVALID_PARAM, "请指定要退回的成员")
+        # 兼容旧语义：未指定成员且全部通过时，逐人全部验收
+        return submitted
+    raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+
+
+@router.post("/{task_id}/verify")
+def verify_task(
+    task_id: int,
+    payload: VerifyIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """发布者对**单名（或多名）成员**验收：只改目标成员状态与积分。
+
+    - ``user_id`` 指定 → 只处理该 approved 成员（非成员 4001）；
+    - 未指定且恰好一名成员 ``submitted`` → 处理该成员；
+    - 未指定且多名 ``submitted`` → ``pass=true`` 时逐人全部通过（兼容旧语义），
+      ``pass=false`` 时返回 4001；
+    - 目标成员不在 ``submitted`` → 4090；目标是发布者本人 → 4030（防御历史脏数据）；
+    - 通过：按 ``(task_id, user_id)`` 幂等加分，积分流水、成员状态与通知同一事务提交。
+    """
+    task = _get_task_or_404(db, task_id)
+    if int(task.publisher_id) != int(current_user.id):
+        raise ApiError(ERR_FORBIDDEN, "只有发布者可以验收任务")
+    if str(task.status) == "cancelled":
+        raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+
+    members = member_service.effective_members(db, task)
+    targets = _verify_targets(members, payload)
+
+    # 防御历史库 assignee_id == publisher_id 等脏数据：绝不自我验收 / 自我加分
+    if any(int(target) == int(current_user.id) for target in targets):
+        raise ApiError(ERR_FORBIDDEN, "不能验收自己")
+
+    # 先校验后写库：任一目标不在 submitted 即整体拒绝
+    submitted_ids = {
+        member.user_id
+        for member in members
+        if member.status == member_service.MEMBER_SUBMITTED
+    }
+    if any(target not in submitted_ids for target in targets):
+        raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+
+    reason = (payload.reason or "").strip() or None
+    reward = (
+        int(task.credit_reward)
+        if task.credit_reward is not None
+        else int(credit_service.DEFAULT_CREDIT_REWARD)
+    )
+
+    credited_user_ids: list[int] = []
+    for target in targets:
+        member = member_service.record_verification(
+            db, task, target, passed=payload.pass_, reason=reason
+        )
+        if not payload.pass_:
+            content = f"《{task.title}》验收未通过，请修改后重新提交。"
+            if reason:
+                content = f"{content}驳回原因：{reason}"
+            notify_service.create_notification(
+                db,
+                user_id=int(target),
+                task_id=int(task.id),
+                level="warning",
+                title="验收未通过",
+                content=content,
+                commit=False,
+                dedupe_key=(
+                    f"rejected:{int(task.id)}:{int(target)}:{member.submitted_at or ''}"
+                ),
+            )
+            continue
+
+        if not credit_service.has_task_bonus(db, int(target), int(task.id)):
+            credit_service.adjust_credits(
+                db,
+                int(target),
+                int(task.id),
+                reward,
+                f"{credit_service.REASON_TASK_BONUS_PREFIX}：《{task.title}》",
+                commit=False,
+            )
+            credited_user_ids.append(int(target))
+        notify_service.create_notification(
+            db,
+            user_id=int(target),
+            task_id=int(task.id),
+            level="info",
+            title="验收通过，积分到账",
+            content=f"《{task.title}》验收通过，获得 {reward} 积分。",
+            commit=False,
+            dedupe_key=f"verified:{int(task.id)}:{int(target)}",
+        )
+
+    # 全部成员验收完毕时给发布者一条汇总通知（同一去重键只保留一条）
+    if payload.pass_ and str(task.status) == member_service.MEMBER_VERIFIED:
+        notify_service.create_notification(
+            db,
+            user_id=int(current_user.id),
+            task_id=int(task.id),
+            level="info",
+            title="验收已通过",
+            content=f"《{task.title}》全部成员验收通过。",
+            commit=False,
+            dedupe_key=f"task_verified:{int(task.id)}",
+        )
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        notify_service.discard_pending(db)
+        raise
+    notify_service.publish_committed(db)
+
+    return ok(
+        VerifyOut(
+            task=_single_task_payload(db, task, current_user.id),
+            credit_delta=reward if payload.pass_ else 0,
+            credited_user_ids=credited_user_ids,
+        ).model_dump()
+    )
+
+
+# --------------------------------------------------------------------------- #
+# #10 拆解（调用审核助手，仅返回建议，不落库）
+# --------------------------------------------------------------------------- #
+def _task_to_draft(task: Task) -> Draft:
+    """按 `2.2.2` 关键映射表把任务字段拼成审核助手的入参草稿。"""
+    return Draft(
+        title=task.title,
+        time=task.start_time,
+        deadline=task.deadline,
+        location=task.location,
+        details=task.description,
+        quota=task.quota,
+        volunteer_hours=task.volunteer_hours,
+        notes=None,
+        requirements=None,
+        extra_tags={str(key): str(value) for key, value in (task.extras or {}).items()},
+        style_prompt=task.style_note,
+    )
+
+
+@router.post("/{task_id}/decompose")
+def decompose_task(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """请求审核助手给出拆解建议（不落库，前端确认后逐个调 ``POST /api/tasks``）。"""
+    task = _get_task_or_404(db, task_id)
+    if int(task.publisher_id) != int(current_user.id):
+        raise ApiError(ERR_FORBIDDEN, "只有发布者可以拆解任务")
+
+    # 延迟导入：T3 交付前本端点给出明确 5001，而不是让应用启动失败
+    try:
+        from app.agents import llm_client, reviewer
+    except ImportError:
+        logger.warning("审核助手尚未交付（T3），/decompose 暂不可用")
+        raise ApiError(5001, "AI 审核服务尚未就绪")
+
+    draft = _task_to_draft(task)
+    try:
+        result = reviewer.review(draft)
+    except llm_client.LLMError as exc:  # 5001 / 5002 / 5003
+        raise ApiError(int(getattr(exc, "code", 5001)), str(getattr(exc, "message", exc)))
+
+    data = {
+        "suggested_sub_tasks": [item.model_dump() for item in result.suggested_sub_tasks],
+        # mock 标记必须与 llm_client.is_mock_mode() 同源（实现要点 7）
+        "mock": bool(llm_client.is_mock_mode()),
+    }
+    return ok(data)
+
+
+__all__ = ["router", "ALLOWED_TRANSITIONS"]

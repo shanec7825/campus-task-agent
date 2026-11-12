@@ -1,0 +1,42 @@
+# ---- Python / 后端 ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.env
+.env.*
+!.env.example
+
+# ---- 运行产物 ----
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ---- Node / 前端 ----
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-error.log*
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- 本地 AI 工具配置与临时验证产物 ----
+.arts/
+.codeartsdoer/
+.merkle-snapshot.json
+.tmp/
+frontend/.t1-voice-check/
+tests/frontend/.tmp-voice/
+*.db-wal
+*.db-shm
+*.sqlite3-wal
+*.sqlite3-shm

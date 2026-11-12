@@ -1,0 +1,68 @@
+/* ==========================================================================
+   颜色池（契约 C-SHELL@1 / C-TRACE@1）
+   唯一颜色来源：语义色值同时供 CSS 变量与 src/utils/colorPool.ts 使用。
+   任何组件不得自行硬编码下列字段颜色。
+   ========================================================================== */
+:root {
+  /* 时间 */
+  --c-time: #3b82f6;
+  /* 地点 */
+  --c-location: #22c55e;
+  /* 名额 */
+  --c-quota: #f97316;
+  /* 标题 */
+  --c-title: #8b5cf6;
+  /* 扩展项 / 要求（以及 extra_tags.<key> 前缀键） */
+  --c-extra: #eab308;
+  /* 待确认 / 更正（警示角标） */
+  --c-warn: #ef4444;
+  /* 未解析文本 */
+  --c-unparsed: #374151;
+
+  /* 追溯块（P2 新增，与 utils/colorPool.ts 的 TRACE_COLORS 逐字一致） */
+  /* AI 建议被采纳 */
+  --c-ai-applied: #8B5CF6;
+  /* 用户右侧手改 */
+  --c-user-edit: #0891B2;
+  /* 用户在左侧补充的原话 */
+  --c-user-note: #6B7280;
+  /* 语音 interim（虚线） */
+  --c-live: #3B82F6;
+}
+
+/* 便于 T7/T8 直接使用的语义类（可选，不强制） */
+.c-field-time {
+  color: var(--c-time);
+}
+.c-field-location {
+  color: var(--c-location);
+}
+.c-field-quota {
+  color: var(--c-quota);
+}
+.c-field-title {
+  color: var(--c-title);
+}
+.c-field-extra {
+  color: var(--c-extra);
+}
+.c-field-warn {
+  color: var(--c-warn);
+}
+.c-field-unparsed {
+  color: var(--c-unparsed);
+}
+
+/* 追溯块语义类（P2 新增） */
+.c-block-ai-applied {
+  color: var(--c-ai-applied);
+}
+.c-block-user-edit {
+  color: var(--c-user-edit);
+}
+.c-block-user-note {
+  color: var(--c-user-note);
+}
+.c-block-live {
+  color: var(--c-live);
+}

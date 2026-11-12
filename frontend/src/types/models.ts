@@ -1,0 +1,372 @@
+/**
+ * 前端共享类型（契约 C-DATA@2，字段名与后端 `app/schemas.py` 逐字一致）。
+ *
+ * 约束：
+ * - 禁止使用 `any`；JSON 自由字段统一 `Record<string, unknown>`。
+ * - 本文件由 T1 统一维护（承载 `C-DATA@2` 的 TS 镜像），T4/T6 只 import，不得改写字段名。
+ * - 只允许「新增接口 / 追加字段」，P1 既有字段名与类型一律不改。
+ */
+
+/** 统一响应包裹 `{"code":0,"msg":"ok","data":...}`（C-BOOT@1） */
+export interface ApiEnvelope<T> {
+  code: number
+  msg: string
+  data: T
+}
+
+/** 催办规则（`ReminderRule`） */
+export interface ReminderRule {
+  days_before: number
+  day_of: boolean
+  on_overdue: boolean
+}
+
+/** 用户（`UserOut`） */
+export interface User {
+  id: number
+  username: string
+  display_name: string
+  role: string
+  org: string | null
+  credits: number
+}
+
+/** 登录返回（`LoginOut`） */
+export interface LoginResult {
+  token: string
+  user: User
+}
+
+/** 任务主任务 / 子任务摘要（`TaskBrief`） */
+export interface TaskBrief {
+  id: number
+  title: string
+  status: string
+  assignee_id: number | null
+  depends_on: number | null
+  quota: number | null
+  parent_id: number | null
+}
+
+/** 进度记录（`ProgressOut`） */
+export interface ProgressItem {
+  id: number
+  task_id: number
+  user_id: number
+  user_name: string
+  content: string
+  created_at: string
+}
+
+/** 任务列表项 / 任务基本信息（`TaskOut`） */
+export interface TaskItem {
+  id: number
+  parent_id: number | null
+  title: string
+  description: string | null
+  location: string | null
+  start_time: string | null
+  deadline: string | null
+  quota: number | null
+  volunteer_hours: number | null
+  status: string
+  claim_type: string
+  publisher_id: number
+  assignee_id: number | null
+  depends_on: number | null
+  sop_guide: string | null
+  style_note: string | null
+  extras: Record<string, unknown>
+  reminder_rule: ReminderRule | null
+  credit_reward: number | null
+  created_at: string
+  assignee_name: string | null
+  publisher_name: string
+  is_claimable: boolean
+  /** 报名审批派生字段（后端保证 4 个键均出现在响应中，均为非可选） */
+  applied_count: number
+  approved_count: number
+  my_application_status: ApplicationStatus | null
+  /** 全部 approved 用户显示名（按报名先后），末位展示口径；`assignee_name` 恒为第 0 个 */
+  assignee_names: string[]
+  /** 逐人执行状态（契约 `C-DATA-MEMBER@1`，按报名先后） */
+  members: TaskMember[]
+  /** 当前登录用户在该任务中的执行状态；非成员为 `null` */
+  my_member_status: MemberStatus | null
+}
+
+/** 成员执行状态（后端仅使用这 5 个字面量） */
+export type MemberStatus = 'not_started' | 'in_progress' | 'submitted' | 'rejected' | 'verified'
+
+/** 单条成员执行记录（`MemberOut` 镜像；`user_name` 由服务端填充） */
+export interface TaskMember {
+  user_id: number
+  user_name: string
+  status: MemberStatus
+  rejection_reason: string | null
+  submitted_at: string | null
+  verified_at: string | null
+  updated_at: string | null
+}
+
+/** 任务详情（`TaskDetailOut`） */
+export interface TaskDetail extends TaskItem {
+  children: TaskBrief[]
+  progress: ProgressItem[]
+}
+
+// --------------------------------------------------------------------------- //
+// 报名审批（`C-APPLY@1` 的数据结构，契约 `C-DATA@2`）
+// --------------------------------------------------------------------------- //
+
+/** 报名状态（`ApplicationOut.status`） */
+export type ApplicationStatus = 'pending' | 'approved' | 'rejected' | 'cancelled'
+
+/** 单条报名记录（`ApplicationOut`；`user_name` 由服务端批量填充） */
+export interface ApplicationItem {
+  id: number
+  task_id: number
+  user_id: number
+  user_name: string
+  status: ApplicationStatus
+  reason: string | null
+  created_at: string
+  decided_at: string | null
+}
+
+/** `ApplicationItem` 的同义别名（同为 `ApplicationOut` 镜像）：`Application` / `ApplicationItem` 均可使用 */
+export type Application = ApplicationItem
+
+/** 报名 / 撤回 / 审批的返回体（`ApplyOut`；`claim` 兼容别名同构） */
+export interface ApplyResult {
+  task_id: number
+  application: ApplicationItem
+  task: TaskItem
+}
+
+/** 我的报名列表项（`ApplicationItemOut`：报名记录 + 任务摘要） */
+export interface ApplicationWithTask {
+  application: ApplicationItem
+  task: TaskBrief
+}
+
+/**
+ * 发布 / 修改任务的请求体（`TaskCreate` 的前端镜像）。
+ * `patchTask` 使用其 `Partial` 形态；省略字段 = 不修改，显式 `null` = 清空。
+ */
+export interface TaskCreatePayload {
+  parent_id?: number | null
+  title: string
+  description?: string | null
+  location?: string | null
+  start_time?: string | null
+  deadline?: string | null
+  quota?: number | null
+  volunteer_hours?: number | null
+  claim_type?: 'open' | 'assign'
+  assignee_id?: number | null
+  depends_on?: number | null
+  sop_guide?: string | null
+  style_note?: string | null
+  extras?: Record<string, unknown>
+  reminder_rule?: ReminderRule | null
+  credit_reward?: number
+}
+
+/** 任务列表返回（`GET /api/tasks`） */
+export interface TaskListResult {
+  items: TaskItem[]
+}
+
+/** 验收返回（`POST /api/tasks/{id}/verify`，`VerifyOut`） */
+export interface VerifyResult {
+  task: TaskItem
+  credit_delta: number
+  /** 本次实际加分的成员（幂等命中时不含已加过的成员） */
+  credited_user_ids: number[]
+}
+
+/** 签到记录（`CheckinOut`） */
+export interface CheckinItem {
+  id: number
+  task_id: number
+  user_id: number
+  task_title: string | null
+  checkin_time: string
+}
+
+/** 签到列表（`GET /api/checkin/me`） */
+export interface CheckinListResult {
+  items: CheckinItem[]
+}
+
+/** 积分流水（`CreditLogOut`） */
+export interface CreditLog {
+  id: number
+  user_id: number
+  task_id: number | null
+  delta: number
+  reason: string
+  created_at: string
+}
+
+/** 我的积分（`CreditsMeOut`） */
+export interface CreditsMe {
+  credits: number
+  logs: CreditLog[]
+}
+
+/** 通知（`NotificationOut`） */
+export interface NotificationItem {
+  id: number
+  user_id: number
+  task_id: number | null
+  level: string
+  title: string
+  content: string
+  is_read: number
+  created_at: string
+}
+
+/** 通知列表（`NotificationListOut`） */
+export interface NotificationList {
+  unread: number
+  items: NotificationItem[]
+}
+
+// --------------------------------------------------------------------------- //
+// AI 变更与追溯块（`C-AGENT@2` / `C-TRACE@1`，契约 `C-DATA@2`）
+// --------------------------------------------------------------------------- //
+
+/**
+ * 字段级变更（`ChangeOut`）。
+ * `old_value` / `new_value` 只允许标量：扩展项以 `field="extra_tags.<键名>"` 单键表达。
+ */
+export interface Change {
+  op: 'set' | 'add_tag' | 'remove_tag'
+  field: string
+  old_value: string | number | null
+  new_value: string | number | null
+  reason: string
+  source: 'ai' | 'user'
+}
+
+/** 块类型：`raw` 为 P1 解析块，其余 4 种为本轮追溯块 */
+export type BlockKind = 'raw' | 'ai_applied' | 'user_edit' | 'user_note' | 'live'
+
+/** 后端透传的追溯块（`TraceBlock`）：不参与字段写入，后端不清洗 / 不排序 */
+export interface TraceBlock {
+  id: number
+  text: string
+  kind: 'ai_applied' | 'user_edit' | 'user_note' | 'live'
+  field: string | null
+  meta: Record<string, unknown> | null
+}
+
+/** 草稿结构（`Draft`）——与后端 Pydantic `Draft` 一致 */
+export interface Draft {
+  title: string | null
+  time: string | null
+  deadline: string | null
+  location: string | null
+  details: string | null
+  quota: number | null
+  volunteer_hours: number | null
+  notes: string | null
+  requirements: string | null
+  extra_tags: Record<string, string>
+  style_prompt: string | null
+  /** 前端权威追溯块：后端原样透传，`null` 与 `[]` 均表示无追溯块 */
+  trace?: TraceBlock[] | null
+}
+
+/** 原文片段（`SpanOut`） */
+export interface Span {
+  text: string
+  field: string | null
+}
+
+/** 后到覆盖先到的更正（`CorrectionOut`） */
+export interface Correction {
+  target: string
+  old_value: string | null
+  new_value: string
+  reason: string
+}
+
+/** 歧义问号（`Ambiguity`） */
+export interface Ambiguity {
+  field: string
+  question: string
+  suggestion: string | null
+}
+
+/** 拆解建议子任务（`SubTaskSuggestion`） */
+export interface SubTaskSuggestion {
+  title: string
+  description: string
+  sop_guide: string
+  quota: number | null
+  depends_on: number | null
+}
+
+/** 润色结果（`Polished`） */
+export interface Polished {
+  details: string
+  notes: string
+}
+
+/** 提炼结果（`ExtractOut`） */
+export interface ExtractResult {
+  draft: Draft
+  spans: Span[]
+  unresolved: string[]
+  style_prompt: string | null
+  corrections: Correction[]
+  mock: boolean
+  /** 字段级变更（增量模式下相对 `base_draft` 的 diff） */
+  changes: Change[]
+  /** 与 `changes` 等长、顺序一一对应的追溯文案（后端唯一来源） */
+  applied_texts: string[]
+}
+
+/** 审核结果（`ReviewOut`） */
+export interface ReviewResult {
+  ambiguities: Ambiguity[]
+  polished: Polished | null
+  suggested_sub_tasks: SubTaskSuggestion[]
+  mock: boolean
+  /** 待采纳建议（不自动落值） */
+  changes: Change[]
+}
+
+/** 流式解析结果（`StreamParseOut`） */
+export interface StreamParseResult {
+  draft: Draft
+  spans: Span[]
+  unresolved: string[]
+  corrections: Correction[]
+  mock: boolean
+  changes: Change[]
+}
+
+/** 拆解结果（`POST /api/tasks/{id}/decompose`） */
+export interface DecomposeResult {
+  suggested_sub_tasks: SubTaskSuggestion[]
+  mock: boolean
+}
+
+/** 知识库相似项（`SimilarItem`） */
+export interface SimilarItem {
+  task_id: number | null
+  title: string
+  summary: string | null
+  similarity: number
+  created_at: string | null
+}
+
+/** 相似检索结果（`KbSimilarOut`） */
+export interface SimilarResult {
+  items: SimilarItem[]
+  threshold: number
+}

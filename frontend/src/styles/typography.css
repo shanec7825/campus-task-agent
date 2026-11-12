@@ -1,0 +1,12 @@
+/* 全局字号基线：在 Element Plus 默认字号基础上整体 +1px
+ * 必须在 element-plus/dist/index.css 之后引入，保证覆盖默认变量。
+ * 颜色与其余 Element 变量仍由 color-pool.css 负责。
+ */
+:root {
+  --el-font-size-extra-large: 22px;
+  --el-font-size-large: 18px;
+  --el-font-size-medium: 16px;
+  --el-font-size-base: 15px;
+  --el-font-size-small: 14px;
+  --el-font-size-extra-small: 13px;
+}
