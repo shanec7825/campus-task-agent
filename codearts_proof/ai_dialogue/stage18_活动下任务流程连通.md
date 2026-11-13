@@ -1,12 +1,12 @@
 # 阶段 18：活动下任务流程连通（AIW-00）
 
-> 状态：本地完成（工作树未提交）。日期：2026-11-13（Asia/Shanghai）。本轮是产品路线 AIW-00，不等于此前讨论的任何业务 phase 收尾，不恢复 stage17 之前已回退的未提交代码。
+> 状态：已提交并推送，CI 全绿（`4c3c875`；run 43453696153，4 个 job success）。日期：2026-11-13（Asia/Shanghai）。本轮是产品路线 AIW-00，不等于此前讨论的任何业务 phase 收尾，不恢复 stage17 之前已回退的未提交代码。
 
 ## 1. 需求来源与现场
 
 用户在 stage17 交接后选定 **AIW-00：基线差距确认与必要流程连通**，要求打通「活动负责人看到并管理其活动下任务」「从活动详情直接在该活动下发布任务」「任务详情提示下层已完成待负责人确认」三条链路，并补行为回归。本轮实际收到的派工消息原文见 [启动指令归档](../prompts/agent_team_启动指令/2026-11-13_stage18_活动流程连通_启动指令.md)（用户侧原始消息未在本会话取得，未重建）。
 
-- 分支 `main`；开工 HEAD `af43dc7e15120ebb85f90e5f39879d080c2715c1`（`fix(test): 可靠性回归适配 Cookie 会话与组织归属`）。
+- 分支 `main`；开工 HEAD `af43dc7e15120ebb85f90e5f39879d080c2715c1`（`fix(test): 可靠性回归适配 Cookie 会话与组织归属`）。本轮提交 `4c3c875b8d3c4c62fc88daa190ad35f7b1ba4655`（`feat(activity): 打通活动下任务发布与负责人可见性`），已推送 `af43dc7..4c3c875`，本地 `HEAD` 与 `origin/main` 一致。
 - 开工时工作区已有 stage17 的未提交文档差异（`AGENTS.md`、`docs/CI.md`、`LOG.md`、`prompt迭代记录.md`、`HANDOFF.md`、`DEVELOPMENT_RECORDS.md`、stage17 文档与启动指令、`reports/`）。本轮保留这些改动，只在其上追加，未回退、未覆盖。
 - 计划与契约保存在本地忽略目录 `.codeartsdoer/plans/aiw00-activity-flow/`：
   - `design.md`：R1 负责人可见性、R2 活动下发布、R3 任务级待确认、R4 无组织活动发布授权；
@@ -20,14 +20,14 @@
 - R2 只让手动表单携带 `activity_id`；AI 模式发布的活动归属明确不在本轮范围。发布页保留 `ref<PublishMode>('ai')` 字面量初值以守住既有静态契约（`C-VOICEUI@4 §A`），活动入口在 setup 内切到手动模式。
 - R3 为纯前端派生展示，不新增后端字段、不改业务状态、不自动调用验收接口。
 - R4 由首轮独立审查发现：无组织活动（`org_id IS NULL`）没有组织角色可校验，等于任意登录用户都能向他人活动挂任务。裁定为**发布权只授予活动负责人本人**，其余登录用户 4030；组织内活动维持既有 `PUBLISH_ROLES` 校验。
-- 本轮不提交、不推送、不部署，不运行真实模型、浏览器、真机，不查询远端 CI；验证一律使用隔离临时库。
+- 本轮在用户明确授权后提交并推送 `4c3c875`，并核对了该 SHA 对应的 CI run 43453696153（四个 job 全 success）；未部署，未运行真实模型、浏览器、真机；验证一律使用隔离临时库。
 
 ## 3. 实际工具与派工
 
 | 项目 | 本轮实际情况 |
 |---|---|
 | 平台 | 华为云 CodeArts 代码智能体（team-leader 编排）；平台显示模型 `deepseek-v4.1-flash-1017`，未独立核验 |
-| 实现 | coding-engineer 子 Agent 按 T1/T2/T3 并行实现，写集合互不重叠；T7 授权修复在本轮实现 Agent 中追加完成（执行者编号未单独取得，不归因具体子会话） |
+| 实现 | coding-engineer 子 Agent 按 T1/T2/T3 并行实现，写集合互不重叠；T7 授权修复由 T1 同一实现会话追加完成 |
 | 验证 | team-result-verifier 执行 T4 与 T8，产出 [stage18 验证记录](../reports/stage18_验证记录.md) |
 | 独立审查 | team-code-reviewer 两轮只读审查（T5、T9）：首轮针对全量 diff 与验证证据，第二轮只查修复后新增差异与未关闭项；审查结论在会话中给出，未落盘独立报告文件 |
 | 记录 | 记录 Agent（T6）按 AGENTS §3 与 `docs/DEVELOPMENT_RECORDS.md` 归档本文件、LOG、HANDOFF 与启动指令 |
@@ -53,7 +53,7 @@
 | 问题编号 | 实际问题与依据 | 处理 | 状态 |
 |---|---|---|---|
 | S18-I01 | 首轮前端门禁真实失败：`check_contracts.py` ⑰ `C-VOICEUI@4 §A` 要求 `PublishPage.vue` 的 `activeTab` 初值字面量为 `'ai'`，而 T2 首版写成三元表达式 `activityId.value !== null ? 'manual' : 'ai'`（`tests/frontend/run_all.sh` exit 2） | 改回 `ref<PublishMode>('ai')`，随后 `if (activityId.value !== null) activeTab.value = 'manual'`；对外行为不变 | 已修复，复跑 25/25 PASS |
-| S18-I02 | 首轮独立审查 Important：新增行为回归未接入 CI，`test_activity_workflow.py` 只在本地存在 | T7 把该文件加入 `.github/workflows/ci.yml` 与 `docs/CI.md`；本地执行同一合并命令 68 passed，YAML 解析通过 | 已修复；真实 Actions 未运行 |
+| S18-I02 | 首轮独立审查 Important：新增行为回归未接入 CI，`test_activity_workflow.py` 只在本地存在 | T7 把该文件加入 `.github/workflows/ci.yml` 与 `docs/CI.md`；本地执行同一合并命令 68 passed，YAML 解析通过 | 已修复；run 43453696153 的 backend reliability（ubuntu/windows）均 success |
 | S18-I03 | 首轮独立审查 Important：无组织活动缺少发布授权，任意登录用户可向他人无组织活动创建任务 | `resolve_task_org` 增加 `org_id is None && owner_id != user.id → ApiError(4030, "无权在该活动下创建事务", 403)`；补 3 个行为用例；变异 M1/M2 证明用例如有缺口会失败 | 已修复并验证 |
 | S18-I04 | 首轮独立审查 Important：活动负责人可见性扩大被质疑连带扩大写面 | 复核：改动仅新增 `_self_visible_condition` 一项，`can_manage_task` 分支未动；用「无关成员仍 4040」「负责人验收返回 4090/成功」与「独立任务不获可见性」界定了可读与可管的边界；第二轮审查 PASS | 已关闭（未改代码，靠边界用例与复核） |
 | S18-I05 | 验证环境中把两个后端测试文件放同一 pytest 进程执行时出现过 `1 failed, 17 errors`，全部为 setup 阶段 `OSError: [WinError 10051]` 与 `Sandbox Network Error: hit restricted [127.0.0.1:<随机端口>]`；同一合并命令另一次为 18 passed | 判定为沙箱拦截随机回环端口的环境问题；单文件独立运行与 `tests/backend/run_all.sh`（固定端口 8040/8041）稳定通过；未在无沙箱环境复验合并方式 | 已归因，环境遗留 |
@@ -91,8 +91,8 @@
 
 ### 5.3 未验证范围
 
-1. **未提交、未推送、未部署**；工作区改动仍在本地。
-2. **未运行真实 GitHub Actions**：仅本地解析 YAML 并执行同一条命令，Ubuntu/Windows runner 结果未知。
+1. **未部署**：仅完成提交、推送与对应 CI 核对，未部署到任何环境。
+2. **CI 已核对到 job 级**：run [43453696153](https://github.com/shanec7825/campus-task-agent/actions/runs/43453696153) 对应 `4c3c875`，backend-reliability（ubuntu/windows）、backend-integration、frontend 四个 job 均 success；未逐行审阅运行日志正文。
 3. **浏览器 / 真机 / 移动端视口未验证**：R2 端到端跳转与 R3 渲染均为静态核对。
 4. **真实模型未调用**：全程 `MAAS_MOCK=1`。
 5. **合并 pytest 的沙箱间歇失败**未在无沙箱环境复验（S18-I05）。
@@ -100,4 +100,4 @@
 
 ## 6. 提交与后续
 
-本轮仅本地落盘，未提交、未推送、未部署，CI 未查询。下一轮拿到明确提交授权后，应按 AGENTS §6 先核对实际暂存清单（排除计划、日志、数据库与凭证），再提交并观察与 SHA 对应的 CI 运行；真实浏览器/真机走查与 R2/R3 的动态验证仍待安排。
+本轮已提交并推送 `4c3c875`，该 SHA 对应的 CI run 43453696153 四个 job 全 success；未部署。提交前按 AGENTS §6 核对了实际暂存清单（排除计划、日志、数据库与凭证），未发现密钥或凭证；`test_activity_workflow.py` 作为未跟踪文件已显式 `git add`。真实浏览器/真机走查与 R2/R3 的动态验证仍待安排。

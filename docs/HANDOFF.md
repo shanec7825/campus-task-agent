@@ -5,10 +5,10 @@
 ## 1. 当前基线与本轮授权
 
 - 分支：`main`。
-- 当前 HEAD：`af43dc7e15120ebb85f90e5f39879d080c2715c1`（`fix(test): 可靠性回归适配 Cookie 会话与组织归属`）。本轮没有产生新提交。
-- 工作树有未提交差异：stage18 的代码/测试/CI 改动（见 §2），以及 stage17 与 stage18 的文档记录。它们只在本地，不代表已推送或 CI 通过。
+- 当前 HEAD：`4c3c875b8d3c4c62fc88daa190ad35f7b1ba4655`（`feat(activity): 打通活动下任务发布与负责人可见性`），已推送 `af43dc7..4c3c875`，本地与 `origin/main` 一致。
+- 工作树：提交后干净；stage18 的代码/测试/CI/文档均已提交（见 §2），不再只看本地文件。
 - stage17 时点的事实（保留）：用户说明已回退到上次提交，开工 `git status --porcelain=v1 --branch` 仅显示 `## main...origin/main`；回退命令、时间与原因未知，不推断。
-- stage18 授权范围：AIW-00 活动下任务流程连通（R1 负责人可见性、R2 活动下发布、R3 任务级待确认、R4 无组织活动发布授权）；不新增依赖/表/迁移/路由，不提交、不推送、不部署。
+- stage18 授权范围：AIW-00 活动下任务流程连通（R1 负责人可见性、R2 活动下发布、R3 任务级待确认、R4 无组织活动发布授权）；不新增依赖/表/迁移/路由。用户随后明确授权提交与推送，本轮已完成；未部署。
 - 本轮使用编号：留痕 **stage18**；未产生业务 Prompt 变更，不新增 P 编号。
 
 ## 2. 本轮实际变更与状态
@@ -19,7 +19,7 @@
 | `tests/backend/test_activity_workflow.py` | 新增 600 行 / 8 用例，隔离临时库 + Cookie/CSRF 真实 HTTP | 修改授权或活动流程时必须重跑；已接入 CI |
 | 前端活动发布链路 | `ActivityDetail.vue` 入口、`PublishPage.vue` 解析 `?activity` 并默认手动、`ManualForm.vue` 携带 `activity_id`、`models.ts` 补字段 | AI 模式仍不带活动归属，属未完成范围 |
 | 任务详情待确认提示 | `TaskDetail.vue` 纯派生 `awaitingOwnerConfirm`，不改状态、不调接口 | 仅在全部子任务 verified 且父任务未验收时展示 |
-| CI 与文档 | `.github/workflows/ci.yml:40-41`、`docs/CI.md` 加入 `test_activity_workflow.py` | 真实 Actions 未运行，不得宣称 CI 通过 |
+| CI 与文档 | `.github/workflows/ci.yml:40-41`、`docs/CI.md` 加入 `test_activity_workflow.py` | 真实 Actions 已核对：run 43453696153（`4c3c875`）四个 job success，未逐行审阅日志正文 |
 
 ## 3. stage17 回退时的核对结果（历史，保留不改）
 
@@ -48,12 +48,12 @@
 - 本地验证（隔离临时库，未触碰 `backend/campus.db`）：`test_activity_workflow.py` **8 passed**、`test_activity_hierarchy.py` **13 passed**、`test_auth_org_permissions.py` **47 passed**、CI 等价合并命令 **68 passed**；`tests/backend/run_all.sh` **exit 0（1412 条 PASS）**；`tests/frontend/run_all.sh` 修复首轮真实门禁失败后 **exit 0**（构建 4/4、契约 25/25、语音切片 21 PASS）。证据见 `codearts_proof/reports/stage18_验证记录.md`。
 - 回归敏感度：变异 M1（删除 4030 校验）与 M2（先写库后拒绝）均导致 2 个新增用例失败，证明用例不是摆设。
 - 独立审查两轮：首轮 3 项 Important（CI 未接入、无组织活动授权缺口、负责人写面）均已处置；第二轮 PASS，无阻断项。审查结论在会话中给出，未落盘独立报告。
-- **未验证**：真实 GitHub Actions、浏览器/真机/移动端视口、真实模型（全程 `MAAS_MOCK=1`）。合并 pytest 在沙箱下出现过 `WinError 10051` 间歇失败，归因环境且未在无沙箱复验。
-- **未提交、未推送、未部署**；CI 未查询。stage17 及更早阶段文档中的“待提交/已推送”等表述属当时状态，不据此声明当前远端或 CI 结果。
+- **未验证**：浏览器/真机/移动端视口、真实模型（全程 `MAAS_MOCK=1`）；CI 只核对到 job 级结论，未逐行审阅日志。合并 pytest 在沙箱下出现过 `WinError 10051` 间歇失败，归因环境且未在无沙箱复验。
+- **提交与 CI**：提交 `4c3c875` 已推送 `origin/main`；run [43453696153](https://github.com/shanec7825/campus-task-agent/actions/runs/43453696153) 的 backend-reliability（ubuntu/windows）、backend-integration、frontend 四个 job 均 success。**未部署**。stage17 及更早阶段文档中的“待提交/已推送”等表述属当时状态。
 
 ## 6. 下一步
 
-- 获得明确提交授权后：先核对实际暂存清单（排除 `.codeartsdoer/`、`outputs/`、日志、数据库与凭证），完成 `git diff --check`，再提交并核对与 SHA 对应的 CI 运行。
+- stage18 已提交并推送（`4c3c875`），对应 CI 全绿。提交前已核对实际暂存清单（排除 `.codeartsdoer/`、`outputs/`、日志、数据库与凭证）。
 - 待补的动态验证：R2「活动详情 → 发布页 → 带 `activity_id` 创建任务」的浏览器链路，R3「全部子任务 verified 且父任务未验收」的渲染场景。
 - 后续增量候选：AI 模式发布的活动归属、AI 默认首页与权限内问答；均待下一轮明确选定范围。下一次新阶段先扫描编号，当前最大 stage 为 18。
 
