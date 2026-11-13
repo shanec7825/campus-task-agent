@@ -281,6 +281,8 @@ export interface ApplicationWithTask {
  */
 export interface TaskCreatePayload {
   parent_id?: number | null
+  /** 所属活动 id；缺省表示创建独立任务 */
+  activity_id?: number | null
   title: string
   description?: string | null
   location?: string | null

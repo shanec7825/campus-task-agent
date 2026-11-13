@@ -33,6 +33,12 @@
 
 | P-016 | Agent Team 派工 · **认证与组织权限：先冻结 Cookie 会话 + CSRF + 组织权限契约，再 9 路并行**（阶段 16） | badcase：若派工只说「做正式登录和组织权限」，各 Agent 会各自发明会话载体与授权口径——前端继续往 `localStorage` 存 token、SSE 把 token 拼进 URL、写操作漏 CSRF、列表在 Python 里全表过滤、子任务跨组织挂接、平台管理员被当成跨组织内容后门；邀请注册与重置若不在同一事务原子消费，并发下会超用；旧演示账号还可能被同名注册继承数据 | 派工前先写 `design.md` 冻结 11 份契约：`C-DATA-AUTH@1`（5 张新表 + `users` / `activities` / `tasks` 新列 + 16 表口径）、`C-HASH@1`（scrypt 参数与令牌摘要）、`C-SESSION@1`（HttpOnly Cookie、CSRF 双提交、`COOKIE_SECURE`）、`C-AUTH-API@1`（login / logout / me / 限流 / 平台管理员 CLI）、`C-ORG@1`（三角色、邀请原子消费、一次性重置）、`C-AUTHZ@1`（唯一授权实现，4040 / 4030）、`C-TASK-ORG@1`（任务 / 活动 / 报名接入与 `org_id` 继承）、`C-OTHER-AUTH@1`（签到 / 积分 / 通知 / KB / agent）、`C-MIGRATION-3@1`（副本迁移与报告）、`C-FE-AUTH@1`（同源凭据 + CSRF + 路由守卫）、`C-SSE-AUTH@1`（仅 Cookie）；每个 coder 的 Prompt 只给 `task.md` 条目 + 对应契约 ID + 写集合，并前置禁止项：不新增运行时依赖、不做邮件 / 短信、不做组织树继承、不把平台管理员当内容后门、不迁移真实库 | 验收方向：9 个实现任务并行且写集合不重叠，权限只有一个实现入口，认证行为由行为测试而非字符串检查证明。**真实结果**：`pytest test_auth_org_permissions.py test_activity_hierarchy.py` **60 passed in 83.65s**；`tests/backend/run_all.sh` **EXIT=0**（`verify_tables` 30 / `applications` 410 / `api_e2e` 255 / `agent_mock` 229 / `agent_incremental` 358 / `sse` 105 / KB 25，日志 `/tmp/run_all_phase2_final4.log`）；`tests/frontend/run_all.sh` **EXIT=0**（构建 4/4、契约 25/25、语音 21/21）；`verify_phase2_migration.sh` **PASS**（16 表、数据保留、legacy 4、重复执行、备份、报告）。审查 **3 轮**：首轮 2 项阻塞（写操作缺 CSRF、派生组织越权）→ 修复；第二轮 A1/A2/A3 → 修复；第三轮「可提交，无新增阻断」。浏览器模拟视口（1440×900 / 390×844）验证组织上下文、跨组织拒绝、重置后会话失效、邀请注册页与成员 `/admin` 拦截。安全红线本地 **12 通过 / 1 失败**（B5b 本地运行产物残留，未删用户文件，CI 干净检出预期通过但未运行）。**未提交、未推送；CI 待回填**。门禁口径补充：Windows Git Bash 无 `python3`，验证命令必须显式设置 `PYTHON_BIN="$(command -v python)"`，否则套件无法启动 |
 
+### stage17：开发接手流程（本轮追加）
+
+| 编号 | 对象 | badcase / 触发原因 | 修改 | 效果 / 验证方式 |
+|---|---|---|---|---|
+| P-017 | 开发接手流程 · **先读当前交接与本地总计划，再执行选定阶段**（stage17，仅文档） | 真实触发：用户说明已回退到上次提交，要求整理计划与记录；现场 HEAD 为 `af43dc7` 且工作区干净，旧 `phase3-activity-workflow` 及其新增测试不存在，先前“收口未提交文件”的接手指令不再适用 | AGENTS 增加 HANDOFF → 记录规则 → 本地总计划 → 选定阶段设计的必读顺序；计划缺失时报告并暂停依赖实现；区分 AIW/phase、stage、P 和问题编号；历史记录保留，当前事实写交接 | 真实结果：文档收尾与 Git 边界检查 **19/19**、**22** 个本地链接有效，编号无重复；详细计划仍被忽略。报告见 `codearts_proof/reports/stage17_document_check.json`。这是开发流程 Prompt 调整，未修改业务 Prompt、未调用真实模型，不声称业务效果提升或所有 Agent 已实测遵守 |
+
 ## 二、待补录（运行期真实 badcase）
 
 以下为**占位表格**，需在真实试跑（艺馨杯 / 秋之韵试点或演示彩排）遇到问题后，由技术负责人按「badcase → 修改 → 效果」补录，并同步更新 `LOG.md`：

@@ -71,6 +71,12 @@ def _self_visible_condition(task, user: User) -> ColumnElement[bool]:
         task.claim_type == "open",
         task.status != "cancelled",
     )
+    # 活动负责人是其活动下全部任务的可见者；``task.activity_id IS NULL`` 时该条件自然为假，
+    # 因此独立任务不因负责人身份获得可见性。
+    activity_owner = exists().where(
+        Activity.id == task.activity_id,
+        Activity.owner_id == user.id,
+    )
     return or_(
         task.publisher_id == user.id,
         task.assignee_id == user.id,
@@ -78,6 +84,7 @@ def _self_visible_condition(task, user: User) -> ColumnElement[bool]:
         exists().where(TaskApplication.task_id == task.id, TaskApplication.user_id == user.id),
         _org_role_exists(task.org_id, user.id, "admin"),
         member_open,
+        activity_owner,
     )
 
 
@@ -170,7 +177,8 @@ def resolve_task_org(
 
     ``parent`` / ``activity`` 未显式给出时，从 ``task`` 的既有归属补齐，便于 PATCH 场景只传 ``task``。
     最终归属（无论派生还是显式）都必须属于用户 ``admin|collaborator`` 的组织，
-    派生路径不得绕过该校验。
+    派生路径不得绕过该校验。无组织活动（``activity.org_id IS NULL``）没有组织角色
+    可校验，发布权只授予活动负责人本人。
     """
     if task is not None:
         if parent is None and task.parent_id is not None:
@@ -184,6 +192,8 @@ def resolve_task_org(
             raise ApiError(4001, "子任务必须与父任务属于同一组织")
         resolved = parent.org_id
     elif activity is not None:
+        if activity.org_id is None and int(activity.owner_id) != int(user.id):
+            raise ApiError(4030, "无权在该活动下创建事务", 403)
         if org_id is not None and org_id != activity.org_id:
             raise ApiError(4001, "任务必须与所属活动属于同一组织")
         resolved = activity.org_id

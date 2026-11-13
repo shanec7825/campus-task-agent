@@ -1,0 +1,172 @@
+{
+  "kind": "documentation_consistency_not_business_tests",
+  "checked_at": "2026-11-13T22:54:32+08:00",
+  "working_directory": "D:\\Users\\Lenovo\\Downloads\\campus-task-agent-delivery\\campus-task-agent",
+  "baseline_sha": "af43dc7e15120ebb85f90e5f39879d080c2715c1",
+  "commands": [
+    "git diff --check",
+    "git diff --exit-code HEAD -- backend frontend tests .github .gitignore scripts readme README.md",
+    "git check-ignore -- <three local plan files>",
+    "python -X utf8 - (inline standard-library document/path/numbering checks)"
+  ],
+  "checks": {
+    "required_documents_exist": true,
+    "local_markdown_links_resolve": true,
+    "no_trailing_whitespace_in_authored_documents": true,
+    "baseline_unchanged": true,
+    "git_diff_check": true,
+    "no_staged_changes": true,
+    "product_tests_config_and_ignore_unchanged": true,
+    "existing_stage_documents_unchanged": true,
+    "historical_log_lines_preserved": true,
+    "historical_prompt_lines_preserved": true,
+    "stage_identifiers_unique": true,
+    "prompt_identifiers_unique": true,
+    "single_stage17_log_row": true,
+    "detailed_plans_remain_ignored": true,
+    "detailed_plans_untracked_by_git": true,
+    "current_user_instruction_preserved": true,
+    "agents_contains_all_reading_entries": true,
+    "roadmap_uses_reverted_baseline_and_distinguishes_suggestions": true,
+    "worktree_changes_only_authorized_documents": true
+  },
+  "passed": 19,
+  "total": 19,
+  "local_links": [
+    {
+      "source": "AGENTS.md",
+      "target": "docs/HANDOFF.md",
+      "exists": true
+    },
+    {
+      "source": "AGENTS.md",
+      "target": "docs/DEVELOPMENT_RECORDS.md",
+      "exists": true
+    },
+    {
+      "source": "AGENTS.md",
+      "target": ".codeartsdoer/plans/ai-workbench/roadmap.md",
+      "exists": true
+    },
+    {
+      "source": "docs/HANDOFF.md",
+      "target": "../AGENTS.md",
+      "exists": true
+    },
+    {
+      "source": "docs/HANDOFF.md",
+      "target": "DEVELOPMENT_RECORDS.md",
+      "exists": true
+    },
+    {
+      "source": "docs/HANDOFF.md",
+      "target": "../.codeartsdoer/plans/ai-workbench/roadmap.md",
+      "exists": true
+    },
+    {
+      "source": "docs/HANDOFF.md",
+      "target": "../.codeartsdoer/plans/handoff-baseline-cleanup/design.md",
+      "exists": true
+    },
+    {
+      "source": "docs/HANDOFF.md",
+      "target": "../.codeartsdoer/plans/handoff-baseline-cleanup/task.md",
+      "exists": true
+    },
+    {
+      "source": "docs/HANDOFF.md",
+      "target": "../codearts_proof/ai_dialogue/stage17_回退基线与开发交接整理.md",
+      "exists": true
+    },
+    {
+      "source": "docs/DEVELOPMENT_RECORDS.md",
+      "target": "../AGENTS.md",
+      "exists": true
+    },
+    {
+      "source": "docs/DEVELOPMENT_RECORDS.md",
+      "target": "HANDOFF.md",
+      "exists": true
+    },
+    {
+      "source": "docs/DEVELOPMENT_RECORDS.md",
+      "target": "../codearts_proof/LOG.md",
+      "exists": true
+    },
+    {
+      "source": "codearts_proof/LOG.md",
+      "target": "../docs/HANDOFF.md",
+      "exists": true
+    },
+    {
+      "source": "codearts_proof/LOG.md",
+      "target": "ai_dialogue/stage17_回退基线与开发交接整理.md",
+      "exists": true
+    },
+    {
+      "source": "codearts_proof/LOG.md",
+      "target": "../docs/HANDOFF.md",
+      "exists": true
+    },
+    {
+      "source": "codearts_proof/LOG.md",
+      "target": "../docs/DEVELOPMENT_RECORDS.md",
+      "exists": true
+    },
+    {
+      "source": "codearts_proof/LOG.md",
+      "target": "reports/stage17_document_check.json",
+      "exists": true
+    },
+    {
+      "source": "codearts_proof/ai_dialogue/stage17_回退基线与开发交接整理.md",
+      "target": "../prompts/agent_team_启动指令/2026-11-13_stage17_回退与计划整理_启动指令.md",
+      "exists": true
+    },
+    {
+      "source": "codearts_proof/ai_dialogue/stage17_回退基线与开发交接整理.md",
+      "target": "../../AGENTS.md",
+      "exists": true
+    },
+    {
+      "source": "codearts_proof/ai_dialogue/stage17_回退基线与开发交接整理.md",
+      "target": "../../docs/HANDOFF.md",
+      "exists": true
+    },
+    {
+      "source": "codearts_proof/ai_dialogue/stage17_回退基线与开发交接整理.md",
+      "target": "../../docs/DEVELOPMENT_RECORDS.md",
+      "exists": true
+    },
+    {
+      "source": "codearts_proof/ai_dialogue/stage17_回退基线与开发交接整理.md",
+      "target": "../reports/stage17_document_check.json",
+      "exists": true
+    }
+  ],
+  "changed_document_paths": [
+    "AGENTS.md",
+    "codearts_proof/LOG.md",
+    "codearts_proof/prompts/prompt迭代记录.md",
+    "codearts_proof/ai_dialogue/stage17_回退基线与开发交接整理.md",
+    "codearts_proof/prompts/agent_team_启动指令/2026-11-13_stage17_回退与计划整理_启动指令.md",
+    "codearts_proof/reports/stage17_document_check.json",
+    "docs/DEVELOPMENT_RECORDS.md",
+    "docs/HANDOFF.md"
+  ],
+  "not_run": [
+    "backend/frontend tests",
+    "browser/real device",
+    "real business model",
+    "independent code review",
+    "Git commit/push/deploy",
+    "remote CI query"
+  ],
+  "initial_check": {
+    "passed": 19,
+    "total": 19,
+    "local_links": 20,
+    "checked_at": "2026-11-13T22:52:28+08:00"
+  },
+  "final_check_after_record_updates": true
+}

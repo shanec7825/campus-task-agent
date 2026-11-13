@@ -17,7 +17,7 @@ import { ElMessage } from 'element-plus'
 import { ApiError } from '../../api/client'
 import { findSimilar } from '../../api/kb'
 import { createTask, getTask } from '../../api/tasks'
-import type { SimilarItem } from '../../types/models'
+import type { SimilarItem, TaskCreatePayload } from '../../types/models'
 import SimilarTip from './SimilarTip.vue'
 
 /** 动态扩展项行 */
@@ -27,6 +27,9 @@ interface ExtraRow {
   key: string
   value: string
 }
+
+/** 由活动详情进入发布页时携带的活动归属；`null` 表示创建独立任务 */
+const props = withDefaults(defineProps<{ activityId?: number | null }>(), { activityId: null })
 
 const router = useRouter()
 
@@ -197,23 +200,29 @@ async function handleSubmit(): Promise<void> {
     (part) => part !== ''
   )
 
+  const payload: TaskCreatePayload = {
+    title,
+    description: descriptionParts.length > 0 ? descriptionParts.join('\n') : null,
+    location: form.location.trim() || null,
+    start_time: form.start_time,
+    deadline: form.deadline,
+    quota: form.quota,
+    extras: extrasPayload,
+    reminder_rule: {
+      days_before: form.reminder_days_before,
+      day_of: form.reminder_day_of,
+      on_overdue: form.reminder_on_overdue
+    },
+    credit_reward: form.credit_reward
+  }
+  // 仅活动入口进入时携带归属；独立任务不发送该键（C-FE-ACTIVITY-PUBLISH@1）
+  if (props.activityId !== null && Number.isFinite(props.activityId) && props.activityId > 0) {
+    payload.activity_id = props.activityId
+  }
+
   submitting.value = true
   try {
-    const task = await createTask({
-      title,
-      description: descriptionParts.length > 0 ? descriptionParts.join('\n') : null,
-      location: form.location.trim() || null,
-      start_time: form.start_time,
-      deadline: form.deadline,
-      quota: form.quota,
-      extras: extrasPayload,
-      reminder_rule: {
-        days_before: form.reminder_days_before,
-        day_of: form.reminder_day_of,
-        on_overdue: form.reminder_on_overdue
-      },
-      credit_reward: form.credit_reward
-    })
+    const task = await createTask(payload)
     ElMessage.success(`发布成功：${task.title}`)
     resetForm()
     void router.push(`/tasks/${task.id}`)

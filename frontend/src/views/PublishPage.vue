@@ -14,6 +14,7 @@
  * - `AiPanel`：相似提示 → 解析 → 审核 → 块/面板染色 → 拆解卡片 → 发布。
  */
 import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
 import AiPanel from '../components/Publish/AiPanel.vue'
 import ManualForm from '../components/Publish/ManualForm.vue'
@@ -21,10 +22,24 @@ import { useDraftStore } from '../stores/draft'
 
 type PublishMode = 'manual' | 'ai'
 
+const route = useRoute()
 const draft = useDraftStore()
+
+/** 解析 `?activity=<id>`：仅正整数有效，无效或缺省视为独立任务 */
+function parseActivityId(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === '') return null
+  const parsed = Number.parseInt(String(raw), 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+/** 由活动详情进入时的活动归属；非空时默认手动模式（AI 模式本轮不带活动归属） */
+const activityId = computed<number | null>(() => parseActivityId(route.query.activity))
 
 /** 默认智能模式，手动为兜底：AI 不可用时用户仍可切到手动模式发布 */
 const activeTab = ref<PublishMode>('ai')
+
+/** 活动入口进入时默认手动模式（AI 模式本轮不带活动归属） */
+if (activityId.value !== null) activeTab.value = 'manual'
 
 /** AI 模式是否有未发布的草稿内容（用于 Tab 徽标与切换提醒） */
 const hasDraftContent = computed<boolean>(
@@ -87,6 +102,14 @@ const mockMode = computed<boolean>(() => draft.mockMode)
     </nav>
 
     <div v-show="activeTab === 'manual'" class="mode-panel" role="tabpanel" aria-label="手动兜底模式">
+      <el-alert
+        v-if="activityId !== null"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="`任务将归属活动 #${activityId}`"
+        class="mode-panel__notice"
+      />
       <!-- 切回手动模式时提示 AI 草稿仍在（v-show 保活的直接证据） -->
       <el-alert
         v-if="hasDraftContent"
@@ -97,7 +120,7 @@ const mockMode = computed<boolean>(() => draft.mockMode)
         description="切回「AI 智能模式」可继续编辑、继续增量补充，追溯块也会一并保留，本页不会销毁草稿。"
         class="mode-panel__notice"
       />
-      <ManualForm />
+      <ManualForm :activity-id="activityId" />
     </div>
 
     <div v-show="activeTab === 'ai'" class="mode-panel" role="tabpanel" aria-label="AI 智能模式">

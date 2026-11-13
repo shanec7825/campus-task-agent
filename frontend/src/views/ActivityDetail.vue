@@ -82,6 +82,11 @@ function goPublish(): void {
   void router.push({ name: 'publish' })
 }
 
+/** 携带活动归属进入发布页（C-FE-ACTIVITY-PUBLISH@1） */
+function publishUnderActivity(): void {
+  void router.push({ name: 'publish', query: { activity: String(activityId.value) } })
+}
+
 async function load(): Promise<void> {
   if (!Number.isFinite(activityId.value) || activityId.value <= 0) {
     error.value = '活动编号无效'
@@ -177,6 +182,7 @@ watch(
       <section class="app-section-card" aria-label="操作">
         <div class="app-actions">
           <el-button @click="backToHall">返回事务列表</el-button>
+          <el-button type="primary" @click="publishUnderActivity">在此活动下新建任务</el-button>
           <el-button @click="goPublish">发布相关事务</el-button>
         </div>
       </section>

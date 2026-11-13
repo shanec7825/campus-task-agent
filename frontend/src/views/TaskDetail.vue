@@ -200,6 +200,13 @@ const actionHints = computed<string[]>(() => {
 })
 
 const subtasks = computed<TaskBrief[]>(() => task.value?.children ?? [])
+/** 下层工作已完成、等待负责人验收：纯派生文本，不改任何业务状态与按钮可用性 */
+const awaitingOwnerConfirm = computed<boolean>(() =>
+  subtasks.value.length > 0 &&
+  subtasks.value.every((child) => child.status === 'verified') &&
+  task.value !== null &&
+  task.value.status !== 'verified'
+)
 const sortedProgress = computed(() =>
   [...(task.value?.progress ?? [])].sort((a, b) => {
     if (a.created_at === b.created_at) return a.id - b.id
@@ -889,6 +896,7 @@ watch(
             <span class="header-hint">前置任务未完成的子任务置灰，且不可报名</span>
           </div>
         </template>
+        <p v-if="awaitingOwnerConfirm" class="confirm-hint">下层工作已完成，待负责人确认</p>
         <SubTaskTree
           :tasks="subtasks"
           :current="currentBrief"
@@ -1212,6 +1220,14 @@ watch(
 
 .members-empty {
   color: var(--app-text-muted);
+}
+
+.confirm-hint {
+  margin: 0 0 10px;
+  font-size: var(--app-font-aux-lg);
+  color: var(--el-color-warning);
+  line-height: 1.6;
+  word-break: break-word;
 }
 
 .member-table {
