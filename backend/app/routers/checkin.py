@@ -1,6 +1,7 @@
 """签到路由（契约 `C-TASKS@1` #11/#12，owner = T2）。
 
 规则（R4，按 `C-APPLY@1` 多负责人模型升级）：
+- 目标任务先按 `C-AUTHZ@1` 校验可见性（不可见 ``4040``，不泄露存在性）；
 - 仅任务 approved 成员可签到（``4030``，``is_approved_participant`` 含 legacy 回退）；
 - 任务不存在 ``4040``；
 - 同一用户同一任务只能签到一次，重复 ``4090``（数据库 ``UNIQUE(task_id, user_id)`` 兜底）；
@@ -19,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_csrf
 from app.errors import ApiError, ok
 from app.models import Checkin, Task, User
 from app.routers.tasks import (
@@ -28,11 +29,15 @@ from app.routers.tasks import (
     ERR_NOT_FOUND,
 )
 from app.schemas import CheckinIn, CheckinOut
-from app.services import application_service, notify_service
+from app.services import application_service, authz, notify_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/checkin", tags=["checkin"])
+router = APIRouter(
+    prefix="/api/checkin",
+    tags=["checkin"],
+    dependencies=[Depends(require_csrf)],
+)
 
 
 def _now_local() -> str:
@@ -63,6 +68,8 @@ def checkin(
     task = db.get(Task, payload.task_id)
     if task is None:
         raise ApiError(ERR_NOT_FOUND, "任务不存在")
+    # 可见性先行（`C-AUTHZ@1`）：不可见即 4040，不泄露任务存在性
+    authz.require_task_view(db, current_user, task)
     # 多名 approved 成员均可签到（含 legacy 回退）；assignee_id 判空逻辑已删除
     if not application_service.is_approved_participant(db, task, int(current_user.id)):
         raise ApiError(ERR_FORBIDDEN, "只有任务成员可以签到")
@@ -103,7 +110,10 @@ def my_checkins(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """当前用户的全部签到记录（含``task_title``），按 ``checkin_time DESC``。"""
+    """当前用户的签到记录（含``task_title``），按 ``checkin_time DESC``。
+
+    只返回目标任当前仍可见的签到记录（``authz.can_view_task``）。
+    """
     records = (
         db.query(Checkin)
         .filter(Checkin.user_id == current_user.id)
@@ -112,12 +122,18 @@ def my_checkins(
     )
 
     task_ids = {int(record.task_id) for record in records}
-    titles: dict[int, str] = {}
+    visible: dict[int, Task] = {}
     if task_ids:
-        rows = db.query(Task.id, Task.title).filter(Task.id.in_(task_ids)).all()
-        titles = {int(row[0]): str(row[1]) for row in rows}
+        tasks = db.query(Task).filter(Task.id.in_(task_ids)).all()
+        visible = {
+            int(task.id): task for task in tasks if authz.can_view_task(db, current_user, task)
+        }
 
-    items = [_checkin_payload(record, titles.get(int(record.task_id))) for record in records]
+    items = [
+        _checkin_payload(record, visible[int(record.task_id)].title)
+        for record in records
+        if int(record.task_id) in visible
+    ]
     return ok({"items": items})
 
 

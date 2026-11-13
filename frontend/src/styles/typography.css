@@ -9,4 +9,11 @@
   --el-font-size-base: 15px;
   --el-font-size-small: 14px;
   --el-font-size-extra-small: 13px;
+
+  /* 应用字号令牌（Light / Dark 共用，契约 C-TOKENS@2） */
+  --app-font-body: 15px;
+  --app-font-page-title: 27px;
+  --app-font-section-title: 19px;
+  --app-font-aux: 13px;
+  --app-font-aux-lg: 14px;
 }

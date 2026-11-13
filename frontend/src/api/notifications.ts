@@ -18,8 +18,8 @@ export function readNotifications(ids: number[]): Promise<{ updated: number }> {
 }
 
 /**
- * 构造 SSE 地址：`EventSource` 无法携带 Authorization 头，token 走查询参数（2.3 D3）。
+ * SSE 地址：登录态由同源 Cookie 承载，`EventSource` 默认携带 Cookie，无需令牌参数。
  */
-export function streamUrl(token: string): string {
-  return `/api/notifications/stream?token=${encodeURIComponent(token)}`
+export function streamUrl(): string {
+  return '/api/notifications/stream'
 }

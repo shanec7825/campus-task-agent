@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import diffing, extractor, reviewer
 from app.db import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_csrf
 from app.errors import ApiError, ok
 from app.models import ParseSession, User
 from app.schemas import (
@@ -38,7 +38,11 @@ from app.schemas import (
     StreamParseOut,
 )
 
-router = APIRouter(prefix="/api/agent", tags=["agent"])
+router = APIRouter(
+    prefix="/api/agent",
+    tags=["agent"],
+    dependencies=[Depends(require_csrf)],
+)
 
 
 def _now_text() -> str:

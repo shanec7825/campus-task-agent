@@ -140,8 +140,8 @@ stop_server() {
 }
 
 cleanup() {
-  trap - EXIT INT TERM
   local code=$?
+  trap - EXIT INT TERM
   echo
   echo "===== 清理 ====="
   stop_server "$SERVER_PID" "$PORT"

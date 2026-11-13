@@ -32,14 +32,17 @@ class UserOut(BaseModel):
     role: str
     org: str | None = None
     credits: int
+    created_at: str | None = None
+    platform_admin: bool = False
 
 
 class LoginIn(BaseModel):
-    """1..32，strip 后非空。"""
+    """账号 + 密码（`C-DATA-AUTH@1`）：1..64 / 1..200，用户名 strip 后非空。"""
 
     model_config = ConfigDict(from_attributes=True)
 
-    username: str = Field(min_length=1, max_length=32)
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=200)
 
     @field_validator("username")
     @classmethod
@@ -50,11 +53,122 @@ class LoginIn(BaseModel):
         return stripped
 
 
-class LoginOut(BaseModel):
+class OrgOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    slug: str
+    status: str
+    created_at: str
+
+
+class OrgCreateIn(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str = Field(min_length=1, max_length=60)
+    slug: str = Field(min_length=1, max_length=60)
+
+
+class OrgMembershipOut(BaseModel):
+    """当前用户在某个组织中的身份（`GET /api/auth/me` 与登录响应）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    org_id: int
+    name: str
+    slug: str
+    role: str
+    title: str | None = None
+    status: str
+
+
+class OrgMemberOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: int
+    username: str
+    display_name: str
+    role: str
+    title: str | None = None
+    status: str
+    joined_at: str
+
+
+class InvitationOut(BaseModel):
+    """邀请的展示形态：不含明文 token（库中只有 ``token_hash``）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    org_id: int
+    role_cap: str
+    expires_at: str
+    max_uses: int
+    used_count: int
+    revoked_at: str | None = None
+    created_at: str
+
+
+class InvitationCreatedOut(InvitationOut):
+    token: str
+
+
+class InvitationCreateIn(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    role_cap: str = "member"
+    expires_in_hours: int = Field(default=72, ge=1, le=720)
+    max_uses: int = Field(default=1, ge=1, le=200)
+
+
+class MemberPatchIn(BaseModel):
+    role: str | None = None
+    title: str | None = None
+    status: str | None = None
+
+
+class RegisterIn(BaseModel):
+    """凭邀请码注册（`C-ORG@1`）；``confirm_password`` 一致性由路由层校验。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_]+$")
+    display_name: str = Field(min_length=1, max_length=40)
+    password: str = Field(min_length=8, max_length=200)
+    confirm_password: str = Field(min_length=8, max_length=200)
+    invite_token: str = Field(min_length=8, max_length=200)
+
+
+class PasswordResetIn(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    token: str = Field(min_length=8, max_length=200)
+    password: str = Field(min_length=8, max_length=200)
+    confirm_password: str = Field(min_length=8, max_length=200)
+
+
+class PasswordResetRequestOut(BaseModel):
+    """一次性重置凭据：明文 token 只在此响应出现一次。"""
+
     model_config = ConfigDict(from_attributes=True)
 
     token: str
+    expires_at: str
+
+
+class MeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     user: UserOut
+    orgs: list[OrgMembershipOut] = Field(default_factory=list)
+
+
+class LoginOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user: UserOut
+    orgs: list[OrgMembershipOut] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -66,6 +180,8 @@ class TaskCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     parent_id: int | None = None
+    activity_id: int | None = None
+    org_id: int | None = None
     title: str = Field(min_length=1)
     description: str | None = None
     location: str | None = None
@@ -89,6 +205,8 @@ class TaskUpdate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     parent_id: int | None = None
+    activity_id: int | None = None
+    org_id: int | None = None
     title: str | None = None
     description: str | None = None
     location: str | None = None
@@ -117,6 +235,8 @@ class TaskBrief(BaseModel):
     depends_on: int | None = None
     quota: int | None = None
     parent_id: int | None = None
+    activity_id: int | None = None
+    org_id: int | None = None
 
 
 class ProgressOut(BaseModel):
@@ -156,6 +276,8 @@ class TaskOut(BaseModel):
 
     id: int
     parent_id: int | None = None
+    activity_id: int | None = None
+    org_id: int | None = None
     title: str
     description: str | None = None
     location: str | None = None
@@ -188,6 +310,88 @@ class TaskOut(BaseModel):
 class TaskDetailOut(TaskOut):
     children: list[TaskBrief] = Field(default_factory=list)
     progress: list[ProgressOut] = Field(default_factory=list)
+    activity_title: str | None = None
+    parent_title: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# 活动（契约 `C-DATA-ACTIVITY@1`）
+# --------------------------------------------------------------------------- #
+
+
+class ActivityProgressOut(BaseModel):
+    """活动整体进度：只统计第一层任务，子任务完成不等于活动已验收。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    total_tasks: int = 0
+    completed_tasks: int = 0
+    cancelled_tasks: int = 0
+    subtask_total: int = 0
+    subtask_completed: int = 0
+    percent: int = 0
+    awaiting_owner_confirm: bool = False
+
+
+class ActivitySubtaskNode(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    status: str
+    deadline: str | None = None
+    assignee_names: list[str] = Field(default_factory=list)
+
+
+class ActivityTaskNode(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    status: str
+    deadline: str | None = None
+    assignee_names: list[str] = Field(default_factory=list)
+    children: list[ActivitySubtaskNode] = Field(default_factory=list)
+
+
+class ActivityOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    description: str | None = None
+    location: str | None = None
+    start_time: str | None = None
+    deadline: str | None = None
+    owner_id: int
+    owner_name: str = ""
+    org: str | None = None
+    org_id: int | None = None
+    status: str
+    created_at: str
+    progress: ActivityProgressOut = Field(default_factory=ActivityProgressOut)
+
+
+class ActivityListOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    items: list[ActivityOut] = Field(default_factory=list)
+
+
+class ActivityDetailOut(ActivityOut):
+    tasks: list[ActivityTaskNode] = Field(default_factory=list)
+
+
+class ActivityCreate(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    title: str = Field(min_length=1, max_length=120)
+    description: str | None = None
+    location: str | None = None
+    start_time: str | None = None
+    deadline: str | None = None
+    org: str | None = None
+    org_id: int | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -535,12 +739,31 @@ __all__ = [
     "UserOut",
     "LoginIn",
     "LoginOut",
+    "OrgOut",
+    "OrgCreateIn",
+    "OrgMembershipOut",
+    "OrgMemberOut",
+    "InvitationOut",
+    "InvitationCreatedOut",
+    "InvitationCreateIn",
+    "MemberPatchIn",
+    "RegisterIn",
+    "PasswordResetIn",
+    "PasswordResetRequestOut",
+    "MeOut",
     "TaskCreate",
     "TaskUpdate",
     "TaskBrief",
     "MemberOut",
     "TaskOut",
     "TaskDetailOut",
+    "ActivityProgressOut",
+    "ActivitySubtaskNode",
+    "ActivityTaskNode",
+    "ActivityOut",
+    "ActivityListOut",
+    "ActivityDetailOut",
+    "ActivityCreate",
     "ApplicationOut",
     "ApplyOut",
     "DecisionIn",

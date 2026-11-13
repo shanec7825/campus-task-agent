@@ -1,28 +1,34 @@
-"""认证依赖（契约 `C-AUTH@1` / `C-BOOT@1` 第 6 条，最终 owner = T2）。
+"""Cookie 会话鉴权依赖（契约 `C-SESSION@1`，owner = T2）。
 
-token 只存放在进程内存字典 :data:`TOKENS` 中，不落库、不设过期；进程重启后
-所有旧 token 失效并返回 ``code=4010``（R1-AC5）。
-
-除 :func:`get_current_user`（Authorization 头）外，本模块额外提供
-:func:`get_sse_current_user`：``EventSource`` 无法携带自定义请求头，SSE 端点
-按 `2.3 D3` 允许 ``?token=`` 查询参数鉴权，两者任一有效即可（`C-NOTIFY@1`）。
+身份只来自 HttpOnly Cookie ``cta_session``；不再接受 ``Authorization`` 头或 ``?token=``。
+``require_csrf`` 使用双提交校验：Cookie ``cta_csrf`` 与请求头 ``X-CSRF-Token`` 相等，
+且等于该会话记录中的 ``csrf_token``。
 """
 
 from __future__ import annotations
 
-from fastapi import Depends, Header, Query
+import hmac
+
+from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.errors import ApiError
 from app.models import User
+from app.services.session_service import (
+    CSRF_COOKIE,
+    CSRF_HEADER,
+    SESSION_COOKIE,
+    resolve_session,
+)
 
-# token -> user_id；不落库、不设过期（R1-AC5）
-TOKENS: dict[str, int] = {}
-
-# 认证失败统一文案与错误码（`2.2.4` 错误码总表：4010 未登录）
+# 认证失败统一文案与错误码（`2.2.4` 错误码总表：4010 未登录 / 4030 越权）
 ERROR_UNAUTHORIZED = 4010
 MESSAGE_UNAUTHORIZED = "未登录或登录已过期"
+ERROR_CSRF = 4030
+MESSAGE_CSRF = "CSRF 校验失败"
+
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def unauthorized() -> ApiError:
@@ -30,67 +36,43 @@ def unauthorized() -> ApiError:
     return ApiError(ERROR_UNAUTHORIZED, MESSAGE_UNAUTHORIZED, 401)
 
 
-def register_token(token: str, user_id: int) -> None:
-    """登记 token。同一用户允许持有多个 token（HTTP 与 SSE 可各自持有）。"""
-    TOKENS[token] = user_id
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """解析 ``cta_session`` Cookie；缺失 / 过期 / 已撤销 / 用户非 active ⇒ 401 + ``code=4010``。"""
+    resolved = resolve_session(db, request.cookies.get(SESSION_COOKIE))
+    if resolved is None:
+        raise unauthorized()
+    return resolved[0]
 
 
-def extract_bearer_token(authorization: str | None) -> str | None:
-    """从 ``Authorization: Bearer <token>`` 中提取 token；格式不符返回 ``None``。"""
-    if not authorization:
-        return None
-    prefix = "Bearer "
-    if not authorization.startswith(prefix):
-        return None
-    token = authorization[len(prefix) :].strip()
-    return token or None
+def get_sse_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """SSE 专用：``EventSource`` 由浏览器自动携带 Cookie，``?token=`` 参数被忽略。"""
+    return get_current_user(request, db)
 
 
-def get_user_by_token(db: Session, token: str | None) -> User | None:
-    """按 token 解析用户；token 缺失 / 未登记 / 用户已不存在均返回 ``None``。"""
-    if not token:
-        return None
-    user_id = TOKENS.get(token)
-    if user_id is None:
-        return None
-    return db.get(User, user_id)
+def require_csrf(request: Request, db: Session = Depends(get_db)) -> None:
+    """写操作 CSRF 校验；安全方法与未登录请求直接放行。
 
-
-def get_current_user(
-    authorization: str | None = Header(default=None),
-    db: Session = Depends(get_db),
-) -> User:
-    """从 ``Authorization: Bearer <token>`` 解析当前用户。
-
-    缺 header / 非 ``Bearer `` 前缀 / token 未登记 / 用户不存在 ⇒ 401 + ``code=4010``。
+    无有效会话时不在此拦截：未登录的写请求交由 :func:`get_current_user`
+    统一返回 ``4010``，避免无 Cookie 时被误报为 CSRF 失败。
     """
-    user = get_user_by_token(db, extract_bearer_token(authorization))
-    if user is None:
-        raise unauthorized()
-    return user
-
-
-def get_sse_current_user(
-    token: str | None = Query(default=None, description="SSE 专用：EventSource 无法携带请求头"),
-    authorization: str | None = Header(default=None),
-    db: Session = Depends(get_db),
-) -> User:
-    """SSE 端点专用鉴权：``?token=`` 查询参数与 ``Authorization`` 头二者其一有效即可。"""
-    candidate = token.strip() if token else None
-    if not candidate:
-        candidate = extract_bearer_token(authorization)
-    user = get_user_by_token(db, candidate)
-    if user is None:
-        raise unauthorized()
-    return user
+    if request.method in _SAFE_METHODS:
+        return
+    resolved = resolve_session(db, request.cookies.get(SESSION_COOKIE))
+    if resolved is None:
+        return
+    cookie_token = request.cookies.get(CSRF_COOKIE) or ""
+    header_token = request.headers.get(CSRF_HEADER) or ""
+    if not cookie_token or not hmac.compare_digest(cookie_token, header_token):
+        raise ApiError(ERROR_CSRF, MESSAGE_CSRF, 403)
+    if not hmac.compare_digest(cookie_token, resolved[1].csrf_token):
+        raise ApiError(ERROR_CSRF, MESSAGE_CSRF, 403)
 
 
 __all__ = [
-    "TOKENS",
-    "register_token",
-    "extract_bearer_token",
-    "get_user_by_token",
+    "ERROR_UNAUTHORIZED",
+    "MESSAGE_UNAUTHORIZED",
     "get_current_user",
     "get_sse_current_user",
+    "require_csrf",
     "unauthorized",
 ]

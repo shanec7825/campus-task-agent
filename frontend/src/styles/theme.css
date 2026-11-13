@@ -8,13 +8,13 @@
   color-scheme: light;
 
   /* ---- Element Plus 语义令牌（Light 基线） ---- */
-  --el-color-primary: #409eff;
-  --el-color-primary-light-3: #79bbff;
-  --el-color-primary-light-5: #a0cfff;
-  --el-color-primary-light-7: #c6e2ff;
-  --el-color-primary-light-8: #d9ecff;
-  --el-color-primary-light-9: #ecf5ff;
-  --el-color-primary-dark-2: #337ecc;
+  --el-color-primary: #2456a6;
+  --el-color-primary-light-3: #5a80bf;
+  --el-color-primary-light-5: #8fa8d0;
+  --el-color-primary-light-7: #c4d1e6;
+  --el-color-primary-light-8: #dce3f0;
+  --el-color-primary-light-9: #edf1f7;
+  --el-color-primary-dark-2: #1c4585;
 
   --el-bg-color: #ffffff;
   --el-bg-color-page: #f5f7fa;
@@ -46,17 +46,17 @@
   --el-border-radius-base: 8px;
 
   /* ---- 应用令牌（Light） ---- */
-  --app-bg: var(--el-bg-color-page);
-  --app-surface: var(--el-bg-color);
-  --app-surface-raised: var(--el-bg-color-overlay);
-  --app-surface-sunken: var(--el-fill-color);
-  --app-border: var(--el-border-color);
-  --app-border-strong: var(--el-border-color-dark);
-  --app-text: var(--el-text-color-primary);
-  --app-text-secondary: var(--el-text-color-regular);
-  --app-text-muted: var(--el-text-color-secondary);
   --app-primary: var(--el-color-primary);
-  --app-primary-soft: var(--el-color-primary-light-9);
+  --app-text: #172b4d;
+  --app-text-secondary: #52627a;
+  --app-text-muted: #6b7a8f;
+  --app-bg: #f5f7fb;
+  --app-surface: #ffffff;
+  --app-surface-raised: #ffffff;
+  --app-surface-sunken: #eef2f8;
+  --app-border: #dfe5ef;
+  --app-border-strong: #c8d2e0;
+  --app-primary-soft: #edf1f7;
   --app-shadow-sm: var(--el-box-shadow-lighter);
   --app-shadow-md: var(--el-box-shadow-light);
   --app-shadow-lg: var(--el-box-shadow);
@@ -82,14 +82,14 @@
 html.dark {
   color-scheme: dark;
 
-  /* ---- Element Plus 语义令牌（Dark，与官方 dark/css-vars.css 对齐） ---- */
-  --el-color-primary: #409eff;
-  --el-color-primary-light-3: #3375b9;
-  --el-color-primary-light-5: #2a598a;
-  --el-color-primary-light-7: #213d5b;
-  --el-color-primary-light-8: #1d3043;
-  --el-color-primary-light-9: #18222b;
-  --el-color-primary-dark-2: #66b1ff;
+  /* ---- Element Plus 语义令牌（Dark） ---- */
+  --el-color-primary: #6b93db;
+  --el-color-primary-light-3: #4f74b0;
+  --el-color-primary-light-5: #3a5683;
+  --el-color-primary-light-7: #2b3f5f;
+  --el-color-primary-light-8: #22334d;
+  --el-color-primary-light-9: #1a2538;
+  --el-color-primary-dark-2: #8fb0e6;
 
   --el-bg-color: #141414;
   --el-bg-color-page: #0a0a0a;
@@ -121,17 +121,17 @@ html.dark {
   --el-border-radius-base: 8px;
 
   /* ---- 应用令牌（Dark） ---- */
-  --app-bg: var(--el-bg-color-page);
-  --app-surface: var(--el-bg-color);
-  --app-surface-raised: var(--el-bg-color-overlay);
-  --app-surface-sunken: var(--el-fill-color);
-  --app-border: var(--el-border-color);
-  --app-border-strong: var(--el-border-color-dark);
-  --app-text: var(--el-text-color-primary);
-  --app-text-secondary: var(--el-text-color-regular);
-  --app-text-muted: var(--el-text-color-secondary);
   --app-primary: var(--el-color-primary);
-  --app-primary-soft: var(--el-color-primary-light-9);
+  --app-text: #e5eaf3;
+  --app-text-secondary: #c3cbd9;
+  --app-text-muted: #98a4b5;
+  --app-bg: #0f1115;
+  --app-surface: #161a20;
+  --app-surface-raised: #1c2129;
+  --app-surface-sunken: #232a33;
+  --app-border: #2c3442;
+  --app-border-strong: #3a4557;
+  --app-primary-soft: #1a2538;
   --app-shadow-sm: var(--el-box-shadow-lighter);
   --app-shadow-md: var(--el-box-shadow-light);
   --app-shadow-lg: var(--el-box-shadow);
@@ -176,7 +176,7 @@ html.dark {
 
 .app-page-title {
   margin: 0;
-  font-size: 20px;
+  font-size: var(--app-font-page-title);
   font-weight: 600;
   line-height: 1.3;
   color: var(--app-text);
@@ -184,7 +184,7 @@ html.dark {
 
 .app-page-subtitle {
   margin: var(--app-space-1) 0 0;
-  font-size: 14px;
+  font-size: var(--app-font-aux-lg);
   line-height: 1.5;
   color: var(--app-text-secondary);
 }

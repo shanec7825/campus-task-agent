@@ -20,6 +20,9 @@ from fastapi.responses import JSONResponse
 
 from app import routers
 from app.db import Base, init_db
+from app.routers import activities as activities_router
+from app.routers import orgs as orgs_router
+from app.routers import registration as registration_router
 from app.errors import ApiError, ok
 from app.services import notification_hub, reminder_scheduler
 
@@ -87,7 +90,13 @@ app.add_middleware(
 # --------------------------------------------------------------------------- #
 @app.exception_handler(ApiError)
 async def _handle_api_error(_request: Request, exc: ApiError) -> JSONResponse:
-    return JSONResponse(status_code=exc.http_status, content=exc.to_payload())
+    response = JSONResponse(status_code=exc.http_status, content=exc.to_payload())
+    if exc.http_status == 401:
+        # 会话失效/过期的 401 必须同时清除 Cookie（`C-SESSION@1`），否则客户端会反复携带同一失效令牌。
+        from app.services.session_service import clear_session_cookies
+
+        clear_session_cookies(response)
+    return response
 
 
 @app.exception_handler(RequestValidationError)
@@ -124,7 +133,9 @@ def health() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# 路由挂载：T1 一次性挂载 7 个模块，后续 owner 无需修改本文件
+# 路由挂载：T1 一次性挂载 7 个模块，后续 owner 无需修改本文件；
+# 阶段 1 追加活动路由（`C-ACTIVITY-API@1`）；
+# 阶段 2 追加组织与注册路由（`C-ORG@1`，T1 预挂载）。
 # --------------------------------------------------------------------------- #
 app.include_router(routers.auth.router)
 app.include_router(routers.tasks.router)
@@ -134,6 +145,9 @@ app.include_router(routers.credits.router)
 app.include_router(routers.notifications.router)
 app.include_router(routers.kb.router)
 app.include_router(routers.agent.router)
+app.include_router(activities_router.router)
+app.include_router(orgs_router.router)
+app.include_router(registration_router.router)
 
 # --------------------------------------------------------------------------- #
 # 生产形态静态托管（首屏加速）：dist 同源托管，避免经 1Mbps 隧道拉取数百个 ESM

@@ -9,3 +9,8 @@ openai>=1.30
 apscheduler>=3.10,<4
 python-dotenv>=1.0
 jieba>=0.42
+# 阶段 2 密码哈希：使用标准库 hashlib.scrypt（n=2^14, r=8, p=1，16 字节 salt），
+# 存储格式 scrypt$16384$8$1$<salt_b64>$<hash_b64>。
+# 环境无法安装 argon2-cffi（PyPI 不可达），故未引入 argon2-cffi / passlib / pyjwt；
+# 这是对「优先 Argon2id」的显式偏差，已在 design.md 开放决策 1 留痕。
+# 若后续环境可用 Argon2id，只需替换 app/security.py 的实现，不影响调用方与库表结构。

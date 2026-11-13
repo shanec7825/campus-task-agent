@@ -6,7 +6,7 @@
 3. ``GET /api/notifications/stream``：SSE 长连接。
 
 SSE 实现要点（跨 T2/T4）：
-- 鉴权走 ``?token=`` 查询参数（``EventSource`` 无法携带请求头，见 `2.3 D3`）；
+- 鉴权只走 Cookie（``get_sse_current_user``）；``?token=`` 参数被忽略，不参与鉴权；
 - 数据来源**只能**是 ``notification_hub.subscribe/unsubscribe``（连接注册表 owner = T4），
   本模块不维护任何自己的连接集合；
 - 心跳注释行 ``": ping\\n\\n"`` 的间隔取 ``SSE_HEARTBEAT_SECONDS``；
@@ -27,15 +27,19 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import get_current_user, get_sse_current_user
+from app.deps import get_current_user, get_sse_current_user, require_csrf
 from app.errors import ok
-from app.models import Notification, User
+from app.models import Notification, Task, User
 from app.schemas import NotificationListOut, NotificationOut, ReadIn
-from app.services import notification_hub
+from app.services import authz, notification_hub
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/notifications", tags=["notifications"])
+router = APIRouter(
+    prefix="/api/notifications",
+    tags=["notifications"],
+    dependencies=[Depends(require_csrf)],
+)
 
 # SSE 默认心跳间隔（与 `C-BOOT@1` 环境变量表一致）
 DEFAULT_SSE_HEARTBEAT_SECONDS = 15.0
@@ -72,12 +76,25 @@ def list_notifications(
     query = db.query(Notification).filter(Notification.user_id == current_user.id)
     if unread_only:
         query = query.filter(Notification.is_read == 0)
-    items = query.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(limit).all()
+    rows = query.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(limit).all()
 
-    data = NotificationListOut(
-        unread=int(unread),
-        items=[NotificationOut.model_validate(item) for item in items],
-    ).model_dump()
+    # 关联任务不可见时只保留标题与 task_id，不回吐任务正文（`C-OTHER-AUTH@1`）
+    task_ids = {int(row.task_id) for row in rows if row.task_id is not None}
+    visible_task_ids: set[int] = set()
+    if task_ids:
+        tasks = db.query(Task).filter(Task.id.in_(task_ids)).all()
+        visible_task_ids = {
+            int(task.id) for task in tasks if authz.can_view_task(db, current_user, task)
+        }
+
+    items = []
+    for row in rows:
+        item = NotificationOut.model_validate(row)
+        if row.task_id is not None and int(row.task_id) not in visible_task_ids:
+            item.content = ""
+        items.append(item)
+
+    data = NotificationListOut(unread=int(unread), items=items).model_dump()
     return ok(data)
 
 
@@ -134,7 +151,7 @@ async def _event_source(user_id: int) -> AsyncIterator[str]:
 async def stream_notifications(
     current_user: User = Depends(get_sse_current_user),
 ) -> StreamingResponse:
-    """SSE 长连接：``?token=<token>`` 鉴权，事件名 ``notify``，空闲时发送心跳。"""
+    """SSE 长连接：仅 Cookie 鉴权（``get_sse_current_user``），事件名 ``notify``，空闲时发送心跳。"""
     headers = {
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",

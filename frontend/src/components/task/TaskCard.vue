@@ -122,93 +122,124 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: 'apply', task: TaskItem): void
   (e: 'open', id: number): void
+  (e: 'manage', id: number): void
 }>()
 
-const blockReason = computed<string>(() => applyBlockReason(props.task, props.currentUserId))
-const deadlineText = computed<string>(() => formatDeadline(props.task.deadline))
-const quotaProgress = computed<string>(() => quotaText(props.task))
-const applicationMeta = computed(() => applicationStatusMeta(props.task.my_application_status))
-const memberMeta = computed(() => memberStatusMeta(props.task.my_member_status))
-const rewardText = computed<string>(() => `+${props.task.credit_reward ?? 0} 积分`)
-const isSubTask = computed<boolean>(() => props.task.parent_id !== null)
+const SELF_PUBLISH_REASON = '自己发布的任务不可报名'
 
-/** 按钮文案随报名状态变化：报名 / 已报名 / 已通过 / 不可报名（实现要点 2） */
-const buttonText = computed<string>(() => {
-  const status = props.task.my_application_status
-  if (status === 'pending') return '已报名'
-  if (status === 'approved') return '已通过'
-  return blockReason.value ? '不可报名' : '报名'
+const isPublisher = computed<boolean>(
+  () => props.currentUserId !== null && props.task.publisher_id === props.currentUserId
+)
+const isPendingApplication = computed<boolean>(() => props.task.my_application_status === 'pending')
+const canUpdateProgress = computed<boolean>(
+  () =>
+    props.task.my_application_status === 'approved' &&
+    props.task.my_member_status !== 'verified'
+)
+
+const blockReason = computed<string>(() => applyBlockReason(props.task, props.currentUserId))
+
+/** 发布者卡片由「管理」主操作覆盖，不再重复整行警告 */
+const showBlockReason = computed<boolean>(
+  () => blockReason.value !== '' && blockReason.value !== SELF_PUBLISH_REASON
+)
+
+interface PrimaryAction {
+  text: string
+  disabled: boolean
+}
+
+/** 主操作唯一优先级：发布者 → 已通过成员 → 待审批 → 报名 */
+const primaryAction = computed<PrimaryAction>(() => {
+  if (isPublisher.value) return { text: '管理', disabled: false }
+  if (canUpdateProgress.value) return { text: '更新进度', disabled: false }
+  if (isPendingApplication.value) return { text: '已报名', disabled: true }
+  if (blockReason.value) return { text: '不可报名', disabled: true }
+  return { text: '报名', disabled: false }
+})
+
+function handlePrimary(): void {
+  if (primaryAction.value.disabled) return
+  if (isPublisher.value) {
+    emit('manage', props.task.id)
+    return
+  }
+  if (canUpdateProgress.value) {
+    emit('open', props.task.id)
+    return
+  }
+  emit('apply', props.task)
+}
+
+const deadlineText = computed<string>(() => formatDeadline(props.task.deadline))
+
+/** 临近截止：解析失败不标注，「3 天内」含已逾期 */
+const deadlineNear = computed<boolean>(() => {
+  if (!props.task.deadline) return false
+  const time = new Date(props.task.deadline.replace(' ', 'T')).getTime()
+  if (Number.isNaN(time)) return false
+  return time - Date.now() <= 3 * 86400000
+})
+
+const personalMeta = computed(() =>
+  props.task.my_member_status
+    ? memberStatusMeta(props.task.my_member_status)
+    : applicationStatusMeta(props.task.my_application_status)
+)
+const personalLabel = computed<string>(() => {
+  if (props.task.my_member_status) return `我：${personalMeta.value.text}`
+  if (props.task.my_application_status) return `报名：${personalMeta.value.text}`
+  return ''
+})
+
+/** 名额 / 地点 / 积分 / 发布者合并为一条次级信息 */
+const secondaryText = computed<string>(() => {
+  const parts: string[] = [quotaText(props.task)]
+  if (props.task.location) parts.push(props.task.location)
+  if (props.task.credit_reward !== null) parts.push(`+${props.task.credit_reward} 积分`)
+  parts.push(`发布者：${props.task.publisher_name || '—'}`)
+  return parts.join(' · ')
 })
 </script>
 
 <template>
   <el-card class="task-card" shadow="hover" body-class="task-card-body">
-    <div class="card-header">
+    <article class="task-card-content">
       <h3 class="card-title" :title="task.title">{{ task.title }}</h3>
-      <!-- 三层状态：任务状态 / 我的报名状态 / 我的执行状态 -->
+
+      <p class="card-deadline">
+        <span>截止 {{ deadlineText }}</span>
+        <span v-if="deadlineNear" class="deadline-near">临近</span>
+      </p>
+
+      <!-- 最多两个标签：任务状态 + 个人状态（执行状态优先于报名状态） -->
       <div class="status-line">
-        <StatusTag :status="task.status" :size="'small'" />
-        <el-tag
-          v-if="task.my_application_status"
-          :type="applicationMeta.type"
-          size="small"
-          effect="plain"
-        >
-          报名：{{ applicationMeta.text }}
+        <StatusTag :status="task.status" size="small" />
+        <el-tag v-if="personalLabel" :type="personalMeta.type" size="small" effect="plain">
+          {{ personalLabel }}
         </el-tag>
-        <el-tag v-if="task.my_member_status" :type="memberMeta.type" size="small" effect="dark">
-          我：{{ memberMeta.text }}
-        </el-tag>
-        <el-tag v-if="isSubTask" size="small" type="warning" effect="plain">子任务</el-tag>
       </div>
-    </div>
 
-    <p class="card-description">{{ task.description || '暂无任务描述' }}</p>
+      <p class="card-secondary">{{ secondaryText }}</p>
 
-    <dl class="card-meta">
-      <div class="meta-item">
-        <dt>名额</dt>
-        <dd>{{ quotaProgress }}</dd>
-      </div>
-      <div v-if="task.applied_count > 0" class="meta-item">
-        <dt>待审批</dt>
-        <dd>{{ task.applied_count }} 人</dd>
-      </div>
-      <div class="meta-item">
-        <dt>奖励</dt>
-        <dd class="meta-reward">{{ rewardText }}</dd>
-      </div>
-      <div class="meta-item">
-        <dt>截止</dt>
-        <dd>{{ deadlineText }}</dd>
-      </div>
-      <div v-if="task.location" class="meta-item">
-        <dt>地点</dt>
-        <dd>{{ task.location }}</dd>
-      </div>
-    </dl>
-
-    <p v-if="blockReason" class="apply-reason" role="status" aria-live="polite">
-      不可报名原因：{{ blockReason }}
-    </p>
-
-    <div class="card-footer">
-      <span class="publisher">发布者：{{ task.publisher_name || '—' }}</span>
-      <div class="actions">
+      <div class="card-actions">
         <el-button size="small" text type="primary" @click="emit('open', task.id)">
           查看详情
         </el-button>
         <el-button
           size="small"
           type="primary"
-          :disabled="Boolean(blockReason)"
+          :disabled="primaryAction.disabled"
           :loading="applying"
-          @click="emit('apply', task)"
+          @click="handlePrimary"
         >
-          {{ buttonText }}
+          {{ primaryAction.text }}
         </el-button>
       </div>
-    </div>
+
+      <!-- 阻断原因只在主操作下方以小字说明，不做整行警告条 -->
+      <p v-if="showBlockReason" class="apply-reason">{{ blockReason }}</p>
+    </article>
   </el-card>
 </template>
 
@@ -223,131 +254,85 @@ const buttonText = computed<string>(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  gap: 10px;
+  gap: 8px;
 }
 
-.card-header {
+.task-card-content {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
 .card-title {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--el-font-size-medium);
   font-weight: 600;
   line-height: 1.4;
   color: var(--app-text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-word;
+}
+
+.card-deadline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--app-font-body, 15px);
+  font-weight: 400;
+  color: var(--app-text);
+}
+
+.deadline-near {
+  font-size: var(--app-font-aux, 13px);
+  font-weight: 600;
+  color: var(--el-color-warning);
 }
 
 .status-line {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-}
-
-.card-description {
-  margin: 0;
-  font-size: 14px;
-  color: var(--app-text-secondary);
-  line-height: 1.6;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  min-height: 41px;
-  word-break: break-word;
-}
-
-.card-meta {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 6px 14px;
-  margin: 0;
-  font-size: 14px;
-}
-
-.meta-item {
-  display: flex;
-  align-items: baseline;
   gap: 6px;
-  min-width: 0;
 }
 
-.meta-item dt {
-  color: var(--app-text-muted);
-  flex-shrink: 0;
-}
-
-.meta-item dd {
+.card-secondary {
   margin: 0;
-  color: var(--app-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.meta-reward {
-  color: var(--el-color-primary);
-  font-weight: 600;
+  font-size: var(--app-font-aux, 13px);
+  line-height: 1.5;
+  color: var(--app-text-muted);
+  word-break: break-word;
 }
 
 .apply-reason {
   margin: 0;
-  padding: 6px 10px;
-  border-radius: var(--app-radius-sm);
-  font-size: 13px;
+  font-size: var(--app-font-aux, 13px);
   line-height: 1.5;
+  text-align: right;
   color: var(--el-color-warning);
-  background: var(--el-color-warning-light-9);
 }
 
-.card-footer {
+.card-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
   margin-top: auto;
   padding-top: 10px;
   border-top: 1px dashed var(--app-border);
 }
 
-.publisher {
-  font-size: 13px;
-  color: var(--app-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
 @media (max-width: 768px) {
-  .card-footer {
-    flex-direction: column;
-    align-items: stretch;
+  .card-actions {
     gap: 10px;
   }
 
-  .publisher {
-    white-space: normal;
-  }
-
-  .actions {
-    width: 100%;
-  }
-
-  .actions :deep(.el-button) {
+  .card-actions :deep(.el-button) {
     flex: 1 1 0;
     margin-left: 0;
   }

@@ -1,81 +1,82 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import ThemeToggle from '../components/common/ThemeToggle.vue'
 import { ApiError } from '../api/client'
+import ThemeToggle from '../components/common/ThemeToggle.vue'
+import { resolveSafeRedirect } from '../router'
 import { useUserStore } from '../stores/user'
 
 /**
- * 登录页（契约 C-AUTH@1 / C-FEAPI@1）。
+ * 登录页（契约 C-FE-AUTH@1）。
  *
- * 用户名登录：用户名以 teacher 开头为发布者、admin 开头为管理员、其余为学生（后端建号）。
- * 成功后跳转 `redirect` 参数指定页面，缺省 `/tasks`。
+ * 账号 + 密码登录，成功后跳转 `redirect` 指向的站内页面，缺省工作台。
+ * 登录失败统一提示，不区分「账号不存在」与「密码错误」。
  */
-const DEMO_ACCOUNTS = ['teacher01', 'student01', 'student02', 'student03']
+const LOGIN_FAILED_MESSAGE = '账号或密码错误，请重新输入'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 
 const username = ref('')
+const password = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
 
-function redirectTarget(): string {
-  const raw = route.query.redirect
+const notice = computed<string>(() => {
+  const raw = route.query.notice
   const value = Array.isArray(raw) ? raw[0] : raw
-  if (typeof value === 'string' && value.startsWith('/') && !value.startsWith('/login')) return value
-  return '/tasks'
-}
-
-async function goAfterLogin(): Promise<void> {
-  await router.replace(redirectTarget())
-}
+  return typeof value === 'string' ? value : ''
+})
 
 async function submit(): Promise<void> {
   const name = username.value.trim()
-  if (!name) {
-    errorMessage.value = '请输入用户名'
+  if (!name || !password.value) {
+    errorMessage.value = '请输入账号和密码'
     return
   }
 
   loading.value = true
   errorMessage.value = ''
   try {
-    await userStore.login(name)
-    await goAfterLogin()
+    await userStore.login({ username: name, password: password.value })
+    await router.replace(resolveSafeRedirect(route.query.redirect))
   } catch (error) {
-    errorMessage.value =
-      error instanceof ApiError ? error.message : '登录失败，请检查后端服务后重试'
+    if (error instanceof ApiError && error.code === 4010) {
+      errorMessage.value = LOGIN_FAILED_MESSAGE
+    } else if (error instanceof ApiError) {
+      errorMessage.value = error.message
+    } else {
+      errorMessage.value = '登录失败，请稍后重试'
+    }
   } finally {
     loading.value = false
   }
 }
-
-function loginAs(name: string): void {
-  username.value = name
-  void submit()
-}
-
-onMounted(() => {
-  // 已登录直接进入目标页（守卫也会兜底）
-  if (userStore.isLoggedIn) void goAfterLogin()
-})
 </script>
 
 <template>
-  <section class="login-page">
-    <div class="login-topbar">
+  <section class="auth-page">
+    <div class="auth-topbar">
       <ThemeToggle />
     </div>
 
-    <el-card class="login-card app-section-card" shadow="never">
-      <div class="login-header">
-        <div class="login-logo" aria-hidden="true">校</div>
-        <h1 class="login-title">校园任务协同</h1>
-        <p class="login-subtitle">用演示账号登录，体验 AI 发布与任务流转</p>
+    <el-card class="auth-card app-section-card" shadow="never">
+      <div class="auth-header">
+        <div class="auth-logo" aria-hidden="true">校</div>
+        <h1 class="auth-title">校园任务协同</h1>
+        <p class="auth-subtitle">使用账号与密码登录</p>
       </div>
+
+      <el-alert
+        v-if="notice"
+        :title="notice"
+        type="success"
+        show-icon
+        :closable="false"
+        class="auth-notice"
+      />
 
       <el-alert
         v-if="errorMessage"
@@ -84,18 +85,31 @@ onMounted(() => {
         show-icon
         :closable="false"
         role="alert"
-        class="login-error"
+        class="auth-error"
       />
 
-      <el-form class="login-form" label-position="top" @submit.prevent>
-        <el-form-item label="用户名">
+      <el-form class="auth-form" label-position="top" @submit.prevent>
+        <el-form-item label="账号">
           <el-input
             v-model="username"
-            placeholder="如 teacher01 / student01"
+            placeholder="请输入账号"
             size="large"
             clearable
-            maxlength="32"
+            maxlength="64"
             autocomplete="username"
+            :disabled="loading"
+            @keyup.enter="submit"
+          />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input
+            v-model="password"
+            type="password"
+            placeholder="请输入密码"
+            size="large"
+            show-password
+            maxlength="200"
+            autocomplete="current-password"
             :disabled="loading"
             @keyup.enter="submit"
           />
@@ -105,7 +119,7 @@ onMounted(() => {
       <el-button
         type="primary"
         size="large"
-        class="login-submit"
+        class="auth-submit"
         :loading="loading"
         :disabled="loading"
         @click="submit"
@@ -113,26 +127,13 @@ onMounted(() => {
         登录
       </el-button>
 
-      <div class="demo-accounts">
-        <span class="demo-label">演示账号</span>
-        <el-button
-          v-for="account in DEMO_ACCOUNTS"
-          :key="account"
-          size="small"
-          text
-          type="primary"
-          :disabled="loading"
-          @click="loginAs(account)"
-        >
-          {{ account }}
-        </el-button>
-      </div>
+      <p class="auth-footnote">没有账号？请联系组织管理员获取邀请链接后注册。</p>
     </el-card>
   </section>
 </template>
 
 <style scoped>
-.login-page {
+.auth-page {
   position: relative;
   display: flex;
   align-items: center;
@@ -155,7 +156,7 @@ onMounted(() => {
     );
 }
 
-.login-topbar {
+.auth-topbar {
   position: absolute;
   top: 16px;
   right: 16px;
@@ -164,22 +165,22 @@ onMounted(() => {
   gap: 8px;
 }
 
-.login-card {
+.auth-card {
   width: 100%;
   max-width: 420px;
   box-sizing: border-box;
 }
 
-.login-card :deep(.el-card__body) {
+.auth-card :deep(.el-card__body) {
   padding: 28px 24px 24px;
 }
 
-.login-header {
+.auth-header {
   margin-bottom: 20px;
   text-align: center;
 }
 
-.login-logo {
+.auth-logo {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -194,7 +195,7 @@ onMounted(() => {
   line-height: 1;
 }
 
-.login-title {
+.auth-title {
   margin: 0 0 6px;
   font-size: 24px;
   font-weight: 600;
@@ -202,72 +203,58 @@ onMounted(() => {
   color: var(--app-text);
 }
 
-.login-subtitle {
+.auth-subtitle {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--app-font-aux-lg);
   line-height: 1.6;
   color: var(--app-text-secondary);
 }
 
-.login-error {
+.auth-notice,
+.auth-error {
   margin-bottom: 16px;
 }
 
-.login-form :deep(.el-form-item__label) {
+.auth-form :deep(.el-form-item__label) {
   color: var(--app-text-secondary);
 }
 
-.login-submit {
+.auth-submit {
   width: 100%;
   min-height: var(--app-touch);
   margin-top: 4px;
 }
 
-.demo-accounts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-.demo-accounts :deep(.el-button + .el-button) {
-  margin-left: 0;
-}
-
-.demo-label {
-  margin-right: 4px;
-  font-size: 13px;
+.auth-footnote {
+  margin: 16px 0 0;
+  font-size: var(--app-font-aux);
+  line-height: 1.6;
   color: var(--app-text-muted);
+  text-align: center;
 }
 
 @media (max-width: 768px) {
-  .login-page {
+  .auth-page {
     align-items: flex-start;
     padding: 64px 16px calc(24px + var(--app-safe-bottom));
   }
 
-  .login-card :deep(.el-card__body) {
+  .auth-card :deep(.el-card__body) {
     padding: 24px 18px 20px;
-  }
-
-  .demo-accounts :deep(.el-button) {
-    flex: 1 1 auto;
-    justify-content: center;
   }
 }
 
 @media (max-width: 430px) {
-  .login-topbar {
+  .auth-topbar {
     top: 12px;
     right: 12px;
   }
 
-  .login-card {
+  .auth-card {
     max-width: none;
   }
 
-  .login-title {
+  .auth-title {
     font-size: 22px;
   }
 }

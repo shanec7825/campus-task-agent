@@ -34,9 +34,29 @@ import sqlite3
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 BASE_URL = os.getenv("T10_BASE_URL", "http://127.0.0.1:8021").rstrip("/")
 DB_PATH = (os.getenv("T10_DB_PATH") or "").strip()
+BACKEND_DIR = (
+    os.getenv("T10_BACKEND_DIR") or str(Path(__file__).resolve().parents[2] / "backend")
+).strip()
+
+#: 阶段 2 测试账号统一密码；临时库由本脚本直写 ``scrypt`` 哈希（`C-HASH@1`）。
+PASSWORD = "TestPass123!"
+
+#: 临时库没有阶段 1 的演示账号，启动时按原有展示名 / 角色准备可登录账号。
+SEED_USERS: dict[str, tuple[str, str]] = {
+    "teacher01": ("王老师", "publisher"),
+    "student01": ("李同学", "student"),
+    "student02": ("张同学", "student"),
+    "student03": ("陈同学", "student"),
+}
+
+#: 阶段 2 的组织可见性：无组织任务仅对发布者/负责人可见，脚本任务统一归入演示组织。
+DEMO_ORG_NAME = "演示校区志愿队"
+DEMO_ORG_SLUG = "demo-campus"
+DEFAULT_ORG_ID: int | None = None
 
 TITLE_QUOTA8 = "T8 R16-AC2 八名额多人报名任务"
 TITLE_QUOTA2 = "T8 R16-AC3 满额拦截任务"
@@ -70,36 +90,136 @@ def expect(condition: bool, message: str) -> bool:
 # --------------------------------------------------------------------------- #
 # HTTP 工具（仅标准库；中文 body 用 urllib + UTF-8，避免 curl 编码问题）
 # --------------------------------------------------------------------------- #
+def ensure_seed_users() -> int:
+    """直写临时库准备可登录账号与演示组织，返回组织 ID。
+
+    阶段 2 登录改为账号密码，且 ``org_id IS NULL`` 的任务只对发布者/负责人可见；
+    因此脚本账号必须同属一个组织，任务才能被成员看到并报名。
+    """
+    expect(bool(DB_PATH) and os.path.exists(DB_PATH), f"被测数据库存在：{DB_PATH}")
+    if BACKEND_DIR not in sys.path:
+        sys.path.insert(0, BACKEND_DIR)
+    try:
+        from app.security import hash_password  # noqa: PLC0415 - 依赖后端工程路径
+    except Exception as exc:  # noqa: BLE001 - 依赖缺失时给出可执行原因
+        print(f"FAIL: 无法导入 app.security（{type(exc).__name__}: {exc}）；BACKEND_DIR={BACKEND_DIR}")
+        raise SystemExit(1)
+
+    password_hash = hash_password(PASSWORD)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        for username, (display_name, role) in SEED_USERS.items():
+            row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO users "
+                    "(username, display_name, role, credits, password_hash, status, platform_admin) "
+                    "VALUES (?, ?, ?, 0, ?, 'active', 0)",
+                    (username, display_name, role, password_hash),
+                )
+            else:
+                conn.execute(
+                    "UPDATE users SET display_name = ?, role = ?, password_hash = ?, "
+                    "status = 'active' WHERE username = ?",
+                    (display_name, role, password_hash, username),
+                )
+
+        org_row = conn.execute(
+            "SELECT id FROM organizations WHERE slug = ?", (DEMO_ORG_SLUG,)
+        ).fetchone()
+        if org_row is None:
+            org_id = int(
+                conn.execute(
+                    "INSERT INTO organizations (name, slug, status, created_at) "
+                    "VALUES (?, ?, 'active', datetime('now','localtime'))",
+                    (DEMO_ORG_NAME, DEMO_ORG_SLUG),
+                ).lastrowid
+            )
+        else:
+            org_id = int(org_row[0])
+
+        for username in SEED_USERS:
+            user_row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+            role = "admin" if username == "teacher01" else "member"
+            existing = conn.execute(
+                "SELECT id FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, int(user_row[0])),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO org_members (org_id, user_id, role, title, status, created_at) "
+                    "VALUES (?, ?, ?, NULL, 'active', datetime('now','localtime'))",
+                    (org_id, int(user_row[0]), role),
+                )
+            else:
+                conn.execute(
+                    "UPDATE org_members SET role = ?, status = 'active' WHERE id = ?",
+                    (role, int(existing[0])),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"INFO: 已准备测试账号 {sorted(SEED_USERS)}（密码 {PASSWORD}）与组织 {DEMO_ORG_SLUG}(id={org_id})")
+    return org_id
+
+
+def _session_headers(token: dict[str, str] | None, method: str) -> dict[str, str]:
+    """Cookie 会话 + CSRF 双提交头（GET/HEAD/OPTIONS 不需要 CSRF）。"""
+    if not token:
+        return {}
+    headers = {"Cookie": f"cta_session={token['session']}; cta_csrf={token['csrf']}"}
+    if method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+        headers["X-CSRF-Token"] = token["csrf"]
+    return headers
+
+
+def _cookies_from_response(headers) -> dict[str, str]:
+    jar: dict[str, str] = {}
+    for raw in headers.get_all("Set-Cookie") or []:
+        name, _, value = raw.split(";", 1)[0].partition("=")
+        jar[name.strip()] = value.strip()
+    return jar
+
+
 def http_json(
     method: str,
     path: str,
     body: object | None = None,
-    token: str | None = None,
+    token: dict[str, str] | None = None,
     timeout: float = 20.0,
-) -> tuple[int, dict]:
+) -> tuple[int, dict, object]:
+    # 阶段 2 可见性：新任务统一归属演示组织，成员才能在列表/详情中看到并报名。
+    if (
+        DEFAULT_ORG_ID is not None
+        and method.upper() == "POST"
+        and path == "/api/tasks"
+        and isinstance(body, dict)
+        and "org_id" not in body
+    ):
+        body = {**body, "org_id": DEFAULT_ORG_ID}
     payload = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
     request = urllib.request.Request(BASE_URL + path, data=payload, method=method)
     if payload is not None:
         request.add_header("Content-Type", "application/json; charset=utf-8")
-    if token:
-        request.add_header("Authorization", f"Bearer {token}")
+    for name, value in _session_headers(token, method).items():
+        request.add_header(name, value)
 
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
+            return response.status, json.loads(response.read().decode("utf-8")), response.headers
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         try:
-            return exc.code, json.loads(raw)
+            return exc.code, json.loads(raw), exc.headers
         except json.JSONDecodeError:
-            return exc.code, {"code": None, "msg": raw[:200], "data": None}
+            return exc.code, {"code": None, "msg": raw[:200], "data": None}, exc.headers
     except urllib.error.URLError as exc:
         print(f"FAIL: 无法连接后端 {BASE_URL}（{exc}）；请先执行 bash tests/backend/run_all.sh")
         raise SystemExit(1)
 
 
-def api_ok(method: str, path: str, body: object | None = None, token: str | None = None, label: str = "") -> dict:
-    status, payload = http_json(method, path, body, token)
+def api_ok(method: str, path: str, body: object | None = None, token: dict[str, str] | None = None, label: str = "") -> dict:
+    status, payload, _ = http_json(method, path, body, token)
     code = payload.get("code")
     expect(
         status == 200 and code == 0,
@@ -115,15 +235,25 @@ def api_err(
     path: str,
     code: int,
     body: object | None = None,
-    token: str | None = None,
-    expected_status: int = 200,
+    token: dict[str, str] | None = None,
+    expected_status: int | None = None,
     label: str = "",
 ) -> dict:
-    status, payload = http_json(method, path, body, token)
+    status, payload, _ = http_json(method, path, body, token)
     expect(
         payload.get("code") == code,
         f"{label}：期望 code={code}，实际 HTTP {status} + code={payload.get('code')}（msg={payload.get('msg')}）",
     )
+    # 阶段 2 迁移期口径：认证失败固定 401；越权由 C-AUTHZ 返回 403，
+    # 旧业务校验（如报名列表仅发布者）仍为 200 —— 两者都接受，但 code 必须一致。
+    if expected_status is None:
+        if code == 4010:
+            expected_status = 401
+        elif code in (4030, 4040):
+            expect(status in (200, 403, 404), f"{label}：越权/不存在响应应为 HTTP 200/403/404，实际 HTTP {status}")
+            return payload
+        else:
+            expected_status = 200
     expect(status == expected_status, f"{label}：期望 HTTP {expected_status}，实际 HTTP {status}")
     return payload
 
@@ -131,13 +261,24 @@ def api_err(
 # --------------------------------------------------------------------------- #
 # 业务辅助
 # --------------------------------------------------------------------------- #
-def login(username: str) -> tuple[str, dict]:
-    data = api_ok("POST", "/api/auth/login", {"username": username}, label=f"登录 {username}")
-    token = data.get("token")
-    expect(isinstance(token, str) and bool(token), f"{username} 返回非空 token")
+def login(username: str) -> tuple[dict[str, str], dict]:
+    """账号密码登录，返回 ``(Cookie/CSRF 凭据, user)``；不再使用 Bearer token。"""
+    status, payload, headers = http_json(
+        "POST", "/api/auth/login", {"username": username, "password": PASSWORD}
+    )
+    expect(
+        status == 200 and payload.get("code") == 0,
+        f"登录 {username}：期望 HTTP 200 + code=0，实际 HTTP {status} + code={payload.get('code')}（msg={payload.get('msg')}）",
+    )
+    data = payload.get("data") or {}
+    cookies = _cookies_from_response(headers)
+    expect(
+        "cta_session" in cookies and "cta_csrf" in cookies,
+        f"{username} 登录下发 cta_session/cta_csrf（实际 {sorted(cookies)}）",
+    )
     user = data.get("user")
     expect(isinstance(user, dict), f"{username} 返回 user 对象")
-    return token, user
+    return {"session": cookies["cta_session"], "csrf": cookies["cta_csrf"]}, user
 
 
 def create_task(token: str, body: dict, label: str) -> dict:
@@ -369,7 +510,12 @@ def case_apply_errors(teacher: str, s1: str) -> None:
     # 状态不允许：cancelled 任务
     cancelled = create_task(teacher, {"title": TITLE_CANCELLED}, "发布待取消任务")
     api_ok("PATCH", f"/api/tasks/{cancelled['id']}", {"status": "cancelled"}, token=teacher, label="取消任务")
-    api_err("POST", f"/api/tasks/{cancelled['id']}/apply", 4090, token=s1, label="cancelled 任务报名 4090")
+    # 状态不允许：cancelled 任务。阶段 2 的 member 对 cancelled 任务不可见（C-AUTHZ@1），
+    # 报名先被可见性拦为 4040（不泄露存在性），不再走到 4090。
+    api_err(
+        "POST", f"/api/tasks/{cancelled['id']}/apply", 4040, token=s1,
+        label="cancelled 任务报名 4040（不可见）",
+    )
 
     # 前置依赖未完成：4020 且消息含前置标题
     parent = create_task(teacher, {"title": TITLE_DEP_PARENT}, "发布依赖父任务")
@@ -557,6 +703,8 @@ def case_claim_alias(teacher: str, s1: str) -> None:
 # 主流程
 # --------------------------------------------------------------------------- #
 def main() -> int:
+    global DEFAULT_ORG_ID
+    DEFAULT_ORG_ID = ensure_seed_users()
     teacher_token, teacher = login("teacher01")
     expect(teacher.get("role") == "publisher", f"teacher01 角色 publisher（实际 {teacher.get('role')}）")
     s1, s1_user = login("student01")

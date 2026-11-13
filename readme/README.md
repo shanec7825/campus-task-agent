@@ -44,7 +44,7 @@ readme\install.bat
 | 2 | 创建 `backend/.venv`，已存在则保留 | **不删除**已有环境 |
 | 3 | `pip install -r backend/requirements.txt` | 可重跑 |
 | 4 | `npm install`（在 `frontend/`），已存在 `node_modules` 则跳过 | **不删除**已有依赖 |
-| 5 | 在 `backend/` 下调用 `app.db.init_db()` 建 8 张表 | 建表幂等 |
+| 5 | 在 `backend/` 下调用 `app.db.init_db()` 建 11 张表（含 `task_applications` / `task_members` / `activities`），并执行幂等增量迁移 | 建表与迁移幂等 |
 | 6 | 打印 `.env` 提示与启动命令 | — |
 
 > 脚本**不会**自动创建 `backend/.env`（避免真实 Key 被误提交），请按第 6 节手动创建或直接以 mock 模式运行。
@@ -81,11 +81,11 @@ npm run dev
 | `/api` 代理 | 前端所有 `/api` 请求（含 SSE）由 Vite 代理到 `http://127.0.0.1:8000`，无需额外配置 CORS |
 | 接口文档 | `http://127.0.0.1:8000/docs`（FastAPI 自带） |
 
-健康检查返回示例（`tables` 为 8 张表，`mock` 表示是否离线模式）：
+健康检查返回示例（`tables` 为 11 张表，`mock` 表示是否离线模式）：
 
 ```bash
 curl -s http://127.0.0.1:8000/api/health
-# {"code":0,"msg":"ok","data":{"status":"ok","tables":["checkins","credit_logs","kb_entries","notifications","parse_sessions","progress_logs","tasks","users"],"mock":true}}
+# {"code":0,"msg":"ok","data":{"status":"ok","tables":["activities","checkins","credit_logs","kb_entries","notifications","parse_sessions","progress_logs","task_applications","task_members","tasks","users"],"mock":true}}
 ```
 
 ### 生产构建（可选）
@@ -163,6 +163,37 @@ npm run preview       # 本地预览构建产物
 | **语音续接不重复** | Edge 连续说话时静默触发 `onend` 会自动续接识别；续接时**保留本地去重链**（`dedupTail` 只在**新建会话**时清空），并对续接后重新吐出的重叠前缀做**重叠裁剪**（`trimRestartOverlap`）⇒ 同一句**不会**重复进入草稿，也不会带出上一句的前导逗号 |
 
 > 说明：本轮对第三轮的块编辑口径做了**反转**——第三轮 B5 是「修好并保留块内编辑」，第四轮用户明确「能编辑但不想要这个入口」，故入口整体移除，改字统一走右侧字段面板 + 增量解析。
+
+### 5.4 第一阶段可靠性改进
+
+| 改动 | 说明 |
+|---|---|
+| **开始时间与截止时间分离** | `tasks.start_time` 与 `tasks.deadline` 是两个独立字段。AI 草稿的 `Draft.deadline`、字段面板、草稿本地恢复、`toTaskPayload()` 发布请求与任务详情分别承载，互不复制；只给开始时间时 `deadline=null`，只给截止时间时 `start_time=null`。自然语言截止时间若无法解析为合法时间，调度器跳过截止相关提醒与扣分并记录日志 |
+| **逐人执行与验收** | 新增 `task_members` 表，每名 approved 成员独立记录 `not_started / in_progress / submitted / rejected / verified`、`submitted_at`、`verified_at`、`rejection_reason`。提交/退回/验收只改目标成员；发布者可按成员验收或退回，退回者修改后可重新提交。任务整体状态由成员状态聚合：全部 `verified` 才整体完成；任一成员 `submitted` 时任务为 `submitted`，但不代表其他成员已完成；任一成员 `rejected` 时任务回到 `in_progress` |
+| **逐人催办与逾期扣分** | 催办按每名 approved 成员状态判断：`submitted/verified` 不催办、不扣分；`not_started/in_progress/rejected` 按截止时间触发 warning/urgent/overdue。逾期扣分按 `(task_id, user_id)` 只写一次；去重键包含截止时间版本，改期后按新时间重新提醒，历史通知与积分流水保留 |
+| **逾期可恢复** | `overdue` 不再是只能取消的终态：未完成成员仍可补交，发布者可验收或退回，也可修改截止时间；合法未来截止时间可把 `overdue` 恢复为 `claimed/in_progress/submitted`。发布者取消仍保留；取消后成员不能继续提交/验收 |
+| **兼容与迁移** | `init_db()` 只增列/索引/补行：为 legacy 单负责人任务补 approved 报名与 `task_members` 行，状态按任务状态映射一次，`submitted_at/verified_at` 留 `NULL`；`notifications.dedupe_key` 与 `uq_task_members_task_user` 幂等创建。迁移不删库、不重建、不伪造个人提交/验收时间，重复执行不产生重复行 |
+
+> 配置说明：本轮不新增环境变量或积分配置开关；催办仍由 `RUN_SCHEDULER` / `REMINDER_INTERVAL_SECONDS` 控制，默认奖励与逾期扣分额度沿用原值，不新增开关。
+>
+> 验证入口：`PYTHONPATH=backend python -m pytest tests/backend/test_reliability.py -q`（11 passed）；既有后端脚本见根 `README.md` 第八节。真实历史库迁移演练与真实浏览器页面走查不在本轮自动化范围内。
+
+### 5.5 全站 UI 与移动端体验（阶段 14）
+
+| 改动 | 说明 |
+|---|---|
+| **Light / Dark 双主题** | 由 `frontend/src/styles/theme.css` 统一提供 `--app-*` 设计令牌与 Element Plus `--el-*` 覆盖；导航、卡片、表格、表单、按钮以及弹窗、日期选择器、下拉、tooltip、popover 等传送层浮层均随主题切换。无手动选择时按 `prefers-color-scheme` 决定，手动选择后写入 `localStorage['cta_theme']` 并在刷新后保持；首屏由 `index.html` 内联脚本提前应用，避免明显闪白；切换只变更 `html.dark` 与 `data-theme`，不重挂路由、不清空草稿与输入 |
+| **桌面 / 手机导航** | 桌面保留顶部横向导航；≤768px 改为顶部紧凑栏（品牌、主题、通知、退出）＋底部 4 项导航（任务大厅 / 发布任务 / 个人中心 / 发布者后台，后台仅发布者可见）。当前页有 `aria-current="page"`，通知锚点 `/profile#notifications` 会按固定头部高度偏移滚动 |
+| **任务大厅与发布页** | 任务网格使用 `minmax(min(100%,300px),1fr)`，320px 无横向溢出；筛选触屏友好并常显当前筛选；卡片分别展示任务状态、我的报名状态、我的执行状态，不可报名原因直接可见。发布页 ≥961px 双栏、≤960px 单栏，手机发布栏吸底显示在底部导航之上且不遮住最后控件 |
+| **宽表转移动卡片** | 个人中心积分/签到、任务详情成员状态、发布者后台任务表均同时渲染桌面表格（`.app-desktop-table`）与移动卡片（`.app-mobile-list`），可见性由 `theme.css` 的 768px 媒体查询唯一控制；移动卡片保留关键字段与全部操作（审核报名、拒绝原因、指派、改截止、催办、验收、取消） |
+| **触控与安全区** | 移动端主要按钮与图标热区 44×44；输入/文本域 16px 避免 iOS 聚焦放大；底部导航与页面留白计入 `env(safe-area-inset-bottom)`；弹窗宽 `calc(100vw - 24px)`、最大高 `90dvh`、内容可滚且底部操作常显；日期面板与下拉在视口内限宽滚动 |
+| **中文化与可读性** | 全站以 `el-config-provider :locale="zhCn"` 使用简体中文；字段/追溯色统一由颜色池输出 CSS 变量（`var(--c-*)`），同一字段在两个主题下同色相，深色下使用提亮变体 |
+
+> 配置说明：本轮**不新增环境变量或业务开关**。主题偏好仅存于浏览器 `localStorage['cta_theme']`（`light` / `dark`），无记录时跟随系统；任务详情在报名被拒时读取既有 `GET /api/applications/me` 展示拒绝原因，不改变报名/审批规则。
+>
+> 忽略规则：根 `.gitignore` 新增 `/outputs/`、`/.playwright-mcp/`、`/work/`，只排除版本控制，不删除本地文件；其中无已跟踪文件。
+>
+> 验证入口与实际结果：`PYTHON_BIN=python bash tests/frontend/run_all.sh` → `EXIT=0`，构建门禁 **4 passed / 0 failed**、静态契约 **25 passed / 0 failed**、语音切片 **21 PASS / 0 FAIL**。浏览器走查（8000 同源 dist）实测 `/tasks` 320=305/320、390=375/390、1440=1425/1440，390 `/admin` 桌面表 `display:none`、移动卡 `display:block`；四组截图与 `walkthrough.md` 位于 `outputs/ui-redesign/`（本地忽略）。真机软键盘、横竖屏、安全区与真实麦克风权限未验证。
 
 ---
 
@@ -279,7 +310,13 @@ A：这是**纯浏览器形态的 Web API 边界，不是本项目 bug**：iOS S
 |---|---|---|
 | `backend/scripts/smoke_core.sh` | 后端核心 REST 全流程回归（登录 → 发布 → 认领 → 进度 → 提交 → 验收 → 积分 → 签到 → 通知） | 先启动后端，再 `bash backend/scripts/smoke_core.sh`（默认 `BASE_URL=http://127.0.0.1:8002`，可用环境变量覆盖） |
 | `backend/scripts/smoke_sse.sh` | SSE 连接注册表与分级催办调度自检 | `bash backend/scripts/smoke_sse.sh`（使用临时 `DATABASE_PATH`，结束自动清理） |
+| `bash tests/frontend/run_all.sh` | 前端完整门禁：类型检查、生产构建、静态契约检查（25 项）与语音切片算法（21 断言），产出 `frontend/dist` | 项目根执行；本机 git-bash 若 `python3` 不可用，显式设置 `PYTHON_BIN=python` |
+| `bash tests/security/test_security_redline.sh` | 公开源安全红线：凭证字面量、交付物与构建产物检查（A2b 要求 `frontend/dist` 存在） | 需先完成前端构建；CI 在同一前端作业构建后执行 |
 | `frontend` 脚本 | 类型检查与构建 | `cd frontend && npm run typecheck && npm run build` |
+
+前端与安全门禁也可一键执行：`bash tests/frontend/run_all.sh` 完成类型检查、生产构建、静态契约与语音切片算法检查并产出 `frontend/dist`；
+随后执行 `bash tests/security/test_security_redline.sh`，产物安全扫描（A2b）因此能检查真实 dist。
+CI 已把这两步放在同一个前端作业内按上述顺序执行，不再依赖单独的安全作业自行构建。
 
 ---
 
@@ -291,7 +328,7 @@ A：这是**纯浏览器形态的 Web API 边界，不是本项目 bug**：iOS S
 │   ├── app/
 │   │   ├── main.py          应用入口（lifespan / CORS / 路由挂载）
 │   │   ├── db.py            引擎、会话、init_db()
-│   │   ├── models.py        8 张表的 SQLAlchemy 模型
+│   │   ├── models.py        11 张表的 SQLAlchemy 模型
 │   │   ├── schemas.py       Pydantic 模型
 │   │   ├── deps.py          get_current_user 鉴权依赖
 │   │   ├── errors.py        ApiError 与统一响应 ok()
@@ -307,10 +344,10 @@ A：这是**纯浏览器形态的 Web API 边界，不是本项目 bug**：iOS S
 │   │   ├── api/             接口封装（统一 fetch）
 │   │   ├── stores/          Pinia（user / draft / notifications）
 │   │   ├── views/           登录 / 发布 / 大厅 / 详情 / 个人中心 / 后台
-│   │   ├── components/      VoiceComposer 语音块化组件
-│   │   ├── composables/     useVoiceComposer / useSSE
+│   │   ├── components/      VoiceComposer 语音块化组件 + common/ThemeToggle.vue
+│   │   ├── composables/     useVoiceComposer / useSSE / useTheme
 │   │   ├── router/          路由表
-│   │   ├── styles/          color-pool.css 字段颜色池
+│   │   ├── styles/          color-pool.css 字段颜色池 + theme.css 双主题令牌
 │   │   └── utils/colorPool.ts
 │   ├── vite.config.ts       端口 5173 + /api 代理到 8000
 │   └── package.json

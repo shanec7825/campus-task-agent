@@ -29,12 +29,59 @@ export interface User {
   role: string
   org: string | null
   credits: number
+  /** 平台管理员：可建组织/发重置，但不自动获得任何组织业务内容可见性 */
+  platform_admin: boolean
 }
 
 /** 登录返回（`LoginOut`） */
 export interface LoginResult {
   token: string
   user: User
+}
+
+// --------------------------------------------------------------------------- //
+// 组织与认证（`C-DATA-AUTH@1` / `C-ORG@1` / `C-FE-AUTH@1`）
+// --------------------------------------------------------------------------- //
+
+/** 组织角色（`org_members.role`） */
+export type OrgRole = 'admin' | 'collaborator' | 'member'
+
+/** 当前用户的组织成员关系（`OrgMembershipOut`） */
+export interface OrgMembership {
+  org_id: number
+  name: string
+  slug: string
+  role: OrgRole
+  title: string | null
+  status: string
+}
+
+/** 当前用户（`GET /api/auth/me` → `MeOut`） */
+export interface MeOut {
+  user: User
+  orgs: OrgMembership[]
+}
+
+/** 登录 / 注册返回（`LoginOut`），会话由 Cookie 承载 */
+export interface LoginOut {
+  user: User
+  orgs: OrgMembership[]
+}
+
+/** 注册请求体（`RegisterIn`，必须携带邀请令牌） */
+export interface RegisterIn {
+  username: string
+  display_name: string
+  password: string
+  confirm_password: string
+  invite_token: string
+}
+
+/** 受控密码重置请求体（`PasswordResetIn`） */
+export interface PasswordResetIn {
+  token: string
+  password: string
+  confirm_password: string
 }
 
 /** 任务主任务 / 子任务摘要（`TaskBrief`） */
@@ -46,6 +93,8 @@ export interface TaskBrief {
   depends_on: number | null
   quota: number | null
   parent_id: number | null
+  /** 所属活动 id；`null` 表示独立任务 */
+  activity_id: number | null
 }
 
 /** 进度记录（`ProgressOut`） */
@@ -62,6 +111,8 @@ export interface ProgressItem {
 export interface TaskItem {
   id: number
   parent_id: number | null
+  /** 所属活动 id；`null` 表示独立任务 */
+  activity_id: number | null
   title: string
   description: string | null
   location: string | null
@@ -113,6 +164,80 @@ export interface TaskMember {
 export interface TaskDetail extends TaskItem {
   children: TaskBrief[]
   progress: ProgressItem[]
+  /** 所属活动标题；无活动为 `null`（契约 `C-TASK-FIELDS@1`） */
+  activity_title: string | null
+  /** 父任务标题；无父任务为 `null` */
+  parent_title: string | null
+}
+
+// --------------------------------------------------------------------------- //
+// 活动（`C-DATA-ACTIVITY@1` / `C-FE-API@1`）
+// --------------------------------------------------------------------------- //
+
+/** 活动进度聚合（服务端唯一计算来源，前端不自行重算） */
+export interface ActivityProgress {
+  total_tasks: number
+  completed_tasks: number
+  cancelled_tasks: number
+  subtask_total: number
+  subtask_completed: number
+  percent: number
+  awaiting_owner_confirm: boolean
+}
+
+/** 活动任务树中的子任务节点 */
+export interface ActivitySubtaskNode {
+  id: number
+  title: string
+  status: string
+  deadline: string | null
+  assignee_names: string[]
+}
+
+/** 活动任务树中的第一层任务节点 */
+export interface ActivityTaskNode {
+  id: number
+  title: string
+  status: string
+  deadline: string | null
+  assignee_names: string[]
+  children: ActivitySubtaskNode[]
+}
+
+/** 活动（`ActivityOut`） */
+export interface Activity {
+  id: number
+  title: string
+  description: string | null
+  location: string | null
+  start_time: string | null
+  deadline: string | null
+  owner_id: number
+  owner_name: string
+  org: string | null
+  status: string
+  created_at: string
+  progress: ActivityProgress
+}
+
+/** 活动详情（`ActivityDetailOut`） */
+export interface ActivityDetail extends Activity {
+  tasks: ActivityTaskNode[]
+}
+
+/** 活动列表（`GET /api/activities`） */
+export interface ActivityListResult {
+  items: Activity[]
+}
+
+/** 创建活动的请求体（`ActivityCreate`） */
+export interface ActivityCreatePayload {
+  title: string
+  description?: string | null
+  location?: string | null
+  start_time?: string | null
+  deadline?: string | null
+  org?: string | null
 }
 
 // --------------------------------------------------------------------------- //

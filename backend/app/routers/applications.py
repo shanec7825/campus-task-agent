@@ -30,7 +30,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_csrf
 from app.errors import ApiError, ok
 from app.models import Task, TaskApplication, User
 from app.routers import tasks as tasks_router
@@ -48,11 +48,13 @@ from app.schemas import (
     DecisionIn,
     TaskBrief,
 )
-from app.services import application_service, member_service, notify_service
+from app.services import application_service, authz, member_service, notify_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["applications"])
+router = APIRouter(
+    prefix="/api", tags=["applications"], dependencies=[Depends(require_csrf)]
+)
 
 #: 允许报名的任务状态（`C-APPLY@1` A1 第 3 条）
 APPLY_ALLOWED_STATUSES: frozenset[str] = frozenset({"published", "claimed"})
@@ -350,6 +352,7 @@ def apply_task(
 ) -> dict[str, Any]:
     """报名参加任务（多名额模型）：写入 ``pending`` 报名，等待发布者审批。"""
     task = tasks_router._get_task_or_404(db, task_id)
+    authz.require_task_view(db, current_user, task)
     return ok(create_application(db, task, current_user))
 
 
@@ -364,6 +367,7 @@ def withdraw_application(
 ) -> dict[str, Any]:
     """撤回报名：仅本人的 ``pending`` 记录可撤回（置 ``cancelled``）。"""
     task = tasks_router._get_task_or_404(db, task_id)
+    authz.require_task_view(db, current_user, task)
     row = _find_application(db, int(task.id), int(current_user.id))
     if row is None:
         raise ApiError(ERR_NOT_FOUND, "报名记录不存在")
@@ -407,6 +411,7 @@ def list_task_applications(
 ) -> dict[str, Any]:
     """查看某任务的全部报名（仅发布者；含 cancelled / rejected，前端自行过滤）。"""
     task = tasks_router._get_task_or_404(db, task_id)
+    authz.require_task_view(db, current_user, task)
     if int(task.publisher_id) != int(current_user.id):
         raise ApiError(ERR_FORBIDDEN, "只有发布者可以查看报名")
 
@@ -473,8 +478,8 @@ def decide_application(
     task = db.get(Task, int(row.task_id))
     if task is None:
         raise ApiError(ERR_NOT_FOUND, "任务不存在")
-    if int(task.publisher_id) != int(current_user.id):
-        raise ApiError(ERR_FORBIDDEN, "只有发布者可以审批报名")
+    authz.require_task_view(db, current_user, task)
+    authz.require_task_manage(db, current_user, task)
     if str(row.status) != application_service.PENDING:
         raise ApiError(ERR_CONFLICT, "该报名已处理，请刷新后重试")
 

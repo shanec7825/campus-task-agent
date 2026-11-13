@@ -117,6 +117,38 @@ SELECT a.task_id, a.user_id,
    )
 """
 
+# 阶段 1 活动模型（契约 `C-MIGRATION-2@1`）：只加列与索引，旧任务保持 NULL（独立任务）。
+_ADD_TASKS_ACTIVITY_ID = "ALTER TABLE tasks ADD COLUMN activity_id INTEGER"
+
+_CREATE_TASKS_ACTIVITY_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_tasks_activity_id ON tasks(activity_id)"
+)
+
+# 阶段 2 认证与组织（契约 `C-MIGRATION-3@1`）：只加列 / 加索引 / 标记 legacy，不删列不删行。
+# ADD COLUMN 只在列缺失时执行；带 NOT NULL 的两列都用常量默认值，旧行可直接读。
+_USERS_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("password_hash", "ALTER TABLE users ADD COLUMN password_hash TEXT"),
+    ("password_updated_at", "ALTER TABLE users ADD COLUMN password_updated_at TEXT"),
+    ("status", "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"),
+    ("platform_admin", "ALTER TABLE users ADD COLUMN platform_admin INTEGER NOT NULL DEFAULT 0"),
+)
+
+# 旧演示账号没有密码 ⇒ legacy_unclaimed（不可登录、不可被同名注册继承）。
+# 只改当前仍为 active 的行，重复执行不再改动已注册（有 password_hash）的账号。
+_MARK_LEGACY_UNCLAIMED = (
+    "UPDATE users SET status = 'legacy_unclaimed' "
+    "WHERE password_hash IS NULL AND status = 'active'"
+)
+
+_ORG_INDEXES: tuple[tuple[str, str], ...] = (
+    ("tasks", "CREATE INDEX IF NOT EXISTS ix_tasks_org_id ON tasks(org_id)"),
+    ("activities", "CREATE INDEX IF NOT EXISTS ix_activities_org_id ON activities(org_id)"),
+    ("org_members", "CREATE INDEX IF NOT EXISTS ix_org_members_user_id ON org_members(user_id)"),
+    ("invitations", "CREATE INDEX IF NOT EXISTS ix_invitations_org_id ON invitations(org_id)"),
+    ("user_sessions", "CREATE INDEX IF NOT EXISTS ix_user_sessions_user_id ON user_sessions(user_id)"),
+    ("password_resets", "CREATE INDEX IF NOT EXISTS ix_password_resets_user_id ON password_resets(user_id)"),
+)
+
 
 def _migrate(conn) -> None:
     """幂等增量迁移（契约 `C-MIGRATION@1`）：只加列 / 加索引 / 补行，不删列不删行。"""
@@ -138,15 +170,39 @@ def _migrate(conn) -> None:
     ):
         conn.exec_driver_sql(_BACKFILL_MEMBERS)
 
+    if _table_exists(conn, "tasks") and "activity_id" not in _column_names(conn, "tasks"):
+        conn.exec_driver_sql(_ADD_TASKS_ACTIVITY_ID)
+    if _table_exists(conn, "tasks"):
+        conn.exec_driver_sql(_CREATE_TASKS_ACTIVITY_INDEX)
+
+    # ---- 阶段 2：认证与组织（`C-MIGRATION-3@1`）-------------------------
+    if _table_exists(conn, "users"):
+        existing = _column_names(conn, "users")
+        for column, statement in _USERS_ADDED_COLUMNS:
+            if column not in existing:
+                conn.exec_driver_sql(statement)
+        conn.exec_driver_sql(_MARK_LEGACY_UNCLAIMED)
+
+    if _table_exists(conn, "activities") and "org_id" not in _column_names(conn, "activities"):
+        conn.exec_driver_sql("ALTER TABLE activities ADD COLUMN org_id INTEGER")
+    if _table_exists(conn, "tasks") and "org_id" not in _column_names(conn, "tasks"):
+        conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN org_id INTEGER")
+
+    for table, statement in _ORG_INDEXES:
+        if _table_exists(conn, table):
+            conn.exec_driver_sql(statement)
+
 
 def init_db() -> None:
     """建表 + 幂等迁移（可重复调用）。调用前必须先 import app.models 以注册全部表。
 
-    ``Base.metadata.create_all`` 创建缺失的表（含 ``task_members``）；随后
-    ``_migrate`` 对 P1 已存在的旧库补齐 ``notifications.dedupe_key``、去重索引、
-    具名唯一索引 ``uq_task_members_task_user``、legacy ``approved`` 报名与逐人成员行。
-    全程不使用 DROP / 删列 / 删行，
-    因此对同一数据库重复执行不会产生重复数据。
+    ``Base.metadata.create_all`` 创建缺失的表（含 ``task_members``、``activities`` 与
+    阶段 2 的 ``organizations`` / ``org_members`` / ``invitations`` / ``user_sessions`` /
+    ``password_resets``）；随后 ``_migrate`` 对旧库补齐 ``notifications.dedupe_key``、
+    去重索引、具名唯一索引 ``uq_task_members_task_user``、legacy ``approved`` 报名与逐人
+    成员行、``tasks.activity_id``，以及阶段 2 的 ``users`` 认证列、``tasks`` /
+    ``activities`` 的 ``org_id`` 与组织相关索引，并把无密码旧账号标记为
+    ``legacy_unclaimed``。全程不使用 DROP / 删列 / 删行，重复执行不会产生重复数据。
     """
     from app import models  # noqa: F401  （注册 ORM 映射，避免循环导入）
 

@@ -1,22 +1,38 @@
 /**
- * 认证 API（契约 C-FEAPI@1 / C-AUTH@1）。
+ * 认证 API（契约 C-FE-AUTH@1 / C-AUTH-API@1）。
+ *
+ * 会话由服务端通过同源 Cookie 维护，本模块不读写任何会话令牌。
  */
-import { request, USER_KEY, setToken } from './client'
-import type { LoginResult, User } from '../types/models'
+import { request } from './client'
+import type { LoginOut, MeOut, PasswordResetIn, RegisterIn } from '../types/models'
 
-/** 登录（成功后内部写入 token 与本地用户缓存） */
-export async function login(username: string): Promise<LoginResult> {
-  const result = await request<LoginResult>('POST', '/api/auth/login', { username })
-  setToken(result.token)
-  try {
-    window.localStorage.setItem(USER_KEY, JSON.stringify(result.user))
-  } catch {
-    // 本地缓存失败不影响登录流程
-  }
-  return result
+/** 登录入参（`LoginIn`） */
+export interface LoginPayload {
+  username: string
+  password: string
 }
 
-/** 用当前 token 拉取用户信息（刷新页面后恢复会话） */
-export function fetchMe(): Promise<User> {
-  return request<User>('GET', '/api/auth/me')
+/** 登录：成功后服务端下发会话与 CSRF Cookie */
+export function login(payload: LoginPayload): Promise<LoginOut> {
+  return request<LoginOut>('POST', '/api/auth/login', payload)
+}
+
+/** 退出登录：撤销服务端会话（无会话时 `revoked` 为 false） */
+export function logout(): Promise<{ revoked: boolean }> {
+  return request<{ revoked: boolean }>('POST', '/api/auth/logout')
+}
+
+/** 当前用户与其组织成员关系（刷新后恢复会话） */
+export function fetchMe(): Promise<MeOut> {
+  return request<MeOut>('GET', '/api/auth/me')
+}
+
+/** 凭邀请注册：成功后自动建立会话 */
+export function register(payload: RegisterIn): Promise<LoginOut> {
+  return request<LoginOut>('POST', '/api/auth/register', payload)
+}
+
+/** 凭一次性重置凭据修改密码 */
+export function resetPassword(payload: PasswordResetIn): Promise<{ reset: boolean }> {
+  return request<{ reset: boolean }>('POST', '/api/auth/reset-password', payload)
 }

@@ -1,17 +1,17 @@
 /**
- * SSE 订阅（契约 C-STORE@1 / C-NOTIFY@1）。
+ * SSE 订阅（契约 C-SSE-AUTH@1 / C-STORE@1 / C-NOTIFY@1）。
  *
- * - 地址：`/api/notifications/stream?token=<token>`（EventSource 不能带 Authorization 头）；
+ * - 地址：`/api/notifications/stream`，鉴权只依赖同源会话 Cookie（`EventSource` 自动携带）；
  * - `event: notify` → 解析 JSON → `notificationsStore.pushIncoming` → 新通知才弹 `ElNotification`；
- * - `onerror` → 关闭连接，3 秒后重连（仅当仍有 token 且未主动 disconnect）；
- * - `disconnect()` → 关闭且不再重连；token 为空时 `connect()` 直接停止。
+ * - `onerror` → 关闭连接，3 秒后重连（仅当仍处于登录态且未主动 disconnect）；
+ * - `disconnect()` → 关闭且不再重连；未登录时 `connect()` 直接停止。
  */
 import { ref, type Ref } from 'vue'
 import { ElNotification } from 'element-plus'
 
-import { getToken } from '../api/client'
 import { streamUrl } from '../api/notifications'
 import { useNotificationsStore } from '../stores/notifications'
+import { useUserStore } from '../stores/user'
 import type { NotificationItem } from '../types/models'
 
 /** 断线重连间隔（毫秒） */
@@ -45,6 +45,7 @@ function notificationType(level: string): 'success' | 'info' | 'warning' | 'erro
 
 export function useSSE(): { connected: Ref<boolean>; connect(): void; disconnect(): void } {
   const store = useNotificationsStore()
+  const userStore = useUserStore()
   const connected = ref(false)
 
   let source: EventSource | null = null
@@ -90,10 +91,10 @@ export function useSSE(): { connected: Ref<boolean>; connect(): void; disconnect
 
   function scheduleReconnect(): void {
     if (manualClosed || reconnectTimer !== null) return
-    if (!getToken()) return
+    if (!userStore.isLoggedIn) return
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
-      if (!manualClosed && getToken()) connect()
+      if (!manualClosed && userStore.isLoggedIn) connect()
     }, RECONNECT_DELAY_MS)
   }
 
@@ -101,14 +102,13 @@ export function useSSE(): { connected: Ref<boolean>; connect(): void; disconnect
     setConnected(false)
     closeSource()
     if (manualClosed) return
-    // token 为空（登出 / 过期）时停止，不做无限重连
-    if (!getToken()) return
+    // 已登出 / 会话失效（401）时停止，不做无限重连
+    if (!userStore.isLoggedIn) return
     scheduleReconnect()
   }
 
   function connect(): void {
-    const token = getToken()
-    if (!token) {
+    if (!userStore.isLoggedIn) {
       manualClosed = true
       closeSource()
       setConnected(false)
@@ -124,7 +124,7 @@ export function useSSE(): { connected: Ref<boolean>; connect(): void; disconnect
     manualClosed = false
     closeSource()
     try {
-      const es = new EventSource(streamUrl(token))
+      const es = new EventSource(streamUrl())
       source = es
       es.onopen = () => setConnected(true)
       es.onerror = () => handleError()

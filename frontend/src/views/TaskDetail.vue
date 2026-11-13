@@ -219,7 +219,8 @@ const currentBrief = computed<TaskBrief | null>(() => {
     assignee_id: task.value.assignee_id,
     depends_on: task.value.depends_on,
     quota: task.value.quota,
-    parent_id: task.value.parent_id
+    parent_id: task.value.parent_id,
+    activity_id: task.value.activity_id
   }
 })
 
@@ -306,7 +307,8 @@ async function load(): Promise<void> {
           assignee_id: dependency.assignee_id,
           depends_on: dependency.depends_on,
           quota: dependency.quota,
-          parent_id: dependency.parent_id
+          parent_id: dependency.parent_id,
+          activity_id: dependency.activity_id
         }
       } catch {
         // 前置任务信息缺失时由 SubTaskTree 展示「信息缺失」，不影响主流程
@@ -489,7 +491,25 @@ watch(
 </script>
 
 <template>
-  <section class="app-page detail">
+  <section class="app-page detail" :aria-busy="loading ? 'true' : 'false'">
+    <!-- 位置导航：活动 → 父任务 → 当前任务（契约 C-SEMANTIC@1） -->
+    <nav v-if="task" class="position-nav" aria-label="位置">
+      <template v-if="task.activity_id !== null">
+        <a class="position-link" :href="`/activities/${task.activity_id}`">
+          {{ task.activity_title || `活动 #${task.activity_id}` }}
+        </a>
+        <span class="position-sep" aria-hidden="true">/</span>
+      </template>
+      <span v-else class="position-text">独立任务</span>
+      <template v-if="task.parent_id !== null">
+        <a class="position-link" :href="`/tasks/${task.parent_id}`">
+          {{ task.parent_title || `任务 #${task.parent_id}` }}
+        </a>
+        <span class="position-sep" aria-hidden="true">/</span>
+      </template>
+      <span class="position-current" aria-current="page">{{ task.title }}</span>
+    </nav>
+
     <el-page-header title="返回" content="任务详情" class="page-header" @back="backToHall" />
 
     <LoadingState v-if="loading" :rows="6" />
@@ -506,7 +526,7 @@ watch(
       <!-- 首屏信息卡：任务要求 / 截止 / 我的状态 / 当前操作 -->
       <el-card shadow="never" class="app-section-card">
         <div class="key-head">
-          <h2 class="task-title">{{ task.title }}</h2>
+          <h1 class="task-title">{{ task.title }}</h1>
           <div class="key-tags">
             <StatusTag :status="task.status" />
             <el-tag v-if="task.parent_id !== null" size="small" type="warning" effect="plain">
@@ -949,6 +969,37 @@ watch(
 </template>
 
 <style scoped>
+.position-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--app-font-aux-lg);
+  line-height: 1.6;
+  color: var(--app-text-secondary);
+  word-break: break-word;
+}
+
+.position-link {
+  color: var(--app-primary);
+  text-decoration: none;
+}
+
+.position-link:hover,
+.position-link:focus-visible {
+  text-decoration: underline;
+}
+
+.position-sep,
+.position-text {
+  color: var(--app-text-muted);
+}
+
+.position-current {
+  color: var(--app-text);
+  font-weight: 600;
+}
+
 .detail {
   max-width: 1000px;
   margin: 0 auto;
@@ -971,7 +1022,7 @@ watch(
 
 .task-title {
   margin: 0;
-  font-size: 20px;
+  font-size: var(--app-font-page-title);
   color: var(--app-text);
   word-break: break-word;
 }

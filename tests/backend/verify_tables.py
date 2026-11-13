@@ -1,17 +1,20 @@
 #!/usr/bin/env python
-"""T8-① 建表与数据形态校验（契约 `C-DATA@2`，第二轮迭代）。
+"""建表与数据形态校验（契约 `C-DATA@2` / `C-DATA-AUTH@1`，阶段 2 口径）。
 
-断言范围（plan T8 `acceptance_and_local_checks` ②）：
-1. **10 张表**全部存在（users / tasks / checkins / credit_logs / notifications /
-   kb_entries / parse_sessions / progress_logs / **task_applications** / **task_members**）；
+断言范围：
+1. **16 张表**全部存在（阶段 1 的 11 张 + 阶段 2 的 organizations / org_members /
+   invitations / user_sessions / password_resets）；
 2. ``task_applications`` 列齐全且存在 ``uq_task_applications_task_user``
    （PRAGMA 元数据 + 真实重复插入双证，后者事务内回滚）；
 3. ``checkins`` 存在 ``UNIQUE(task_id, user_id)`` —— 双证同上；
 4. ``tasks.extras`` / ``tasks.reminder_rule`` 读回为 dict —— JSON 接口 + SQLite 原始列双证；
 5. ``progress_logs`` 表及其列存在；
-6. ``/api/health`` 的 ``tables`` 为 10 项且与期望集合完全一致；
-7. ``TaskOut`` 4 个报名派生字段（applied_count/approved_count/my_application_status/
-   assignee_names）在新建任务上取默认值。
+6. ``/api/health`` 的 ``tables`` 为 16 项且与期望集合完全一致；
+7. 阶段 2 认证列的落库形态（``users.status`` 默认 ``active``、``platform_admin`` 默认 0、
+   ``tasks.org_id`` / ``activities.org_id`` 可空）与 ``task_members`` 具名唯一索引。
+
+阶段 2 起接口鉴权改为 Cookie 会话（需账号密码），故 JSON 落库形态改为在事务内直接插入
+探针行后回滚验证；接口级字段与派生值由 ``tests/backend/test_auth_org_permissions.py`` 覆盖。
 
 运行前提（由 ``run_all.sh`` 导出）：
 - ``T10_BASE_URL``：后端地址（默认 ``http://127.0.0.1:8021``，T8 约定端口）；
@@ -32,7 +35,7 @@ import urllib.request
 BASE_URL = os.getenv("T10_BASE_URL", "http://127.0.0.1:8021").rstrip("/")
 DB_PATH = (os.getenv("T10_DB_PATH") or "").strip()
 
-#: 期望的 10 张表（P1 的 8 张 + task_applications + Phase1 task_members）
+#: 期望的 16 张表（阶段 1 的 11 张 + 阶段 2 认证与组织的 5 张）
 EXPECTED_TABLES: frozenset[str] = frozenset(
     {
         "users",
@@ -45,6 +48,12 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
         "progress_logs",
         "task_applications",
         "task_members",
+        "activities",
+        "organizations",
+        "org_members",
+        "invitations",
+        "user_sessions",
+        "password_resets",
     }
 )
 
@@ -60,7 +69,7 @@ TASK_APPLICATION_UNIQUE_NAME = "uq_task_applications_task_user"
 PROGRESS_LOG_COLUMNS: frozenset[str] = frozenset({"id", "task_id", "user_id", "content", "created_at"})
 
 #: 建表校验任务（deadline 留空，避免被催办扫描命中）
-TABLE_CHECK_TITLE = "T8 建表校验任务（10 表）"
+TABLE_CHECK_TITLE = "T8 建表校验任务（16 表）"
 TABLE_CHECK_EXTRAS = {"装备": "矿泉水", "联系人": "张三"}
 TABLE_CHECK_RULE = {"days_before": 3, "day_of": False, "on_overdue": False}
 
@@ -85,7 +94,6 @@ def http_json(
     method: str,
     path: str,
     body: object | None = None,
-    token: str | None = None,
     timeout: float = 15.0,
 ) -> tuple[int, dict]:
     """发起一次请求并解析统一响应体 ``{code,msg,data}``。"""
@@ -93,8 +101,6 @@ def http_json(
     request = urllib.request.Request(BASE_URL + path, data=payload, method=method)
     if payload is not None:
         request.add_header("Content-Type", "application/json; charset=utf-8")
-    if token:
-        request.add_header("Authorization", f"Bearer {token}")
 
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -110,9 +116,9 @@ def http_json(
         raise SystemExit(1)
 
 
-def api_ok(method: str, path: str, body: object | None = None, token: str | None = None, label: str = "") -> dict:
+def api_ok(method: str, path: str, body: object | None = None, label: str = "") -> dict:
     """断言 ``HTTP 200 + code==0``，返回 ``data``。"""
-    status, payload = http_json(method, path, body, token)
+    status, payload = http_json(method, path, body)
     code = payload.get("code")
     expect(
         status == 200 and code == 0,
@@ -121,15 +127,6 @@ def api_ok(method: str, path: str, body: object | None = None, token: str | None
     data = payload.get("data")
     expect(isinstance(data, dict), f"{label}：data 为对象（实际 {type(data).__name__}）")
     return data
-
-
-def login(username: str) -> tuple[str, dict]:
-    """登录并返回 ``(token, user)``。"""
-    data = api_ok("POST", "/api/auth/login", {"username": username}, label=f"登录 {username}")
-    token = data.get("token")
-    expect(isinstance(token, str) and bool(token), f"{username} 返回非空 token")
-    expect(isinstance(data.get("user"), dict), f"{username} 返回 user 对象")
-    return token, data["user"]
 
 
 # --------------------------------------------------------------------------- #
@@ -192,11 +189,11 @@ def main() -> int:
 
     conn = sqlite3.connect(DB_PATH, isolation_level=None)
     try:
-        # ---- 1) 10 张表 ----------------------------------------------------
+        # ---- 1) 16 张表 ----------------------------------------------------
         names = table_names(conn)
         missing = sorted(EXPECTED_TABLES - names)
-        expect(not missing, f"10 张表全部存在（缺失：{missing or '无'}；实际 {sorted(names)}）")
-        expect(len(EXPECTED_TABLES) == 10, f"期望表集合固定为 10 张（实际定义 {len(EXPECTED_TABLES)} 张）")
+        expect(not missing, f"16 张表全部存在（缺失：{missing or '无'}；实际 {sorted(names)}）")
+        expect(len(EXPECTED_TABLES) == 16, f"期望表集合固定为 16 张（实际定义 {len(EXPECTED_TABLES)} 张）")
 
         # ---- 2) checkins 唯一约束 ----------------------------------------
         unique_sets = unique_column_sets(conn, "checkins")
@@ -274,71 +271,40 @@ def main() -> int:
             f"（实际 {len(task_columns)} 列）",
         )
 
-        # ---- 6) 健康检查（10 表 + mock）------------------------------------
+        # ---- 6) 健康检查（16 表 + mock）------------------------------------
         health = api_ok("GET", "/api/health", label="健康检查")
         health_tables = sorted(health.get("tables") or [])
         expect(
             health_tables == sorted(EXPECTED_TABLES),
-            f"health.tables 与 10 张表完全一致（实际 {health.get('tables')}）",
+            f"health.tables 与 16 张表完全一致（实际 {health.get('tables')}）",
         )
-        expect(len(health_tables) == 10, f"health.tables 数量为 10（实际 {len(health_tables)}）")
+        expect(len(health_tables) == 16, f"health.tables 数量为 16（实际 {len(health_tables)}）")
         expect(health.get("mock") is True, f"health.mock 为 true（实际 {health.get('mock')}）")
 
-        # ---- 7) extras / reminder_rule 读回为 dict + 派生字段默认值 --------
-        teacher_token, teacher = login("teacher01")
-        expect(teacher.get("role") == "publisher", f"teacher01 角色为 publisher（实际 {teacher.get('role')}）")
+        # ---- 7) tasks.extras / reminder_rule 落库形态 ---------------------
+        # 阶段 2 起接口需要账号密码会话，探针行改为在事务内直接插入后回滚，
+        # 只验证 JSON 列的读回形态，不在被测库里留数据。
+        conn.execute("BEGIN IMMEDIATE")
+        raw_extras = raw_rule = None
+        probe_task_id = 0
+        try:
+            cursor = conn.execute(
+                "INSERT INTO tasks (title, extras, reminder_rule, publisher_id, created_at) "
+                "VALUES (?, ?, ?, ?, datetime('now','localtime'))",
+                (
+                    TABLE_CHECK_TITLE,
+                    json.dumps(TABLE_CHECK_EXTRAS, ensure_ascii=False),
+                    json.dumps(TABLE_CHECK_RULE, ensure_ascii=False),
+                    990005,
+                ),
+            )
+            probe_task_id = int(cursor.lastrowid)
+            raw_extras, raw_rule = conn.execute(
+                "SELECT extras, reminder_rule FROM tasks WHERE id=?", (probe_task_id,)
+            ).fetchone()
+        finally:
+            conn.execute("ROLLBACK")
 
-        created = api_ok(
-            "POST",
-            "/api/tasks",
-            {
-                "title": TABLE_CHECK_TITLE,
-                "description": "校验 JSON 字段落库形态",
-                "extras": TABLE_CHECK_EXTRAS,
-                "reminder_rule": TABLE_CHECK_RULE,
-                "credit_reward": 20,
-            },
-            token=teacher_token,
-            label="发布建表校验任务",
-        )
-        task_id = created.get("id")
-        expect(isinstance(task_id, int) and task_id > 0, f"发布任务返回 int id（实际 {task_id!r}）")
-        expect(
-            isinstance(created.get("extras"), dict) and created["extras"] == TABLE_CHECK_EXTRAS,
-            f"发布响应 extras 读回为 dict 且内容一致（实际 {created.get('extras')!r}）",
-        )
-        expect(
-            isinstance(created.get("reminder_rule"), dict) and created["reminder_rule"] == TABLE_CHECK_RULE,
-            f"发布响应 reminder_rule 读回为 dict 且内容一致（实际 {created.get('reminder_rule')!r}）",
-        )
-        # `C-DATA@2` B 节：TaskOut 必须出现 4 个报名派生字段（新建任务默认值）
-        expect(
-            created.get("applied_count") == 0 and created.get("approved_count") == 0,
-            "新建任务 applied_count/approved_count 均为 0"
-            f"（实际 {created.get('applied_count')}/{created.get('approved_count')}）",
-        )
-        expect(
-            created.get("my_application_status") is None,
-            f"发布者视角 my_application_status 为 null（实际 {created.get('my_application_status')!r}）",
-        )
-        expect(
-            created.get("assignee_names") == [],
-            f"新建任务 assignee_names 为空数组（实际 {created.get('assignee_names')!r}）",
-        )
-
-        detail = api_ok("GET", f"/api/tasks/{task_id}", token=teacher_token, label="任务详情")
-        expect(
-            isinstance(detail.get("extras"), dict) and detail["extras"] == TABLE_CHECK_EXTRAS,
-            f"详情接口 extras 读回为 dict（实际 {detail.get('extras')!r}）",
-        )
-        expect(
-            isinstance(detail.get("reminder_rule"), dict) and detail["reminder_rule"] == TABLE_CHECK_RULE,
-            f"详情接口 reminder_rule 读回为 dict（实际 {detail.get('reminder_rule')!r}）",
-        )
-
-        raw_extras, raw_rule = conn.execute(
-            "SELECT extras, reminder_rule FROM tasks WHERE id=?", (task_id,)
-        ).fetchone()
         expect(
             isinstance(raw_extras, str) and isinstance(json.loads(raw_extras), dict),
             f"SQLite 原始列 tasks.extras 为可解析 JSON 文本（实际 {raw_extras!r}）",
@@ -349,12 +315,45 @@ def main() -> int:
         )
         expect(
             json.loads(raw_extras) == TABLE_CHECK_EXTRAS and json.loads(raw_rule) == TABLE_CHECK_RULE,
-            "SQLite 原始列内容与请求完全一致（无字段丢失 / 额外改写）",
+            "SQLite 原始列内容与写入值完全一致（无字段丢失 / 额外改写）",
+        )
+        leftover = conn.execute("SELECT COUNT(*) FROM tasks WHERE id=?", (probe_task_id,)).fetchone()[0]
+        expect(int(leftover) == 0, "extras 探针行已回滚（无残留数据）")
+
+        # ---- 8) 阶段 2 认证与组织列形态 -----------------------------------
+        user_columns = column_names(conn, "users")
+        expect(
+            {"password_hash", "password_updated_at", "status", "platform_admin"} <= user_columns,
+            f"users 含阶段 2 认证列（实际 {sorted(user_columns)}）",
+        )
+        user_defaults = {
+            str(row[1]): row[4]
+            for row in conn.execute("PRAGMA table_info('users')").fetchall()
+        }
+        expect(
+            (user_defaults.get("status") or "").strip("'\"") == "active",
+            f"users.status 默认值为 active（实际 {user_defaults.get('status')!r}）",
+        )
+        expect(
+            str(user_defaults.get("platform_admin")) in {"0", "0.0"},
+            f"users.platform_admin 默认值为 0（实际 {user_defaults.get('platform_admin')!r}）",
+        )
+        expect(
+            "org_id" in column_names(conn, "tasks") and "org_id" in column_names(conn, "activities"),
+            "tasks / activities 含 org_id 列",
+        )
+        org_member_unique = unique_index_names(conn, "org_members")
+        expect(
+            "uq_org_members_org_user" in org_member_unique
+            or ("org_id", "user_id") in unique_column_sets(conn, "org_members")
+            or ("user_id", "org_id") in unique_column_sets(conn, "org_members"),
+            "org_members 存在 UNIQUE(org_id, user_id)"
+            f"（实际唯一索引 {sorted(org_member_unique)}）",
         )
     finally:
         conn.close()
 
-    print(f"---- verify_tables.py 全部通过：{_passed} 项断言（10 表 + task_applications 唯一约束）----")
+    print(f"---- verify_tables.py 全部通过：{_passed} 项断言（16 表 + 阶段 2 认证与组织列）----")
     return 0
 
 

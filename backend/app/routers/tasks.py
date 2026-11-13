@@ -23,9 +23,9 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_csrf
 from app.errors import ApiError, ok
-from app.models import ProgressLog, Task, TaskApplication, User
+from app.models import Activity, ProgressLog, Task, TaskApplication, User
 from app.schemas import (
     AssignIn,
     Draft,
@@ -39,14 +39,18 @@ from app.schemas import (
     VerifyIn,
     VerifyOut,
 )
+from app.services import activity_service
 from app.services import application_service
+from app.services import authz
 from app.services import credit as credit_service
 from app.services import member_service, notify_service
 from app.services.task_state import ALLOWED_TRANSITIONS
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+router = APIRouter(
+    prefix="/api/tasks", tags=["tasks"], dependencies=[Depends(require_csrf)]
+)
 
 # --------------------------------------------------------------------------- #
 # 错误码总表（计划 `2.2.4`，全后端唯一实现位置）
@@ -131,6 +135,15 @@ def _names_map(db: Session, tasks: Iterable[Task]) -> dict[int, str]:
     return {int(row[0]): str(row[1]) for row in rows}
 
 
+def _activity_titles_map(db: Session, tasks: Iterable[Task]) -> dict[int, str]:
+    """批量取任务所属活动的 ``activity_id -> title``，避免逐行查询（N+1）。"""
+    ids = {int(task.activity_id) for task in tasks if task.activity_id is not None}
+    if not ids:
+        return {}
+    rows = db.query(Activity.id, Activity.title).filter(Activity.id.in_(ids)).all()
+    return {int(row[0]): str(row[1]) for row in rows}
+
+
 def _dep_status_map(db: Session, tasks: Iterable[Task]) -> dict[int, str]:
     """批量取前置依赖任务的 ``id -> status``，供 ``is_claimable`` 计算。"""
     dep_ids = {int(task.depends_on) for task in tasks if task.depends_on is not None}
@@ -211,6 +224,7 @@ def _task_payload(
     my_status: str | None,
     members: list[dict[str, Any]] | None = None,
     my_member_status: str | None = None,
+    activity_titles: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     """构造与 ``TaskOut`` 完全对齐的字典（含报名派生字段与逐人成员载荷）。
 
@@ -224,15 +238,20 @@ def _task_payload(
         my_status: 当前用户对该任务的报名状态（无记录为 ``None``）。
         members: ``task.members`` 载荷（逐人执行状态）。
         my_member_status: 当前用户的成员状态（非成员为 ``None``）。
+        activity_titles: ``activity_id -> title`` 映射（批量解析，无活动为空字典）。
     """
     task_id = int(task.id)
     assignee_names = [str(name) for _, name in (approved_names.get(task_id) or [])]
     applied_count = int(counts.get(application_service.PENDING, 0))
     approved_count = int(counts.get(application_service.APPROVED, 0))
+    activity_id = int(task.activity_id) if task.activity_id is not None else None
+    activity_title = (activity_titles or {}).get(activity_id) if activity_id is not None else None
 
     raw: dict[str, Any] = {
         "id": task.id,
         "parent_id": task.parent_id,
+        "activity_id": activity_id,
+        "org_id": task.org_id,
         "title": task.title,
         "description": task.description,
         "location": task.location,
@@ -264,7 +283,10 @@ def _task_payload(
         "members": members or [],
         "my_member_status": my_member_status,
     }
-    return TaskOut.model_validate(raw).model_dump()
+    payload = TaskOut.model_validate(raw).model_dump()
+    # activity_title 只属于 TaskDetailOut，TaskOut 校验会丢弃，这里保留给详情响应
+    payload["activity_title"] = activity_title
+    return payload
 
 
 def _single_task_payload(db: Session, task: Task, current_user_id: int) -> dict[str, Any]:
@@ -283,6 +305,7 @@ def _single_task_payload(db: Session, task: Task, current_user_id: int) -> dict[
         my_status=my_status,
         members=members,
         my_member_status=_my_member_status(members, current_user_id),
+        activity_titles=_activity_titles_map(db, [task]),
     )
 
 
@@ -335,20 +358,27 @@ def list_tasks(
     status: str | None = Query(default=None, description="单值过滤；逗号分隔按 IN 处理"),
     scope: Literal["all", "mine"] = Query(default="all"),
     include_sub: bool = Query(default=False),
+    activity_id: int | None = Query(default=None, description="按所属活动过滤"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """任务列表：状态 / 范围 / 是否含子任务过滤，``created_at DESC, id DESC`` 排序。
+    """任务列表：状态 / 范围 / 是否含子任务 / 所属活动过滤，``created_at DESC, id DESC`` 排序。
 
     ``scope=mine`` 的语义（多负责人模型）：我是发布者 **或** 我是任一 approved 成员
     **或** （legacy）``tasks.assignee_id == 我``；``scope=all`` 行为不变。
+
+    可见性（`C-TASK-ORG@1`）：根条件先叠加 ``authz.visible_task_filter``，
+    列表永不返回不可见任务；``scope=mine`` 在其上再叠加「我的」条件。
     """
-    query = db.query(Task)
+    query = db.query(Task).filter(authz.visible_task_filter(db, current_user))
 
     if status:
         values = [item.strip() for item in status.split(",") if item.strip()]
         if values:
             query = query.filter(Task.status.in_(values))
+
+    if activity_id is not None:
+        query = query.filter(Task.activity_id == activity_id)
 
     if scope == "mine":
         conditions = [
@@ -373,6 +403,7 @@ def list_tasks(
     counts = application_service.status_counts_bulk(db, tasks)
     my_status = _my_status_map(db, tasks, current_user.id, approved_names)
     members_by_task = member_service.members_payload_bulk(db, tasks)
+    activity_titles = _activity_titles_map(db, tasks)
     items = []
     for task in tasks:
         members = members_by_task.get(int(task.id), [])
@@ -387,6 +418,7 @@ def list_tasks(
                 my_status=my_status.get(int(task.id)),
                 members=members,
                 my_member_status=_my_member_status(members, current_user.id),
+                activity_titles=activity_titles,
             )
         )
     return ok({"items": items})
@@ -419,6 +451,24 @@ def create_task(
         if int(parent.publisher_id) != int(current_user.id):
             raise ApiError(ERR_FORBIDDEN, "只能在自己的任务下创建子任务")
 
+    # 活动归属与三层 / 跨活动校验（唯一实现；调用发生在 db.add 之前，失败无写入）
+    activity_id = activity_service.resolve_task_placement(
+        db,
+        parent=parent,
+        activity_id=payload.activity_id,
+    )
+
+    # 组织归属（`C-TASK-ORG@1`）：子任务继承父任务，隶属活动的任务继承活动组织；
+    # 显式 org_id 必须属于本人 admin|collaborator 的组织（4030 / 4001 由 authz 判定）
+    activity = db.get(Activity, int(activity_id)) if activity_id is not None else None
+    org_id = authz.resolve_task_org(
+        db,
+        user=current_user,
+        parent=parent,
+        activity=activity,
+        org_id=payload.org_id,
+    )
+
     # 依赖：必须存在且与当前任务同 parent_id（同批子任务间依赖）
     if payload.depends_on is not None:
         dependency = db.get(Task, payload.depends_on)
@@ -442,6 +492,8 @@ def create_task(
 
     task = Task(
         parent_id=payload.parent_id,
+        activity_id=activity_id,
+        org_id=org_id,
         title=title,
         description=payload.description,
         location=payload.location,
@@ -510,6 +562,7 @@ def get_task(
 ) -> dict[str, Any]:
     """任务详情：含子任务、进度记录与 ``sop_guide``。"""
     task = _get_task_or_404(db, task_id)
+    authz.require_task_view(db, current_user, task)
 
     children = (
         db.query(Task)
@@ -531,6 +584,10 @@ def get_task(
         user_names = {int(row[0]): str(row[1]) for row in rows}
 
     payload = _single_task_payload(db, task, current_user.id)
+    if task.parent_id is not None:
+        parent_task = db.get(Task, int(task.parent_id))
+        if parent_task is not None:
+            payload["parent_title"] = parent_task.title
     payload["children"] = [TaskBrief.model_validate(child).model_dump() for child in children]
     payload["progress"] = [
         ProgressOut.model_validate(
@@ -560,10 +617,54 @@ def patch_task(
 ) -> dict[str, Any]:
     """修改任务：省略字段 = 不修改；显式 ``null`` = 清空该列；``extras={}`` = 清空对象。"""
     task = _get_task_or_404(db, task_id)
-    if int(task.publisher_id) != int(current_user.id):
-        raise ApiError(ERR_FORBIDDEN, "只有发布者可以修改任务")
+    authz.require_task_view(db, current_user, task)
+    authz.require_task_manage(db, current_user, task)
 
     provided = payload.model_fields_set
+
+    # 活动归属与层级校验：仅显式提供 parent_id / activity_id 时执行（唯一实现）
+    if "parent_id" in provided or "activity_id" in provided:
+        parent: Task | None = None
+        if "parent_id" in provided and payload.parent_id is not None:
+            parent = db.get(Task, payload.parent_id)
+            if parent is None:
+                raise ApiError(ERR_INVALID_PARAM, "父任务不存在")
+            if int(parent.publisher_id) != int(current_user.id):
+                raise ApiError(ERR_FORBIDDEN, "只能在自己的任务下创建子任务")
+        resolved_activity_id = activity_service.resolve_task_placement(
+            db,
+            parent=parent,
+            activity_id=payload.activity_id if "activity_id" in provided else task.activity_id,
+            task_id=int(task.id),
+            task=task,
+        )
+        if "parent_id" in provided:
+            task.parent_id = int(parent.id) if parent is not None else None
+        task.activity_id = resolved_activity_id
+
+    # 层级 / 活动 / 组织任一变更都重算归属（经 authz 统一裁决）：只显式传 org_id 时校验不够，
+    # 仅改 parent_id / activity_id 也能把任务挂到其他组织或他人的 legacy 活动下。
+    # 只改其他字段时整段跳过，避免重置既有 org_id。
+    if {"parent_id", "activity_id", "org_id"} & provided:
+        org_parent = db.get(Task, int(task.parent_id)) if task.parent_id is not None else None
+        org_activity = (
+            db.get(Activity, int(task.activity_id)) if task.activity_id is not None else None
+        )
+        # 隔离 / legacy 活动（org_id 为空）仅允许本人可见时作为挂载点，否则按不存在处理
+        if (
+            org_activity is not None
+            and org_activity.org_id is None
+            and not authz.can_view_activity(db, current_user, org_activity)
+        ):
+            raise ApiError(ERR_NOT_FOUND, "活动不存在")
+        task.org_id = authz.resolve_task_org(
+            db,
+            user=current_user,
+            parent=org_parent,
+            activity=org_activity,
+            org_id=payload.org_id if "org_id" in provided else task.org_id,
+            task=task,
+        )
 
     # title：显式提供时不允许为空
     if "title" in provided:
@@ -645,6 +746,7 @@ def claim_task(
     from app.routers.applications import create_application
 
     task = _get_task_or_404(db, task_id)
+    authz.require_task_view(db, current_user, task)
     return ok(create_application(db, task, current_user))
 
 
@@ -668,8 +770,8 @@ def assign_task(
     from app.routers.applications import assign_approved
 
     task = _get_task_or_404(db, task_id)
-    if int(task.publisher_id) != int(current_user.id):
-        raise ApiError(ERR_FORBIDDEN, "只有发布者可以指派任务")
+    authz.require_task_view(db, current_user, task)
+    authz.require_task_manage(db, current_user, task)
 
     target_user = db.get(User, payload.user_id)
     if target_user is None:
@@ -700,6 +802,7 @@ def add_progress(
 ) -> dict[str, Any]:
     """逐人提交进度记录（仅 approved 成员）：只推进本人成员状态。"""
     task = _get_task_or_404(db, task_id)
+    authz.require_task_view(db, current_user, task)
     if not application_service.is_approved_participant(db, task, int(current_user.id)):
         raise ApiError(ERR_FORBIDDEN, "只有任务成员可以提交进度")
     if str(task.status) == "cancelled":
@@ -741,6 +844,7 @@ def submit_task(
     通知去重键为 ``submit:{task_id}:{user_id}:{submitted_at}``（`C-TASK-API@1`）。
     """
     task = _get_task_or_404(db, task_id)
+    authz.require_task_view(db, current_user, task)
     if not application_service.is_approved_participant(db, task, int(current_user.id)):
         raise ApiError(ERR_FORBIDDEN, "只有任务成员可以提交完成")
     if str(task.status) == "cancelled":
@@ -816,8 +920,8 @@ def verify_task(
     - 通过：按 ``(task_id, user_id)`` 幂等加分，积分流水、成员状态与通知同一事务提交。
     """
     task = _get_task_or_404(db, task_id)
-    if int(task.publisher_id) != int(current_user.id):
-        raise ApiError(ERR_FORBIDDEN, "只有发布者可以验收任务")
+    authz.require_task_view(db, current_user, task)
+    authz.require_task_manage(db, current_user, task)
     if str(task.status) == "cancelled":
         raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
 
@@ -946,8 +1050,8 @@ def decompose_task(
 ) -> dict[str, Any]:
     """请求审核助手给出拆解建议（不落库，前端确认后逐个调 ``POST /api/tasks``）。"""
     task = _get_task_or_404(db, task_id)
-    if int(task.publisher_id) != int(current_user.id):
-        raise ApiError(ERR_FORBIDDEN, "只有发布者可以拆解任务")
+    authz.require_task_view(db, current_user, task)
+    authz.require_task_manage(db, current_user, task)
 
     # 延迟导入：T3 交付前本端点给出明确 5001，而不是让应用启动失败
     try:

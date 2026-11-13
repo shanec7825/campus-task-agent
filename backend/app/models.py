@@ -1,8 +1,9 @@
-"""共享数据模型（契约 `C-DATA@2`，T1 冻结）。
+"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1`，T1 冻结）。
 
-9 张表：users / tasks / checkins / credit_logs / notifications /
-kb_entries / parse_sessions / progress_logs / task_applications
-（`task_applications` 依据第二轮 `2.2.1 A` 新增，用于报名审批与多名额成员）。
+16 张表：users / tasks / checkins / credit_logs / notifications /
+kb_entries / parse_sessions / progress_logs / task_applications / task_members /
+activities / organizations / org_members / invitations / user_sessions /
+password_resets。
 
 说明：Demo 期不建数据库级外键约束，仅做应用层校验（PLAN 2.2.1 A：
 「Demo 期不建数据库级外键，应用层校验」）；JSON 列落库为 SQLite TEXT，
@@ -16,6 +17,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     Float,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -43,6 +45,12 @@ class User(Base):
     role: Mapped[str] = mapped_column(Text, nullable=False, default="student", server_default=text("'student'"))
     org: Mapped[str | None] = mapped_column(Text, nullable=True)
     credits: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    # 认证列（`C-DATA-AUTH@1`）：全部可空或带默认，兼容旧行。
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password_updated_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # active | legacy_unclaimed | disabled；legacy_unclaimed 为无密码的旧演示账号，不可登录。
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
+    platform_admin: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     created_at: Mapped[str] = mapped_column(
         Text, nullable=False, default=_now_local, server_default=_NOW_SQL
     )
@@ -50,9 +58,14 @@ class User(Base):
 
 class Task(Base):
     __tablename__ = "tasks"
+    __table_args__ = (Index("ix_tasks_org_id", "org_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 活动归属（`C-DATA-ACTIVITY@1`）：NULL 表示独立任务；子任务必须与父任务一致。
+    activity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 组织归属（`C-DATA-AUTH@1`）：只表达归属，不参与 parent_id / activity_id 的工作拆分语义。
+    org_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -210,6 +223,129 @@ class TaskMember(Base):
     )
 
 
+class Activity(Base):
+    """活动（契约 `C-DATA-ACTIVITY@1`）。
+
+    - ``tasks.activity_id`` 指向本表；本轮不建数据库级外键（与全库口径一致）。
+    - ``org`` 列先建但不参与查询过滤（组织可见范围留待阶段 2）。
+    - ``status`` 本轮只写入 ``published``。
+    """
+
+    __tablename__ = "activities"
+    __table_args__ = (Index("ix_activities_org_id", "org_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    start_time: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deadline: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    org: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 组织归属（`C-DATA-AUTH@1`）：NULL 表示尚未归属任何组织（隔离，不自动推断）。
+    org_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="published", server_default=text("'published'"))
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
+class Organization(Base):
+    """组织（契约 `C-DATA-AUTH@1`）。"""
+
+    __tablename__ = "organizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
+class OrgMember(Base):
+    """组织成员（契约 `C-DATA-AUTH@1`）。
+
+    ``role`` 只允许 ``admin`` / ``collaborator`` / ``member``；``platform_admin`` 不写入本表。
+    """
+
+    __tablename__ = "org_members"
+    __table_args__ = (
+        UniqueConstraint("org_id", "user_id", name="uq_org_members_org_user"),
+        Index("ix_org_members_user_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False, default="member", server_default=text("'member'"))
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
+class Invitation(Base):
+    """注册邀请（契约 `C-DATA-AUTH@1`）。
+
+    库中只存 ``hash_token(token)``；明文令牌仅在创建响应出现一次。
+    ``max_uses`` / ``used_count`` 由注册事务内的条件 UPDATE 原子消费。
+    """
+
+    __tablename__ = "invitations"
+    __table_args__ = (Index("ix_invitations_org_id", "org_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    role_cap: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    expires_at: Mapped[str] = mapped_column(Text, nullable=False)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+    revoked_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class UserSession(Base):
+    """服务端会话（契约 `C-SESSION@1`）：Cookie 里放明文令牌，库中只存哈希。"""
+
+    __tablename__ = "user_sessions"
+    __table_args__ = (Index("ix_user_sessions_user_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    csrf_token: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+    expires_at: Mapped[str] = mapped_column(Text, nullable=False)
+    revoked_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_seen_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PasswordReset(Base):
+    """一次性密码重置凭据（契约 `C-DATA-AUTH@1`）：``used_at`` 非空即已消费。"""
+
+    __tablename__ = "password_resets"
+    __table_args__ = (Index("ix_password_resets_user_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    expires_at: Mapped[str] = mapped_column(Text, nullable=False)
+    used_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
 __all__ = [
     "User",
     "Task",
@@ -221,4 +357,10 @@ __all__ = [
     "ProgressLog",
     "TaskApplication",
     "TaskMember",
+    "Activity",
+    "Organization",
+    "OrgMember",
+    "Invitation",
+    "UserSession",
+    "PasswordReset",
 ]

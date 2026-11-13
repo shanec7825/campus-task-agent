@@ -5,7 +5,7 @@ GitHub Actions 在 push、pull request 和手动触发时执行 `.github/workflo
 
 | 检查 | 环境 | 内容 |
 |---|---|---|
-| Backend reliability | Ubuntu / Windows，Python 3.12 | 逐人成员状态、开始/截止时间、改期、补交、积分幂等、迁移与权限回归 |
+| Backend reliability | Ubuntu / Windows，Python 3.12 | 逐人成员状态、开始/截止时间、改期、补交、积分幂等、迁移与权限回归；并执行认证、邀请、组织权限与活动层级行为套件 |
 | Backend API and SSE integration | Ubuntu，Python 3.12 | 临时数据库启动后端，执行建表、报名、REST、mock AI、增量解析和 SSE/催办套件 |
 | Frontend build, voice and public source security checks | Ubuntu，Node.js 22 | 类型检查、生产构建、静态契约与语音切片算法，构建完成后执行既有凭证字面量与交付红线检查 |
 
@@ -18,6 +18,7 @@ GitHub Actions 在 push、pull request 和手动触发时执行 `.github/workflo
 ```bash
 python -m pip install -r backend/requirements-dev.txt
 python -m pytest tests/backend/test_reliability.py -q
+python -m pytest tests/backend/test_auth_org_permissions.py tests/backend/test_activity_hierarchy.py -q
 bash tests/backend/run_all.sh
 npm ci --prefix frontend
 bash tests/frontend/run_all.sh
@@ -32,4 +33,4 @@ Windows Git Bash 下可显式设置 `PYTHON_BIN=C:/path/to/python.exe`。
 
 本次首个 Git 提交保存初始化时的现有业务实现及 CI 配置。
 本地 AI 工具配置、临时数据库、凭证文件、依赖和构建产物不纳入版本控制。
-当前登录为用户名自动建号的演示机制；公开源码不等于适合直接部署成公开业务服务。
+当前登录为“组织邀请注册 + 账号密码 + 服务端 Cookie 会话 + CSRF”的实现；历史演示账号被标记为 `legacy_unclaimed`，需组织管理员或平台管理员发放一次性重置后方可登录。公开源码不等于适合直接部署成公开业务服务；本轮未部署、未对外发布。

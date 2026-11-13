@@ -407,8 +407,8 @@ onMounted(async () => {
     <el-card v-if="!isPublisher" shadow="never" class="app-section-card">
       <el-result
         icon="warning"
-        title="当前账号不是发布者"
-        sub-title="发布者后台仅对 role=publisher 的账号（如 teacher01）开放。"
+        title="当前账号没有管理权限"
+        sub-title="发布者后台仅对组织管理员或协作者开放，请联系组织管理员。"
       />
     </el-card>
 
