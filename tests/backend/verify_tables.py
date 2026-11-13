@@ -2,8 +2,9 @@
 """建表与数据形态校验（契约 `C-DATA@2` / `C-DATA-AUTH@1`，阶段 2 口径）。
 
 断言范围：
-1. **18 张表**全部存在（阶段 1 的 11 张 + 阶段 2 的 organizations / org_members /
-   invitations / user_sessions / password_resets + 阶段 19 的 ai_conversations / ai_messages）；
+1. **19 张表**全部存在（阶段 1 的 11 张 + 阶段 2 的 organizations / org_members /
+   invitations / user_sessions / password_resets + 阶段 19 的 ai_conversations / ai_messages
+   + AIW-03 的 task_dependencies）；
 2. ``task_applications`` 列齐全且存在 ``uq_task_applications_task_user``
    （PRAGMA 元数据 + 真实重复插入双证，后者事务内回滚）；
 3. ``checkins`` 存在 ``UNIQUE(task_id, user_id)`` —— 双证同上；
@@ -35,7 +36,8 @@ import urllib.request
 BASE_URL = os.getenv("T10_BASE_URL", "http://127.0.0.1:8021").rstrip("/")
 DB_PATH = (os.getenv("T10_DB_PATH") or "").strip()
 
-#: 期望的 18 张表（阶段 1 的 11 张 + 阶段 2 认证与组织的 5 张 + 阶段 19 的 AI 会话 2 张）
+#: 期望的 19 张表（阶段 1 的 11 张 + 阶段 2 认证与组织的 5 张 + 阶段 19 的 AI 会话 2 张
+#: + AIW-03 的任务依赖边 1 张）
 EXPECTED_TABLES: frozenset[str] = frozenset(
     {
         "users",
@@ -56,6 +58,7 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
         "password_resets",
         "ai_conversations",
         "ai_messages",
+        "task_dependencies",
     }
 )
 
@@ -71,7 +74,7 @@ TASK_APPLICATION_UNIQUE_NAME = "uq_task_applications_task_user"
 PROGRESS_LOG_COLUMNS: frozenset[str] = frozenset({"id", "task_id", "user_id", "content", "created_at"})
 
 #: 建表校验任务（deadline 留空，避免被催办扫描命中）
-TABLE_CHECK_TITLE = "T8 建表校验任务（18 表）"
+TABLE_CHECK_TITLE = "T8 建表校验任务（19 表）"
 TABLE_CHECK_EXTRAS = {"装备": "矿泉水", "联系人": "张三"}
 TABLE_CHECK_RULE = {"days_before": 3, "day_of": False, "on_overdue": False}
 
@@ -166,6 +169,11 @@ def unique_index_names(conn: sqlite3.Connection, table: str) -> set[str]:
     return names
 
 
+def index_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    """返回该表全部索引名称（含非唯一索引）。"""
+    return {str(row[1]) for row in conn.execute(f"PRAGMA index_list('{table}')").fetchall()}
+
+
 def assert_duplicate_insert_rejected(
     conn: sqlite3.Connection, insert_sql: str, values: tuple[object, ...]
 ) -> bool:
@@ -191,11 +199,11 @@ def main() -> int:
 
     conn = sqlite3.connect(DB_PATH, isolation_level=None)
     try:
-        # ---- 1) 18 张表 ----------------------------------------------------
+        # ---- 1) 19 张表 ----------------------------------------------------
         names = table_names(conn)
         missing = sorted(EXPECTED_TABLES - names)
-        expect(not missing, f"18 张表全部存在（缺失：{missing or '无'}；实际 {sorted(names)}）")
-        expect(len(EXPECTED_TABLES) == 18, f"期望表集合固定为 18 张（实际定义 {len(EXPECTED_TABLES)} 张）")
+        expect(not missing, f"19 张表全部存在（缺失：{missing or '无'}；实际 {sorted(names)}）")
+        expect(len(EXPECTED_TABLES) == 19, f"期望表集合固定为 19 张（实际定义 {len(EXPECTED_TABLES)} 张）")
 
         # ---- 2) checkins 唯一约束 ----------------------------------------
         unique_sets = unique_column_sets(conn, "checkins")
@@ -265,6 +273,47 @@ def main() -> int:
             f"progress_logs 列齐全（期望 {sorted(PROGRESS_LOG_COLUMNS)}，实际 {sorted(progress_columns)}）",
         )
 
+        # ---- 4b) task_dependencies：列 / 唯一约束 / DDL 约束名 -------------
+        expect("task_dependencies" in names, "task_dependencies 表存在（AIW-03 第 19 张表）")
+        dependency_columns = column_names(conn, "task_dependencies")
+        expect(
+            {"id", "task_id", "depends_on_id", "created_at"} <= dependency_columns,
+            f"task_dependencies 列齐全（实际 {sorted(dependency_columns)}）",
+        )
+        dependency_unique_sets = unique_column_sets(conn, "task_dependencies")
+        expect(
+            ("task_id", "depends_on_id") in dependency_unique_sets
+            or ("depends_on_id", "task_id") in dependency_unique_sets,
+            "task_dependencies 存在 UNIQUE(task_id, depends_on_id)"
+            f"（实际唯一组合：{sorted(dependency_unique_sets)}）",
+        )
+        dependency_ddl_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='task_dependencies'"
+        ).fetchone()
+        dependency_ddl = str(dependency_ddl_row[0]) if dependency_ddl_row and dependency_ddl_row[0] else ""
+        expect(
+            "CONSTRAINT uq_task_dependencies_task_dep UNIQUE" in dependency_ddl,
+            "task_dependencies DDL 保留契约约束名 uq_task_dependencies_task_dep",
+        )
+        expect(
+            "ix_task_dependencies_depends_on_id" in index_names(conn, "task_dependencies"),
+            "task_dependencies 存在 ix_task_dependencies_depends_on_id 反向前置索引"
+            f"（实际 {sorted(index_names(conn, 'task_dependencies'))}）",
+        )
+        dependency_sql = (
+            "INSERT INTO task_dependencies (task_id, depends_on_id, created_at) "
+            "VALUES (?, ?, datetime('now','localtime'))"
+        )
+        expect(
+            assert_duplicate_insert_rejected(conn, dependency_sql, (990006, 990007)),
+            "task_dependencies 重复 (task_id, depends_on_id) 插入被数据库拒绝（IntegrityError）",
+        )
+        dependency_remaining = conn.execute(
+            "SELECT COUNT(*) FROM task_dependencies WHERE task_id=? AND depends_on_id=?",
+            (990006, 990007),
+        ).fetchone()[0]
+        expect(int(dependency_remaining) == 0, "task_dependencies 探测数据已回滚（无残留行）")
+
         # ---- 5) tasks 关键列 ---------------------------------------------
         task_columns = column_names(conn, "tasks")
         expect(
@@ -273,14 +322,14 @@ def main() -> int:
             f"（实际 {len(task_columns)} 列）",
         )
 
-        # ---- 6) 健康检查（18 表 + mock）------------------------------------
+        # ---- 6) 健康检查（19 表 + mock）------------------------------------
         health = api_ok("GET", "/api/health", label="健康检查")
         health_tables = sorted(health.get("tables") or [])
         expect(
             health_tables == sorted(EXPECTED_TABLES),
-            f"health.tables 与 18 张表完全一致（实际 {health.get('tables')}）",
+            f"health.tables 与 19 张表完全一致（实际 {health.get('tables')}）",
         )
-        expect(len(health_tables) == 18, f"health.tables 数量为 18（实际 {len(health_tables)}）")
+        expect(len(health_tables) == 19, f"health.tables 数量为 19（实际 {len(health_tables)}）")
         expect(health.get("mock") is True, f"health.mock 为 true（实际 {health.get('mock')}）")
 
         # ---- 7) tasks.extras / reminder_rule 落库形态 ---------------------
@@ -355,7 +404,7 @@ def main() -> int:
     finally:
         conn.close()
 
-    print(f"---- verify_tables.py 全部通过：{_passed} 项断言（18 表 + 阶段 2 认证与组织列 + AI 会话表）----")
+    print(f"---- verify_tables.py 全部通过：{_passed} 项断言（19 表 + 阶段 2 认证与组织列 + AI 会话表 + 依赖边表）----")
     return 0
 
 

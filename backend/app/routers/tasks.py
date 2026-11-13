@@ -44,6 +44,7 @@ from app.services import application_service
 from app.services import authz
 from app.services import credit as credit_service
 from app.services import member_service, notify_service
+from app.services import task_graph_service
 from app.services.task_state import ALLOWED_TRANSITIONS
 
 logger = logging.getLogger(__name__)
@@ -144,25 +145,29 @@ def _activity_titles_map(db: Session, tasks: Iterable[Task]) -> dict[int, str]:
     return {int(row[0]): str(row[1]) for row in rows}
 
 
-def _dep_status_map(db: Session, tasks: Iterable[Task]) -> dict[int, str]:
-    """批量取前置依赖任务的 ``id -> status``，供 ``is_claimable`` 计算。"""
-    dep_ids = {int(task.depends_on) for task in tasks if task.depends_on is not None}
-    if not dep_ids:
-        return {}
-    rows = db.query(Task.id, Task.status).filter(Task.id.in_(dep_ids)).all()
-    return {int(row[0]): str(row[1]) for row in rows}
+def _dep_status_map(db: Session, tasks: Iterable[Task]) -> dict[int, dict[int, str]]:
+    """批量取 ``task_id -> {前置 id: status}``，供多前置 ``is_claimable`` 计算。"""
+    return task_graph_service.dependency_status_bulk(db, list(tasks))
+
+
+def _dependencies_verified(dep_status: dict[int, int | str] | dict[int, str] | None) -> bool:
+    """所有前置都必须 ``verified``（缺失前置视为未完成）。"""
+    if not dep_status:
+        return True
+    return all(str(status) == "verified" for status in dep_status.values())
 
 
 def _is_claimable(
     task: Task,
     current_user_id: int,
-    dep_status: dict[int, str],
+    dep_status: dict[int, dict[int, str]],
     approved_count: int,
     my_status: str | None,
 ) -> bool:
     """`C-APPLY@1` 的可报名公式（前端置灰用，真正校验以后端 A1 六条顺序为准）。
 
     ``claim_type`` 不再参与判定（``assign`` 任务同样可被学生报名，由发布者决定）。
+    多前置（`C-TASK-GRAPH@1`）必须全部 ``verified``。
     """
     if str(task.status) not in ("published", "claimed"):
         return False
@@ -170,7 +175,7 @@ def _is_claimable(
         return False
     if int(task.publisher_id) == int(current_user_id):
         return False
-    if task.depends_on is not None and dep_status.get(int(task.depends_on)) != "verified":
+    if not _dependencies_verified(dep_status.get(int(task.id))):
         return False
     return my_status not in application_service.BLOCKING_STATUSES
 
@@ -216,7 +221,7 @@ def _my_status_map(
 def _task_payload(
     task: Task,
     names: dict[int, str],
-    dep_status: dict[int, str],
+    dep_status: dict[int, dict[int, str]],
     current_user_id: int,
     *,
     approved_names: dict[int, list[tuple[int, str]]],
@@ -231,7 +236,7 @@ def _task_payload(
     Args:
         task: 任务实体。
         names: ``user_id -> display_name`` 映射（发布者名称）。
-        dep_status: 前置任务 ``id -> status`` 映射。
+        dep_status: 前置任务 ``task_id -> {depends_on_id: status}`` 映射。
         current_user_id: 当前用户（用于 ``is_claimable`` 与本人状态）。
         approved_names: ``task_id -> [(user_id, display_name)]``（含 legacy 回退）。
         counts: ``{"pending": n, "approved": m}``（含 legacy 回退）。
@@ -264,6 +269,7 @@ def _task_payload(
         "publisher_id": task.publisher_id,
         "assignee_id": task.assignee_id,
         "depends_on": task.depends_on,
+        "depends_on_ids": list((dep_status.get(task_id) or {}).keys()),
         "sop_guide": task.sop_guide,
         "style_note": task.style_note,
         "extras": task.extras or {},
@@ -307,6 +313,20 @@ def _single_task_payload(db: Session, task: Task, current_user_id: int) -> dict[
         my_member_status=_my_member_status(members, current_user_id),
         activity_titles=_activity_titles_map(db, [task]),
     )
+
+
+def _merge_dependency_ids(
+    depends_on: int | None, depends_on_ids: list[int] | None
+) -> list[int]:
+    """选择本次请求的依赖集合（`C-TASK-GRAPH@1`）。
+
+    显式 ``depends_on_ids`` **覆盖**旧单前置字段（即使同时传了 ``depends_on``）；
+    只在未提供新字段时回退到旧 ``depends_on``。保留原始输入（含重复项），
+    重复校验由 ``task_graph_service`` 统一完成；路由层静默去重会把用户错误变成“成功”。
+    """
+    if depends_on_ids is not None:
+        return [int(item) for item in depends_on_ids]
+    return [int(depends_on)] if depends_on is not None else []
 
 
 # --------------------------------------------------------------------------- #
@@ -445,11 +465,15 @@ def create_task(
         org_id=payload.org_id,
     )
 
-    # 依赖：必须存在且与当前任务同 parent_id（同批子任务间依赖）
-    if payload.depends_on is not None:
-        dependency = db.get(Task, payload.depends_on)
-        if dependency is None or dependency.parent_id != payload.parent_id:
-            raise ApiError(ERR_INVALID_PARAM, "依赖任务必须与当前任务属于同一父任务")
+    # 依赖：多前置（`C-TASK-GRAPH@1`）统一在写库前校验，失败无写入
+    dependency_ids = task_graph_service.validate_dependencies(
+        db,
+        task_id=None,
+        parent_id=payload.parent_id,
+        activity_id=activity_id,
+        org_id=org_id,
+        depends_on_ids=_merge_dependency_ids(payload.depends_on, payload.depends_on_ids),
+    )
 
     # 指派：仅 claim_type=assign 且提供 assignee_id 时生效，状态直接置 claimed
     assignee_id: int | None = None
@@ -481,7 +505,7 @@ def create_task(
         claim_type=payload.claim_type,
         publisher_id=current_user.id,
         assignee_id=assignee_id,
-        depends_on=payload.depends_on,
+        depends_on=dependency_ids[0] if dependency_ids else None,
         sop_guide=payload.sop_guide,
         style_note=payload.style_note,
         extras=payload.extras,
@@ -490,6 +514,10 @@ def create_task(
     )
     db.add(task)
     db.flush()
+
+    # 依赖边表与旧 depends_on 同步为同一集合（多前置；空集合不写边）
+    if dependency_ids:
+        task_graph_service.replace_dependencies(db, task, dependency_ids)
 
     # 直接指派：同一事务内补齐 approved 报名行与 not_started 成员行（`C-TASK-API@1`）
     if assignee_id is not None:
@@ -564,7 +592,29 @@ def get_task(
         parent_task = db.get(Task, int(task.parent_id))
         if parent_task is not None:
             payload["parent_title"] = parent_task.title
-    payload["children"] = [TaskBrief.model_validate(child).model_dump() for child in children]
+
+    # 直接前置 / 后继与局部图谱：只含当前用户可见任务（`C-ACTIVITY-GRAPH@1`）
+    dependencies, dependents = task_graph_service.neighbor_tasks(db, task)
+    visible_dependencies = [
+        item for item in dependencies if authz.can_view_task(db, current_user, item)
+    ]
+    visible_dependents = [item for item in dependents if authz.can_view_task(db, current_user, item)]
+    brief_tasks = [*visible_dependencies, *visible_dependents, *children]
+    brief_dependency_ids = task_graph_service.dependency_ids_bulk(db, brief_tasks)
+
+    def _brief_payload(item: Task) -> dict[str, Any]:
+        data = TaskBrief.model_validate(item).model_dump()
+        data["depends_on_ids"] = brief_dependency_ids.get(int(item.id), [])
+        return data
+
+    payload["dependencies"] = [_brief_payload(item) for item in visible_dependencies]
+    payload["dependents"] = [_brief_payload(item) for item in visible_dependents]
+    graph_tasks = [task, *visible_dependencies, *visible_dependents]
+    payload["graph"] = task_graph_service.build_graph_payload(
+        db, graph_tasks, {int(item.id) for item in graph_tasks}
+    )
+
+    payload["children"] = [_brief_payload(child) for child in children]
     payload["progress"] = [
         ProgressOut.model_validate(
             {
@@ -661,14 +711,37 @@ def patch_task(
         if db.get(User, payload.assignee_id) is None:
             raise ApiError(ERR_NOT_FOUND, "指派的用户不存在")
 
-    # 依赖必须存在且同 parent_id（4001）
-    if "depends_on" in provided and payload.depends_on is not None:
-        dependency = db.get(Task, payload.depends_on)
-        if dependency is None or dependency.parent_id != task.parent_id:
-            raise ApiError(ERR_INVALID_PARAM, "依赖任务必须与当前任务属于同一父任务")
+    # 依赖集合（`C-TASK-GRAPH@1`）：显式 depends_on_ids 整体覆盖；仅 depends_on 时
+    # 按单前置替换；显式空列表清空；depends_on_ids=null 视为不修改（但仍需触发归属重校验）。
+    placement_changed = bool({"parent_id", "activity_id", "org_id"} & provided)
+    explicit_dependency_change = (
+        "depends_on" in provided
+        or ("depends_on_ids" in provided and payload.depends_on_ids is not None)
+    )
+    if explicit_dependency_change:
+        if "depends_on_ids" in provided and payload.depends_on_ids is not None:
+            task_graph_service.replace_dependencies(db, task, payload.depends_on_ids)
+        else:
+            legacy_ids = [int(payload.depends_on)] if payload.depends_on is not None else []
+            task_graph_service.replace_dependencies(db, task, legacy_ids)
+    elif placement_changed:
+        # 只改归属、不显式改依赖（含 depends_on_ids=null）时，旧依赖必须仍满足
+        # 「同层级 / 同活动 / 同组织」；否则允许跨活动移动会留下跨范围脏边（审查 I1/第二轮）。
+        existing_ids = task_graph_service.dependency_ids_bulk(db, [task]).get(int(task.id), [])
+        task_graph_service.validate_dependencies(
+            db,
+            task_id=int(task.id),
+            parent_id=task.parent_id,
+            activity_id=task.activity_id,
+            org_id=task.org_id,
+            depends_on_ids=existing_ids,
+        )
 
     for field in _TASK_UPDATE_FIELDS:
         if field not in provided:
+            continue
+        # 依赖集合已由上面的服务统一处理，避免单字段覆盖多前置
+        if field == "depends_on":
             continue
         value = getattr(payload, field)
         # claim_type 为 NOT NULL 列：显式 null 视为不修改

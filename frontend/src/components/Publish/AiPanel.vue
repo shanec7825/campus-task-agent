@@ -81,6 +81,12 @@ interface SubTaskBatchApi {
 const draft = useDraftStore()
 const router = useRouter()
 
+/**
+ * 活动归属（`C-FE-PUBLISH-ACTIVITY@1`）：由 `PublishPage` 从 `?activity=<id>` 解析后传入。
+ * 发布时附加到主任务，切换手动 / AI 模式都不会丢；子任务由后端从父任务派生活动。
+ */
+const props = withDefaults(defineProps<{ activityId?: number | null }>(), { activityId: null })
+
 /** 原文编辑区文本（解析后隐藏，仍保留以便「修改原文」） */
 const inputText = ref('')
 /** true = 显示原文编辑区；解析成功后切到块容器 */
@@ -584,7 +590,16 @@ async function handlePublish(): Promise<void> {
   /** 勾选且确有建议时才创建子任务；未勾选只创建主任务 */
   const publishSubtasks = includeSubtasks.value && total > 0
   try {
-    const mainTask = await createTask(draft.toTaskPayload())
+    // 活动入口进入时，AI 模式与手动模式一样携带归属（C-FE-PUBLISH-ACTIVITY@1）
+    const payload = draft.toTaskPayload()
+    if (
+      props.activityId !== null &&
+      Number.isFinite(props.activityId) &&
+      props.activityId > 0
+    ) {
+      payload.activity_id = props.activityId
+    }
+    const mainTask = await createTask(payload)
 
     let created = 0
     let batchError: string | null = null

@@ -14,6 +14,7 @@ import { getActivity } from '../api/activities'
 import { ApiError } from '../api/client'
 import AgentDock from '../components/ai/AgentDock.vue'
 import ActivityTaskTree from '../components/task/ActivityTaskTree.vue'
+import TaskGraph from '../components/task/TaskGraph.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import LoadingState from '../components/common/LoadingState.vue'
 import type { ActivityDetail as ActivityDetailModel } from '../types/models'
@@ -180,6 +181,18 @@ watch(
         <ActivityTaskTree :tasks="activity.tasks" :expanded="expanded" @toggle="toggleTask" />
       </section>
 
+      <section class="app-section-card" aria-labelledby="activity-graph-heading">
+        <div class="section-head">
+          <h2 id="activity-graph-heading" class="section-title">依赖与时间图</h2>
+          <span class="graph-hint">依赖层级、前置关系与工作区间；缺日期任务归入未排期</span>
+        </div>
+        <TaskGraph
+          :nodes="activity.graph.nodes"
+          :edges="activity.graph.edges"
+          mode="full"
+        />
+      </section>
+
       <section class="app-section-card" aria-label="操作">
         <div class="app-actions">
           <el-button @click="backToHall">返回事务列表</el-button>
@@ -308,6 +321,12 @@ watch(
 .expand-all:focus-visible {
   border-color: var(--app-border-strong);
   color: var(--app-primary);
+}
+
+.graph-hint {
+  font-size: var(--app-font-aux);
+  color: var(--app-text-muted);
+  word-break: break-word;
 }
 
 @media (max-width: 768px) {

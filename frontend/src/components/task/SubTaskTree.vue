@@ -2,9 +2,10 @@
 /**
  * 子任务依赖树（计划 T6 实现要点 2 / R2.4-AC4）。
  *
- * - 按 `depends_on` 绘制「前置 → 当前」箭头；
- * - 前置任务未 `verified` 时，当前节点加 `disabled` 样式并标注原因；
- * - 前置任务可能不在 `tasks`（兄弟列表）中，此时通过 `predecessor` 补齐展示。
+ * - 按 `depends_on_ids`（缺省回退 `depends_on`）绘制「前置 → 当前」箭头；
+ * - 任一前置未 `verified` 时，当前节点加 `disabled` 样式并标注原因；
+ * - 前置任务可能不在 `tasks`（兄弟列表）中，此时通过 `predecessor` 补齐展示；
+ * - 多个前置时箭头只展示首个，同时标注总项数与信息缺失数量。
  */
 import { computed } from 'vue'
 
@@ -18,19 +19,28 @@ const props = withDefaults(
     tasks: TaskBrief[]
     /** 当前任务节点（用于绘制它的前置依赖） */
     current?: TaskBrief | null
-    /** 当前任务的前置任务（可能不在 tasks 中） */
+    /** 当前任务的前置任务全集（可能不在 tasks 中） */
+    predecessors?: TaskBrief[]
+    /** 单个前置（兼容旧调用） */
     predecessor?: TaskBrief | null
   }>(),
-  { current: null, predecessor: null }
+  { current: null, predecessors: () => [], predecessor: null }
 )
 
 const emit = defineEmits<{ (e: 'open', id: number): void }>()
 
 interface TreeNode {
   task: TaskBrief
-  /** 前置任务；null 表示无依赖或信息缺失 */
+  /** 前置 id 全集（边表 ∪ 旧 `depends_on` 的去重结果） */
+  dependencyIds: number[]
+  /** 已在兄弟列表 / predecessor 中找到的前置 */
+  dependencies: TaskBrief[]
+  /** 首个前置；null 表示无依赖或信息缺失 */
   dependency: TaskBrief | null
-  /** 前置任务是否已完成（verified） */
+  /** 无法解析出前置信息的数量（不可见或不在本列表） */
+  missingCount: number
+  hasDependencies: boolean
+  /** 全部前置是否均已完成（verified） */
   dependencyDone: boolean
   blocked: boolean
 }
@@ -39,18 +49,32 @@ const taskMap = computed<Map<number, TaskBrief>>(() => {
   const map = new Map<number, TaskBrief>()
   for (const item of props.tasks) map.set(item.id, item)
   if (props.current) map.set(props.current.id, props.current)
+  for (const item of props.predecessors) map.set(item.id, item)
   if (props.predecessor) map.set(props.predecessor.id, props.predecessor)
   return map
 })
 
 function buildNode(task: TaskBrief): TreeNode {
-  const dependency = task.depends_on === null ? null : (taskMap.value.get(task.depends_on) ?? null)
-  const dependencyDone = dependency ? dependency.status === 'verified' : false
+  const dependencyIds =
+    task.depends_on_ids && task.depends_on_ids.length > 0
+      ? task.depends_on_ids
+      : task.depends_on === null
+        ? []
+        : [task.depends_on]
+  const dependencies = dependencyIds
+    .map((id) => taskMap.value.get(id))
+    .filter((item): item is TaskBrief => Boolean(item))
+  const missingCount = dependencyIds.length - dependencies.length
+  const dependencyDone = dependencies.every((item) => item.status === 'verified')
   return {
     task,
-    dependency,
+    dependencyIds,
+    dependencies,
+    dependency: dependencies[0] ?? null,
+    missingCount,
+    hasDependencies: dependencyIds.length > 0,
     dependencyDone,
-    blocked: task.depends_on !== null && !dependencyDone
+    blocked: dependencyIds.length > 0 && (!dependencyDone || missingCount > 0)
   }
 }
 
@@ -66,7 +90,7 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
     <template v-else>
       <!-- 当前任务的依赖链：前置 → 当前 -->
       <div
-        v-if="currentNode && currentNode.task.depends_on !== null"
+        v-if="currentNode && currentNode.hasDependencies"
         class="current-node"
         :class="{ 'is-blocked': currentNode.blocked }"
       >
@@ -78,8 +102,11 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
               <span class="chain-id">#{{ currentNode.dependency.id }}</span>
             </template>
             <template v-else>
-              <span class="chain-title">前置任务 #{{ currentNode.task.depends_on }}（信息缺失）</span>
+              <span class="chain-title">前置任务 #{{ currentNode.dependencyIds[0] }}（信息缺失）</span>
             </template>
+          </span>
+          <span v-if="currentNode.dependencyIds.length > 1" class="chain-extra">
+            等 {{ currentNode.dependencyIds.length }} 项前置
           </span>
           <span class="chain-arrow" aria-hidden="true">→</span>
           <span class="chain-node current">
@@ -90,7 +117,9 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
         <p class="blocked-tip">
           {{
             currentNode.blocked
-              ? '前置任务尚未完成，当前任务暂不可认领/推进'
+              ? currentNode.missingCount > 0
+                ? '部分前置任务信息缺失，当前任务暂不可认领/推进'
+                : '前置任务尚未完成，当前任务暂不可认领/推进'
               : '前置任务已完成，当前任务可以推进'
           }}
         </p>
@@ -111,17 +140,23 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
           </div>
 
           <div class="node-dependency">
-            <template v-if="node.task.depends_on !== null">
+            <template v-if="node.hasDependencies">
               <template v-if="node.dependency">
                 <span class="chain-title">{{ node.dependency.title }} #{{ node.dependency.id }}</span>
+                <span v-if="node.dependencyIds.length > 1" class="chain-extra">
+                  等 {{ node.dependencyIds.length }} 项前置
+                </span>
                 <span class="chain-arrow" aria-hidden="true">→</span>
                 <span class="chain-title">当前 #{{ node.task.id }}</span>
-                <span class="dependency-state" :class="{ done: node.dependencyDone }">
-                  {{ node.dependencyDone ? '前置已完成' : '前置未完成' }}
+                <span class="dependency-state" :class="{ done: node.dependencyDone && node.missingCount === 0 }">
+                  {{ node.dependencyDone && node.missingCount === 0 ? '前置已完成' : '前置未完成' }}
+                </span>
+                <span v-if="node.missingCount > 0" class="dependency-state">
+                  另有 {{ node.missingCount }} 项前置信息缺失，当前不可推进
                 </span>
               </template>
               <span v-else class="dependency-state">
-                前置任务 #{{ node.task.depends_on }}（信息缺失）→ 当前不可推进
+                前置任务 #{{ node.dependencyIds[0] }}（信息缺失）→ 当前不可推进
               </span>
             </template>
             <span v-else class="dependency-state done">无前置依赖</span>
@@ -187,6 +222,11 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
 }
 
 .chain-id {
+  font-size: 13px;
+  color: var(--app-text-muted);
+}
+
+.chain-extra {
   font-size: 13px;
   color: var(--app-text-muted);
 }

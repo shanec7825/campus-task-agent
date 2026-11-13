@@ -192,6 +192,8 @@ class TaskCreate(BaseModel):
     claim_type: Literal["open", "assign"] = "open"
     assignee_id: int | None = None
     depends_on: int | None = None
+    # 多前置依赖（`C-TASK-GRAPH@1`）：显式提供时覆盖全部依赖边
+    depends_on_ids: list[int] | None = None
     sop_guide: str | None = None
     style_note: str | None = None
     extras: dict[str, Any] = Field(default_factory=dict)
@@ -217,6 +219,8 @@ class TaskUpdate(BaseModel):
     claim_type: Literal["open", "assign"] | None = None
     assignee_id: int | None = None
     depends_on: int | None = None
+    # 显式提供时整体替换依赖边；省略 = 不修改（`C-TASK-GRAPH@1`）
+    depends_on_ids: list[int] | None = None
     sop_guide: str | None = None
     style_note: str | None = None
     extras: dict[str, Any] | None = None
@@ -237,6 +241,37 @@ class TaskBrief(BaseModel):
     parent_id: int | None = None
     activity_id: int | None = None
     org_id: int | None = None
+    depends_on_ids: list[int] = Field(default_factory=list)
+
+
+class TaskGraphNode(BaseModel):
+    """共用图谱节点（`C-ACTIVITY-GRAPH@1`）：时间字段缺失保持 ``None``，不补值。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    status: str
+    parent_id: int | None = None
+    start_time: str | None = None
+    deadline: str | None = None
+    assignee_names: list[str] = Field(default_factory=list)
+
+
+class TaskGraphEdge(BaseModel):
+    """依赖边：``from_id`` 为前置，``to_id`` 为当前任务。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    from_id: int
+    to_id: int
+
+
+class TaskGraphOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    nodes: list[TaskGraphNode] = Field(default_factory=list)
+    edges: list[TaskGraphEdge] = Field(default_factory=list)
 
 
 class ProgressOut(BaseModel):
@@ -290,6 +325,7 @@ class TaskOut(BaseModel):
     publisher_id: int
     assignee_id: int | None = None
     depends_on: int | None = None
+    depends_on_ids: list[int] = Field(default_factory=list)
     sop_guide: str | None = None
     style_note: str | None = None
     extras: dict[str, Any] = Field(default_factory=dict)
@@ -312,6 +348,11 @@ class TaskDetailOut(TaskOut):
     progress: list[ProgressOut] = Field(default_factory=list)
     activity_title: str | None = None
     parent_title: str | None = None
+    # 直接前置 / 直接后继（只含当前用户可见任务，`C-ACTIVITY-GRAPH@1`）
+    dependencies: list[TaskBrief] = Field(default_factory=list)
+    dependents: list[TaskBrief] = Field(default_factory=list)
+    # 局部图谱：当前任务 + 直接前置 + 直接后继，与活动详情共用同一结构
+    graph: TaskGraphOut = Field(default_factory=TaskGraphOut)
 
 
 # --------------------------------------------------------------------------- #
@@ -380,6 +421,7 @@ class ActivityListOut(BaseModel):
 
 class ActivityDetailOut(ActivityOut):
     tasks: list[ActivityTaskNode] = Field(default_factory=list)
+    graph: TaskGraphOut = Field(default_factory=TaskGraphOut)
 
 
 class ActivityCreate(BaseModel):
@@ -825,6 +867,9 @@ __all__ = [
     "TaskCreate",
     "TaskUpdate",
     "TaskBrief",
+    "TaskGraphNode",
+    "TaskGraphEdge",
+    "TaskGraphOut",
     "MemberOut",
     "TaskOut",
     "TaskDetailOut",
@@ -833,6 +878,7 @@ __all__ = [
     "ActivityTaskNode",
     "ActivityOut",
     "ActivityListOut",
+
     "ActivityDetailOut",
     "ActivityCreate",
     "ApplicationOut",

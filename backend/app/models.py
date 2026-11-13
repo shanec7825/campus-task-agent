@@ -1,9 +1,9 @@
-"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1`）。
+"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1` / `C-TASK-GRAPH@1`）。
 
-18 张表：users / tasks / checkins / credit_logs / notifications /
+19 张表：users / tasks / checkins / credit_logs / notifications /
 kb_entries / parse_sessions / progress_logs / task_applications / task_members /
 activities / organizations / org_members / invitations / user_sessions /
-password_resets / ai_conversations / ai_messages。
+password_resets / ai_conversations / ai_messages / task_dependencies。
 
 说明：Demo 期不建数据库级外键约束，仅做应用层校验（PLAN 2.2.1 A：
 「Demo 期不建数据库级外键，应用层校验」）；JSON 列落库为 SQLite TEXT，
@@ -83,6 +83,29 @@ class Task(Base):
     extras: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
     reminder_rule: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     credit_reward: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0, server_default=text("0"))
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
+class TaskDependency(Base):
+    """任务前置依赖边（契约 `C-TASK-GRAPH@1`）。
+
+    - ``task_id`` 依赖 ``depends_on_id``；一条边只表达先后依赖，不表达父子分工。
+    - ``UNIQUE(task_id, depends_on_id)``：同一任务对同一前置只保留一条边。
+    - 旧列 ``tasks.depends_on`` 仍作为「首个前置」的兼容索引；读取时取二者并集，
+      写入统一经 ``services.task_graph_service``，禁止在路由内直接写本表。
+    """
+
+    __tablename__ = "task_dependencies"
+    __table_args__ = (
+        UniqueConstraint("task_id", "depends_on_id", name="uq_task_dependencies_task_dep"),
+        Index("ix_task_dependencies_depends_on_id", "depends_on_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    depends_on_id: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[str] = mapped_column(
         Text, nullable=False, default=_now_local, server_default=_NOW_SQL
     )
@@ -399,6 +422,7 @@ __all__ = [
     "ProgressLog",
     "TaskApplication",
     "TaskMember",
+    "TaskDependency",
     "Activity",
     "Organization",
     "OrgMember",

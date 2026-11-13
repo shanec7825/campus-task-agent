@@ -82,7 +82,9 @@ export function applyBlockReason(task: TaskItem, currentUserId: number | null): 
   if (task.my_application_status === 'approved') return '报名已通过'
   if (task.quota !== null && task.approved_count >= task.quota) return '名额已满'
   if (currentUserId !== null && task.publisher_id === currentUserId) return '自己发布的任务不可报名'
-  if (task.depends_on !== null && !task.is_claimable) return '前置任务尚未完成'
+  // 多前置（`C-TASK-GRAPH@1`）：边表 ∪ 旧字段任一非空即视为存在前置
+  const hasDependencies = (task.depends_on_ids?.length ?? 0) > 0 || task.depends_on !== null
+  if (hasDependencies && !task.is_claimable) return '前置任务尚未完成'
   return ''
 }
 

@@ -19,6 +19,7 @@ export function listTasks(p?: {
   status?: string
   scope?: 'all' | 'mine'
   include_sub?: boolean
+  activity_id?: number
 }): Promise<TaskListResult> {
   return request<TaskListResult>('GET', '/api/tasks', undefined, p)
 }

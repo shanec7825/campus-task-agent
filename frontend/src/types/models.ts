@@ -95,6 +95,31 @@ export interface TaskBrief {
   parent_id: number | null
   /** 所属活动 id；`null` 表示独立任务 */
   activity_id: number | null
+  /** 多前置 id 集合；旧接口缺省时按 `depends_on` 兼容 */
+  depends_on_ids?: number[]
+}
+
+/** 共用图谱节点（`C-ACTIVITY-GRAPH@1`） */
+export interface TaskGraphNode {
+  id: number
+  title: string
+  status: string
+  parent_id: number | null
+  start_time: string | null
+  deadline: string | null
+  assignee_names: string[]
+}
+
+/** 依赖边：`from_id` 为前置，`to_id` 为当前任务 */
+export interface TaskGraphEdge {
+  from_id: number
+  to_id: number
+}
+
+/** 活动与任务详情共用的图谱数据（服务端唯一来源） */
+export interface TaskGraph {
+  nodes: TaskGraphNode[]
+  edges: TaskGraphEdge[]
 }
 
 /** 进度记录（`ProgressOut`） */
@@ -124,7 +149,10 @@ export interface TaskItem {
   claim_type: string
   publisher_id: number
   assignee_id: number | null
+  /** 旧单前置兼容字段：等于 `depends_on_ids` 首项（无前置为 `null`） */
   depends_on: number | null
+  /** 多前置依赖 id（`C-TASK-GRAPH@1`，服务端边表 ∪ 旧字段去重后的结果） */
+  depends_on_ids: number[]
   sop_guide: string | null
   style_note: string | null
   extras: Record<string, unknown>
@@ -168,6 +196,11 @@ export interface TaskDetail extends TaskItem {
   activity_title: string | null
   /** 父任务标题；无父任务为 `null` */
   parent_title: string | null
+  /** 直接前置 / 直接后继：只含当前用户可见任务 */
+  dependencies: TaskBrief[]
+  dependents: TaskBrief[]
+  /** 局部图谱：当前任务 + 直接前置 + 直接后继 */
+  graph: TaskGraph
 }
 
 // --------------------------------------------------------------------------- //
@@ -223,6 +256,8 @@ export interface Activity {
 /** 活动详情（`ActivityDetailOut`） */
 export interface ActivityDetail extends Activity {
   tasks: ActivityTaskNode[]
+  /** 活动全量依赖与时间图谱（只含当前用户可见任务） */
+  graph: TaskGraph
 }
 
 /** 活动列表（`GET /api/activities`） */
@@ -293,6 +328,8 @@ export interface TaskCreatePayload {
   claim_type?: 'open' | 'assign'
   assignee_id?: number | null
   depends_on?: number | null
+  /** 多前置依赖；显式提供时整体替换（发布时用于一次声明多个前置） */
+  depends_on_ids?: number[] | null
   sop_guide?: string | null
   style_note?: string | null
   extras?: Record<string, unknown>

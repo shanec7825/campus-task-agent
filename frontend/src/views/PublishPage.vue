@@ -32,13 +32,13 @@ function parseActivityId(raw: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
-/** 由活动详情进入时的活动归属；非空时默认手动模式（AI 模式本轮不带活动归属） */
+/** 由活动详情进入时的活动归属；两种发布模式都会携带该归属 */
 const activityId = computed<number | null>(() => parseActivityId(route.query.activity))
 
 /** 默认智能模式，手动为兜底：AI 不可用时用户仍可切到手动模式发布 */
 const activeTab = ref<PublishMode>('ai')
 
-/** 活动入口进入时默认手动模式（AI 模式本轮不带活动归属） */
+/** 活动入口进入时默认手动模式；切到 AI 模式仍保留活动归属 */
 if (activityId.value !== null) activeTab.value = 'manual'
 
 /** AI 模式是否有未发布的草稿内容（用于 Tab 徽标与切换提醒） */
@@ -124,7 +124,16 @@ const mockMode = computed<boolean>(() => draft.mockMode)
     </div>
 
     <div v-show="activeTab === 'ai'" class="mode-panel" role="tabpanel" aria-label="AI 智能模式">
-      <AiPanel />
+      <el-alert
+        v-if="activityId !== null"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="`任务将归属活动 #${activityId}`"
+        description="手动与 AI 两种模式都会保留该活动归属；切换模式不会丢失。"
+        class="mode-panel__notice"
+      />
+      <AiPanel :activity-id="activityId" />
     </div>
   </section>
 </template>

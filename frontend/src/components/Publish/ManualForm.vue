@@ -10,14 +10,15 @@
  *    「带入草稿」通过任务详情拉取结构化字段，**只覆盖时间/地点/名额，不覆盖标题**；
  * 5. 发布成功 → `createTask` → 跳转 `/tasks/:id`；失败保留表单内容并提示原因。
  */
-import { reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import { ApiError } from '../../api/client'
 import { findSimilar } from '../../api/kb'
-import { createTask, getTask } from '../../api/tasks'
-import type { SimilarItem, TaskCreatePayload } from '../../types/models'
+import { createTask, getTask, listTasks } from '../../api/tasks'
+import type { SimilarItem, TaskCreatePayload, TaskItem } from '../../types/models'
+import TaskContentSections from '../task/TaskContentSections.vue'
 import SimilarTip from './SimilarTip.vue'
 
 /** 动态扩展项行 */
@@ -50,6 +51,61 @@ const form = reactive({
 const extras = ref<ExtraRow[]>([])
 const submitting = ref(false)
 
+/** 同活动前置任务（仅活动入口下加载；加载失败不阻塞发布） */
+const dependencyOptions = ref<TaskItem[]>([])
+const selectedDependencies = ref<number[]>([])
+const dependencyLoading = ref(false)
+const dependencyError = ref('')
+
+/** 任务内容区块（与详情页共用同一字段语义） */
+const contentModel = computed(() => ({
+  description: form.description.trim() === '' ? null : form.description,
+  start_time: form.start_time,
+  deadline: form.deadline,
+  location: form.location.trim() === '' ? null : form.location,
+  quota: form.quota
+}))
+
+type ContentField = 'description' | 'start_time' | 'deadline' | 'location' | 'quota'
+
+function onContentField(key: ContentField, value: string | number | null): void {
+  if (key === 'quota') {
+    form.quota = typeof value === 'number' && Number.isFinite(value) ? value : null
+    return
+  }
+  const text = typeof value === 'string' ? value : ''
+  if (key === 'description') form.description = text
+  else if (key === 'location') form.location = text
+  else if (key === 'start_time') form.start_time = text !== '' ? text : null
+  else if (key === 'deadline') form.deadline = text !== '' ? text : null
+}
+
+/** 活动入口下加载同活动第一层任务，作为可多选前置 */
+async function loadDependencyOptions(): Promise<void> {
+  selectedDependencies.value = []
+  dependencyOptions.value = []
+  dependencyError.value = ''
+  const activityId = props.activityId
+  if (activityId === null || !Number.isFinite(activityId) || activityId <= 0) return
+  dependencyLoading.value = true
+  try {
+    const result = await listTasks({ activity_id: activityId })
+    dependencyOptions.value = result.items.filter(
+      (item) => item.parent_id === null && item.activity_id === activityId && item.status !== 'cancelled'
+    )
+  } catch {
+    dependencyError.value = '无法加载同活动任务，本次可不设置前置依赖继续发布。'
+  } finally {
+    dependencyLoading.value = false
+  }
+}
+
+watch(() => props.activityId, () => void loadDependencyOptions())
+
+onMounted(() => {
+  void loadDependencyOptions()
+})
+
 /** 相似任务提示（仅在 `items[0].similarity > threshold` 时有值） */
 const similarItem = ref<SimilarItem | null>(null)
 const similarThreshold = ref(0.6)
@@ -78,17 +134,6 @@ function errorMessage(cause: unknown): string {
 }
 
 /** el-date-picker 的 modelValue 类型较宽，这里统一窄化为字符串 */
-function onStartTimeChange(value: unknown): void {
-  form.start_time = typeof value === 'string' && value !== '' ? value : null
-}
-
-function onDeadlineChange(value: unknown): void {
-  form.deadline = typeof value === 'string' && value !== '' ? value : null
-}
-
-function onQuotaChange(value: number | undefined): void {
-  form.quota = typeof value === 'number' && Number.isFinite(value) ? value : null
-}
 
 function onCreditChange(value: number | undefined): void {
   form.credit_reward = typeof value === 'number' && Number.isFinite(value) ? value : 0
@@ -174,6 +219,7 @@ function resetForm(): void {
   form.reminder_day_of = true
   form.reminder_on_overdue = true
   extras.value = []
+  selectedDependencies.value = []
   similarItem.value = null
   lastSimilarQuery = ''
 }
@@ -218,6 +264,10 @@ async function handleSubmit(): Promise<void> {
   // 仅活动入口进入时携带归属；独立任务不发送该键（C-FE-ACTIVITY-PUBLISH@1）
   if (props.activityId !== null && Number.isFinite(props.activityId) && props.activityId > 0) {
     payload.activity_id = props.activityId
+  }
+  // 多前置（`C-TASK-GRAPH@1`）：只在确有选择时发送，避免空数组覆盖既有依赖
+  if (selectedDependencies.value.length > 0) {
+    payload.depends_on_ids = [...selectedDependencies.value]
   }
 
   submitting.value = true
@@ -264,54 +314,35 @@ async function handleSubmit(): Promise<void> {
         />
       </el-form-item>
 
-      <div class="manual-form__grid">
-        <el-form-item label="开始时间">
-          <el-date-picker
-            :model-value="form.start_time ?? ''"
-            type="datetime"
-            value-format="YYYY-MM-DD HH:mm:ss"
-            placeholder="选择开始时间"
-            class="manual-form__picker"
-            @update:model-value="onStartTimeChange"
-          />
-        </el-form-item>
+      <TaskContentSections
+        :model="contentModel"
+        editable
+        @update:field="onContentField"
+      />
 
-        <el-form-item label="截止时间">
-          <el-date-picker
-            :model-value="form.deadline ?? ''"
-            type="datetime"
-            value-format="YYYY-MM-DD HH:mm:ss"
-            placeholder="选择截止时间"
-            class="manual-form__picker"
-            @update:model-value="onDeadlineChange"
-          />
-        </el-form-item>
-
-        <el-form-item label="地点">
-          <el-input v-model="form.location" maxlength="60" placeholder="例如：教三 302" />
-        </el-form-item>
-
-        <el-form-item label="需求人数">
-          <el-input-number
-            :model-value="form.quota ?? undefined"
-            :min="1"
-            :max="999"
-            controls-position="right"
-            placeholder="可选"
-            @change="onQuotaChange"
-          />
-        </el-form-item>
-      </div>
-
-      <el-form-item label="任务描述">
-        <el-input
-          v-model="form.description"
-          type="textarea"
-          :rows="4"
-          maxlength="2000"
-          show-word-limit
-          placeholder="任务背景、内容、注意事项…"
-        />
+      <el-form-item v-if="props.activityId !== null" label="前置依赖（可多选）">
+        <div class="manual-form__dependencies">
+          <el-select
+            v-model="selectedDependencies"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            :loading="dependencyLoading"
+            placeholder="选择同活动任务；全部完成后当前任务才可报名"
+            class="manual-form__dependency-select"
+          >
+            <el-option
+              v-for="item in dependencyOptions"
+              :key="item.id"
+              :label="item.title"
+              :value="item.id"
+            />
+          </el-select>
+          <p class="manual-form__tip">
+            可多选；前置未全部完成时报名返回「前置任务尚未完成」。跨活动任务不会出现在这里。
+          </p>
+          <p v-if="dependencyError" class="manual-form__dependency-error">{{ dependencyError }}</p>
+        </div>
       </el-form-item>
 
       <el-form-item label="完成要求">
@@ -409,6 +440,24 @@ async function handleSubmit(): Promise<void> {
   flex-direction: column;
   gap: 8px;
   width: 100%;
+}
+
+.manual-form__dependencies {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.manual-form__dependency-select {
+  width: 100%;
+}
+
+.manual-form__dependency-error {
+  margin: 0;
+  font-size: var(--app-font-aux-lg);
+  color: var(--el-color-danger);
+  word-break: break-word;
 }
 
 .manual-form__extra-row {

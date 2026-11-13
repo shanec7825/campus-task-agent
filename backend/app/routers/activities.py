@@ -22,6 +22,7 @@ from app.errors import ApiError, ok
 from app.models import Activity, Task, User
 from app.schemas import ActivityCreate, ActivityDetailOut, ActivityListOut, ActivityOut
 from app.services import activity_service, authz
+from app.services import task_graph_service
 
 router = APIRouter(
     prefix="/api/activities", tags=["activities"], dependencies=[Depends(require_csrf)]
@@ -102,8 +103,12 @@ def _activity_payload(
 
 def _visible_activity_tasks(
     db: Session, activity: Activity, user: User
-) -> list[dict[str, Any]]:
-    """活动任务树剔除不可见任务（父任务不可见时整棵子树不出现）。"""
+) -> tuple[list[dict[str, Any]], list[Task]]:
+    """活动任务树剔除不可见任务（父任务不可见时整棵子树不出现）。
+
+    返回 ``(visible_tree, visible_task_objects)``；后者供共用图谱使用，避免二次查询且
+    保证图与列表来自同一可见集合。
+    """
     tree = activity_service.build_activity_tree(db, activity)
     node_ids: set[int] = set()
     for node in tree:
@@ -116,17 +121,22 @@ def _visible_activity_tasks(
         tasks = {int(task.id): task for task in rows}
 
     visible_tree: list[dict[str, Any]] = []
+    visible_objects: list[Task] = []
     for node in tree:
         task = tasks.get(int(node["id"]))
         if task is None or not authz.can_view_task(db, user, task):
             continue
-        node["children"] = [
-            child
-            for child in (node.get("children") or [])
-            if int(child["id"]) in tasks and authz.can_view_task(db, user, tasks[int(child["id"])])
-        ]
+        visible_children: list[dict[str, Any]] = []
+        for child in node.get("children") or []:
+            child_task = tasks.get(int(child["id"]))
+            if child_task is None or not authz.can_view_task(db, user, child_task):
+                continue
+            visible_children.append(child)
+            visible_objects.append(child_task)
+        node["children"] = visible_children
         visible_tree.append(node)
-    return visible_tree
+        visible_objects.append(task)
+    return visible_tree, visible_objects
 
 
 @router.get("")
@@ -170,7 +180,12 @@ def get_activity(
     authz.require_activity_view(db, current_user, activity)
     payload = _activity_payload(db, activity)
     # 树中只保留可见任务；``progress`` 的服务端统计口径不变
-    payload["tasks"] = _visible_activity_tasks(db, activity, current_user)
+    visible_tree, visible_tasks = _visible_activity_tasks(db, activity, current_user)
+    payload["tasks"] = visible_tree
+    # 共用图谱（`C-ACTIVITY-GRAPH@1`）：节点与边只来自同一可见任务集合
+    payload["graph"] = task_graph_service.build_graph_payload(
+        db, visible_tasks, {int(task.id) for task in visible_tasks}
+    )
     return ok(ActivityDetailOut.model_validate(payload).model_dump())
 
 

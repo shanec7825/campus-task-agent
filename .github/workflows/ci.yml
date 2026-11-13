@@ -43,6 +43,8 @@ jobs:
         run: python -m pytest tests/backend/test_ai_console.py -q
       - name: Run AIW-02 activity scope suite
         run: python -m pytest tests/backend/test_aiw02_activity_scope.py -q
+      - name: Run AIW-03 task graph suite
+        run: python -m pytest tests/backend/test_task_graph.py -q
 
   backend-integration:
     name: Backend API and SSE integration

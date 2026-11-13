@@ -49,6 +49,7 @@ from app.schemas import (
     TaskBrief,
 )
 from app.services import application_service, authz, member_service, notify_service
+from app.services import task_graph_service
 
 logger = logging.getLogger(__name__)
 
@@ -171,12 +172,22 @@ def create_application(db: Session, task: Task, current_user: User) -> dict[str,
     if str(task.status) not in APPLY_ALLOWED_STATUSES:
         raise ApiError(ERR_CONFLICT, "任务当前状态不允许报名")
 
-    # 4. 前置依赖必须已完成
-    if task.depends_on is not None:
-        dependency = db.get(Task, int(task.depends_on))
-        if dependency is None or str(dependency.status) != "verified":
-            dep_title = dependency.title if dependency is not None else "未知任务"
-            raise ApiError(ERR_DEPENDENCY, f"前置任务尚未完成：《{dep_title}》")
+    # 4. 前置依赖必须全部完成（多前置，`C-TASK-GRAPH@1`；缺失前置视为未完成）
+    pending = task_graph_service.unverified_dependencies(db, task)
+    if pending:
+        visible_titles: list[str] = []
+        hidden_count = 0
+        for item in pending:
+            dependency = db.get(Task, int(item["id"]))
+            if dependency is not None and authz.can_view_task(db, current_user, dependency):
+                visible_titles.append(str(item["title"]))
+            else:
+                # 不可见前置不泄露标题与存在性，只给出数量（审查 I3）
+                hidden_count += 1
+        parts = [f"《{title}》" for title in visible_titles]
+        if hidden_count:
+            parts.append(f"另有 {hidden_count} 个前置不可见")
+        raise ApiError(ERR_DEPENDENCY, f"前置任务尚未完成：{'、'.join(parts)}")
 
     # 5. 同一用户已有 pending / approved 记录 ⇒ 视为已报名
     existing = _find_application(db, int(task.id), int(current_user.id))
@@ -445,16 +456,19 @@ def my_applications(
     task_map = {int(task.id): task for task in tasks}
     names = _user_names(db, [int(row.user_id) for row in rows])
 
+    brief_dependency_ids = task_graph_service.dependency_ids_bulk(db, list(task_map.values()))
     items: list[dict[str, Any]] = []
     for row in rows:
         task = task_map.get(int(row.task_id))
         if task is None:
             # 任务已被删除的报名直接丢弃（契约：不返回 task:null）
             continue
+        brief = TaskBrief.model_validate(task).model_dump()
+        brief["depends_on_ids"] = brief_dependency_ids.get(int(task.id), [])
         items.append(
             ApplicationItemOut(
                 application=_application_out(row, names.get(int(row.user_id), "")),
-                task=TaskBrief.model_validate(task),
+                task=TaskBrief.model_validate(brief),
             ).model_dump()
         )
     return ok({"items": items})

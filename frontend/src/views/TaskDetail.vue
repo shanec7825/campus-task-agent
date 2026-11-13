@@ -15,6 +15,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { applyTask, myApplications, withdrawApply } from '../api/applications'
+import { getActivity } from '../api/activities'
 import { ApiError } from '../api/client'
 import { checkin, myCheckins } from '../api/checkin'
 import { getTask, submitTask, updateProgress } from '../api/tasks'
@@ -25,6 +26,8 @@ import LoadingState from '../components/common/LoadingState.vue'
 import SopSteps from '../components/task/SopSteps.vue'
 import StatusTag from '../components/task/StatusTag.vue'
 import SubTaskTree from '../components/task/SubTaskTree.vue'
+import TaskContentSections from '../components/task/TaskContentSections.vue'
+import TaskGraph from '../components/task/TaskGraph.vue'
 import {
   applicationStatusMeta,
   applyBlockReason,
@@ -34,7 +37,14 @@ import {
   quotaText
 } from '../components/task/TaskCard.vue'
 import { useUserStore } from '../stores/user'
-import type { ApplicationStatus, MemberStatus, TaskBrief, TaskDetail, TaskMember } from '../types/models'
+import type {
+  ApplicationStatus,
+  MemberStatus,
+  TaskBrief,
+  TaskDetail,
+  TaskGraph as TaskGraphModel,
+  TaskMember
+} from '../types/models'
 
 const props = defineProps<{ id: string }>()
 
@@ -45,12 +55,10 @@ const userStore = useUserStore()
 const NOT_MEMBER_HINT = '仅已通过审核的成员可操作'
 /** 任务已取消时的统一提示（后端对已取消任务的成员操作返回 4090） */
 const CANCELLED_HINT = '任务已取消，无法继续操作'
-/** 超过该长度或行数的任务要求默认折叠，避免详情页首屏被长文本占满 */
-const DESCRIPTION_PREVIEW_LIMIT = 240
-const DESCRIPTION_PREVIEW_LINES = 8
+
 
 const task = ref<TaskDetail | null>(null)
-const predecessor = ref<TaskBrief | null>(null)
+
 const loading = ref(false)
 const error = ref('')
 const checkinStateLoading = ref(false)
@@ -62,7 +70,7 @@ const submitLoading = ref(false)
 const progressVisible = ref(false)
 const progressText = ref('')
 const progressLoading = ref(false)
-const descriptionExpanded = ref(false)
+
 /** 最近一次被拒报名的原因（仅 rejected 状态查询，失败不阻塞详情） */
 const rejectReason = ref('')
 const isMobile = ref(false)
@@ -120,11 +128,15 @@ const myApplyLabel = computed<string>(() =>
 const myExecLabel = computed<string>(() =>
   myMemberStatus.value ? memberStatusMeta(myMemberStatus.value).text : '非任务成员'
 )
-const descriptionText = computed<string>(() => task.value?.description || '暂无任务描述')
-const descriptionIsLong = computed<boolean>(() => {
-  const text = descriptionText.value
-  return text.length > DESCRIPTION_PREVIEW_LIMIT || text.split('\n').length > DESCRIPTION_PREVIEW_LINES
-})
+
+/** 与发布页共享的内容区块（`C-FE-PUBLISH-CONTENT@1`） */
+const contentModel = computed(() => ({
+  description: task.value?.description ?? null,
+  start_time: task.value?.start_time ?? null,
+  deadline: task.value?.deadline ?? null,
+  location: task.value?.location ?? null,
+  quota: task.value?.quota ?? null
+}))
 /** 窄屏下信息表改为单列，避免标签与值挤在一起 */
 const infoColumns = computed<number>(() => (isMobile.value ? 1 : 2))
 
@@ -228,11 +240,56 @@ const currentBrief = computed<TaskBrief | null>(() => {
     depends_on: task.value.depends_on,
     quota: task.value.quota,
     parent_id: task.value.parent_id,
-    activity_id: task.value.activity_id
+    activity_id: task.value.activity_id,
+    depends_on_ids: task.value.depends_on_ids
   }
 })
 
-const predecessorDone = computed<boolean>(() => predecessor.value?.status === 'verified')
+/** 多前置（`C-TASK-GRAPH@1`）：全部完成才解锁报名 */
+const hiddenDependencyCount = computed<number>(() => {
+  if (!task.value) return 0
+  const total = task.value.depends_on_ids?.length ?? 0
+  const visible = task.value.dependencies?.length ?? 0
+  return Math.max(0, total - visible)
+})
+const dependenciesDone = computed<boolean>(() => {
+  if (!task.value || hiddenDependencyCount.value > 0) return false
+  return (task.value.dependencies ?? []).every((item) => item.status === 'verified')
+})
+/** 子任务树沿用「首个前置」展示；完整的前置 / 后继由局部图谱承担 */
+const primaryPredecessor = computed<TaskBrief | null>(
+  () => task.value?.dependencies[0] ?? null
+)
+
+/** 活动全景按需加载（默认只显示当前任务局部图） */
+const showActivityGraph = ref(false)
+const activityGraph = ref<TaskGraphModel | null>(null)
+const activityGraphLoading = ref(false)
+const activityGraphError = ref('')
+
+async function toggleActivityGraph(): Promise<void> {
+  const activityId = task.value?.activity_id
+  if (activityId === null || activityId === undefined) return
+  if (showActivityGraph.value) {
+    showActivityGraph.value = false
+    return
+  }
+  if (activityGraph.value) {
+    showActivityGraph.value = true
+    return
+  }
+  activityGraphLoading.value = true
+  activityGraphError.value = ''
+  try {
+    const detail = await getActivity(activityId)
+    activityGraph.value = detail.graph
+    showActivityGraph.value = true
+  } catch (err) {
+    activityGraphError.value = errorMessage(err)
+  } finally {
+    activityGraphLoading.value = false
+  }
+}
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -304,25 +361,10 @@ async function load(): Promise<void> {
   try {
     const detail = await getTask(taskId.value)
     task.value = detail
-    predecessor.value = null
-    if (detail.depends_on !== null) {
-      try {
-        const dependency = await getTask(detail.depends_on)
-        predecessor.value = {
-          id: dependency.id,
-          title: dependency.title,
-          status: dependency.status,
-          assignee_id: dependency.assignee_id,
-          depends_on: dependency.depends_on,
-          quota: dependency.quota,
-          parent_id: dependency.parent_id,
-          activity_id: dependency.activity_id
-        }
-      } catch {
-        // 前置任务信息缺失时由 SubTaskTree 展示「信息缺失」，不影响主流程
-        predecessor.value = null
-      }
-    }
+    // 切换任务时丢弃上一个任务的活动全景缓存
+    activityGraph.value = null
+    showActivityGraph.value = false
+    activityGraphError.value = ''
     await loadCheckinState()
     await loadRejectReason()
   } catch (err) {
@@ -492,7 +534,7 @@ onBeforeUnmount(() => {
 watch(
   () => props.id,
   () => {
-    descriptionExpanded.value = false
+
     void load()
   }
 )
@@ -706,22 +748,7 @@ watch(
           class="inline-alert"
         />
 
-        <div class="desc-block">
-          <span class="block-label">任务要求</span>
-          <p class="description" :class="{ 'is-collapsed': descriptionIsLong && !descriptionExpanded }">
-            {{ descriptionText }}
-          </p>
-          <el-button
-            v-if="descriptionIsLong"
-            text
-            type="primary"
-            size="small"
-            class="expand-toggle"
-            @click="descriptionExpanded = !descriptionExpanded"
-          >
-            {{ descriptionExpanded ? '收起' : '展开全部' }}
-          </el-button>
-        </div>
+        <TaskContentSections :model="contentModel" />
 
         <el-descriptions :column="infoColumns" border size="small" class="info-table">
           <el-descriptions-item label="发布者">{{ task.publisher_name || '—' }}</el-descriptions-item>
@@ -730,9 +757,6 @@ watch(
             已通过 {{ task.approved_count }}/{{ task.quota === null ? '不限' : task.quota }}
           </el-descriptions-item>
           <el-descriptions-item label="待审批报名">{{ task.applied_count }} 人</el-descriptions-item>
-          <el-descriptions-item label="开始时间">{{ formatDeadline(task.start_time) }}</el-descriptions-item>
-          <el-descriptions-item label="截止时间">{{ formatDeadline(task.deadline) }}</el-descriptions-item>
-          <el-descriptions-item label="地点">{{ task.location || '—' }}</el-descriptions-item>
           <el-descriptions-item label="志愿时长">
             {{ task.volunteer_hours === null ? '—' : `${task.volunteer_hours} 小时` }}
           </el-descriptions-item>
@@ -860,34 +884,56 @@ watch(
       <el-card shadow="never" class="app-section-card">
         <template #header>
           <div class="card-header">
-            <span class="card-title">前置依赖</span>
-            <span v-if="task.depends_on === null" class="header-hint">无前置依赖，可独立推进</span>
-            <span v-else class="header-hint">
-              {{ predecessorDone ? '前置任务已完成' : '前置任务未完成，当前任务暂不可推进' }}
+            <span class="card-title">前置依赖（{{ task.depends_on_ids.length }}）</span>
+            <span class="header-hint">
+              <template v-if="task.depends_on_ids.length === 0">无前置依赖，可独立推进</template>
+              <template v-else-if="hiddenDependencyCount > 0">
+                其中 {{ hiddenDependencyCount }} 项前置当前不可见；报名状态以按钮提示为准
+              </template>
+              <template v-else>
+                {{ dependenciesDone ? '全部前置已完成' : '仍有前置未完成，当前任务暂不可报名' }}
+              </template>
             </span>
           </div>
         </template>
-        <div v-if="task.depends_on === null" class="dependency-empty">
+        <div v-if="task.depends_on_ids.length === 0" class="dependency-empty">
           当前任务未设置前置任务，不依赖其他任务。
         </div>
-        <div v-else class="dependency-line">
-          <span class="dependency-node">
-            <template v-if="predecessor">
-              <StatusTag :status="predecessor.status" size="small" />
-              <el-link type="primary" :underline="false" @click="goDetail(predecessor.id)">
-                {{ predecessor.title }} #{{ predecessor.id }}
-              </el-link>
-            </template>
-            <template v-else>
-              <span class="dependency-missing">前置任务 #{{ task.depends_on }}（信息缺失）</span>
-            </template>
-          </span>
-          <span class="dependency-arrow" aria-hidden="true">→</span>
-          <span class="dependency-node">
-            <StatusTag :status="task.status" size="small" />
-            <span>当前任务：{{ task.title }}</span>
-          </span>
+        <div v-else-if="hiddenDependencyCount > 0" class="dependency-empty">
+          有 {{ hiddenDependencyCount }} 个前置任务当前不可见；这不改变「全部前置完成才可报名」的规则。
         </div>
+        <ul v-if="task.dependencies.length > 0" class="dependency-list">
+          <li v-for="dep in task.dependencies" :key="dep.id" class="dependency-item">
+            <StatusTag :status="dep.status" size="small" />
+            <el-link type="primary" :underline="false" @click="goDetail(dep.id)">
+              {{ dep.title }} #{{ dep.id }}
+            </el-link>
+            <span class="dependency-arrow" aria-hidden="true">→</span>
+            <span>当前任务：{{ task.title }}</span>
+          </li>
+        </ul>
+
+        <!-- 局部图：当前任务 + 直接前置 + 直接后继（与活动详情共用同一组件） -->
+        <TaskGraph
+          :nodes="task.graph.nodes"
+          :edges="task.graph.edges"
+          mode="local"
+          :current-id="task.id"
+        />
+
+        <div v-if="task.activity_id !== null" class="graph-actions">
+          <el-button size="small" :loading="activityGraphLoading" @click="toggleActivityGraph">
+            {{ showActivityGraph ? '收起同活动全景' : '查看同活动全景' }}
+          </el-button>
+          <span v-if="activityGraphError" class="dependency-missing">{{ activityGraphError }}</span>
+        </div>
+        <TaskGraph
+          v-if="showActivityGraph && activityGraph"
+          :nodes="activityGraph.nodes"
+          :edges="activityGraph.edges"
+          mode="full"
+          :current-id="task.id"
+        />
       </el-card>
 
       <el-card shadow="never" class="app-section-card">
@@ -901,7 +947,8 @@ watch(
         <SubTaskTree
           :tasks="subtasks"
           :current="currentBrief"
-          :predecessor="predecessor"
+          :predecessors="task ? task.dependencies : []"
+          :predecessor="primaryPredecessor"
           @open="goDetail"
         />
       </el-card>
@@ -1322,6 +1369,37 @@ watch(
 .dependency-empty {
   font-size: 14px;
   color: var(--app-text-muted);
+}
+
+.dependency-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dependency-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+  font-size: 14px;
+  color: var(--app-text);
+  word-break: break-word;
+}
+
+.graph-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
 }
 
 .dependency-line {
