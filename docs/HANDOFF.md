@@ -6,7 +6,7 @@
 
 - 分支：`main`。
 - 本轮开工基线：`54440b0d2133b6a4277a42432546fa68b40511e1`（stage21 文档回填）。
-- 本轮改动：AIW-04「资料与成果审核」已实现并完成本地验证与三轮独立审查；**提交哈希与 CI 结果待回填**。
+- 本轮改动：AIW-04「资料与成果审核」已提交 `a3632cebde608ff877cd1310a287337baa93939f` 并推送 `origin/main`（详见第 2 节）；对应 CI run 43505516305 四个 job 全部 success。
 - 本轮授权范围：AIW-04 收口（实现、必要修复、测试、独立审查、留痕）；每阶段一次提交、正常推送 `origin/main` 并跟踪对应 SHA 的 CI；不授权部署、付费、删除文件或数据、破坏性 Git 操作。
 - 本轮使用编号：留痕 **stage22**（新增，接续本表下一顺位）；业务 Prompt 新增成果预审段，真实模型未试跑。
 
@@ -35,7 +35,7 @@
 - 浏览器（Playwright MCP，8000 同源 dist）：活动资料新增与列表 v1 已实测；**提交对话框、预审展示、同页验收、跨组织资料前端表现未验证**（MCP 重复调用/超时后停止）。
 - 独立审查：首轮 **0 Critical / 9 Important**；第二轮 **0 Critical / 2 Important**；第三轮 **0 Critical / 0 Important / 4 Suggestion**，均已在代码/测试/留痕处置。
 - 归档证据：[stage22 过程](../codearts_proof/ai_dialogue/stage22_资料与成果审核.md)、[stage22 启动指令](../codearts_proof/prompts/agent_team_启动指令/2026-11-14_stage22_资料与成果审核_启动指令.md)、[LOG](../codearts_proof/LOG.md)。
-- **提交/推送/CI：待回填。**
+- **提交/推送/CI：** `a3632ce` 已推送 `origin/main`；CI run [43505516305](https://github.com/shanec7825/campus-task-agent/actions/runs/43505516305) 四个 job 全部 success（Backend API/SSE integration、Backend reliability ubuntu/windows、Frontend build/voice/security）。该业务提交是阶段验收依据；随后的文档回填提交不改变业务代码。未部署。
 
 ## 4. 计划阅读入口
 

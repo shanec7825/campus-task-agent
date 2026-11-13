@@ -1,7 +1,7 @@
 # stage22 资料与成果审核（AIW-04）
 
-> 日期：2026-11-14。状态（截至本记录）：实现完成；新增 `test_aiw04_resource_review.py` **15 passed**；受影响回归与后端 `run_all` **EXIT=0 / 1434 PASS**、前端 `run_all` **EXIT=0**、`vue-tsc` **EXIT=0**；独立审查三轮（9 / 2 / 0 Important，第三轮 **0 Critical / 0 Important**）；浏览器仅完成资料新增与展示，其余交互因 Playwright MCP 重复调用/超时未验证；真实模型、真机、移动视口未验证。
-> 本文件只记录真实发生的事项；提交、推送与 CI 结果在发生后回填。
+> 日期：2026-11-14。状态（截至本记录）：实现完成；新增 `test_aiw04_resource_review.py` **15 passed**；受影响回归与后端 `run_all` **EXIT=0 / 1434 PASS**、前端 `run_all` **EXIT=0**、`vue-tsc` **EXIT=0**；独立审查三轮（9 / 2 / 0 Important，第三轮 **0 Critical / 0 Important**）；浏览器仅完成资料新增与展示，其余交互因 Playwright MCP 重复调用/超时未验证；真实模型、真机、移动视口未验证。**已提交并推送 `a3632ce`，CI run 43505516305 四个 job 全部 success；未部署。**
+> 本文件只记录真实发生的事项；未执行的项目明确写「未验证」或「待回填」。
 
 ## 1. 需求来源与授权
 
@@ -109,4 +109,6 @@
 - 浏览器提交/预审/同页验收、真实模型、真机、移动视口、深色主题新卡片：**未验证**。
 - 安全红线 B5b：本地因 `outputs/`、`work/` 被忽略日志残留失败；CI 干净检出预期通过，以对应 SHA 的 CI 为准。
 - 未处理 Suggestion：资料检索全量打分、预审列表读取大 JSON、`latest_resource_versions` 50 条窗口、`resource_key` 跨组织探测、并发版本号、`total` 语义、AdminConsole 不携带版本、assignee 其他管理操作、组织 admin 验收 UI 入口。
-- Git 提交 / 推送 / CI：**待回填**（本文件落盘时尚未提交）。
+- Git 提交：`a3632cebde608ff877cd1310a287337baa93939f`（`feat(review): 增加资料检索、成果版本与成果预审`），已推送 `origin/main`（`54440b0..a3632ce`）。
+- 对应 SHA 的 CI：run [43505516305](https://github.com/shanec7825/campus-task-agent/actions/runs/43505516305) 四个 job 全部 success（Backend API/SSE integration、Backend reliability ubuntu/windows、Frontend build/voice/security）；未部署。
+- 提交后的文档回填（本文件、LOG、HANDOFF）作为同阶段收口补充提交；其结果在交接中回填，不改变业务提交 `a3632ce` 的验收结论。
