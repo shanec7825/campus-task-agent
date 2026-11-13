@@ -1,8 +1,8 @@
 /**
- * 路由表（契约 C-FE-AUTH@1 / C-ROUTE-NAV@1）
+ * 路由表（契约 C-FE-AUTH@1 / C-ROUTE-NAV@1 / C-FE-AI@1）
  *
- * 9 个业务路由 + 公开页（登录 / 注册 / 重置密码）+ 兼容重定向
- * （`/`→工作台、`/hall`→事务、`/notifications`→消息）。
+ * 10 个业务路由 + 公开页（登录 / 注册 / 重置密码）+ 兼容重定向
+ * （`/`→AI 助手、`/hall`→事务、`/notifications`→消息）。
  * 会话守卫：首次导航先 `userStore.restore()`；未登录访问受保护页 → 登录页（带内部 redirect）。
  * 全局 401：由 `client` 的 unauthorizedHandler 统一跳登录（会话恢复期间由守卫自行处理）。
  */
@@ -11,13 +11,13 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { setUnauthorizedHandler } from '../api/client'
 import { useUserStore } from '../stores/user'
 
-/** 回跳地址只接受站内路径，其余一律回退工作台 */
+/** 回跳地址只接受站内路径，其余一律回退 AI 助手 */
 export function resolveSafeRedirect(raw: unknown): string {
   const value = Array.isArray(raw) ? raw[0] : raw
   if (typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')) {
     return value
   }
-  return '/workbench'
+  return '/ai'
 }
 
 export const routes: RouteRecordRaw[] = [
@@ -38,6 +38,11 @@ export const routes: RouteRecordRaw[] = [
     path: '/reset-password',
     component: () => import('../views/ResetPassword.vue'),
     meta: { public: true }
+  },
+  {
+    name: 'ai',
+    path: '/ai',
+    component: () => import('../views/AiConsole.vue')
   },
   {
     name: 'workbench',
@@ -84,7 +89,7 @@ export const routes: RouteRecordRaw[] = [
   },
   {
     path: '/',
-    redirect: '/workbench'
+    redirect: '/ai'
   },
   {
     path: '/hall',
@@ -136,12 +141,12 @@ router.beforeEach(async (to) => {
 
   // 已登录不再停留在登录 / 注册页；重置密码页需在会话仍有效时访问（重置完成后才撤销会话）
   if (to.name === 'login' || to.name === 'register') {
-    return { name: 'workbench' }
+    return { name: 'ai' }
   }
 
   // 管理页仅组织管理员或协作者可进入
   if (to.meta.requiresManager === true && !(userStore.isAdmin || userStore.isPublisher)) {
-    return { name: 'workbench' }
+    return { name: 'ai' }
   }
 
   return true
@@ -151,6 +156,7 @@ export const PAGE_TITLES: Record<string, string> = {
   login: '登录',
   register: '注册',
   'reset-password': '重置密码',
+  ai: 'AI 助手',
   workbench: '工作台',
   hall: '事务',
   detail: '任务详情',

@@ -181,10 +181,38 @@ def render_reviewer_prompt() -> str:
     return REVIEWER_SYSTEM_PROMPT
 
 
+# --------------------------------------------------------------------------- #
+# 只读问答助手（AIW-01，契约 `C-AI-CHAT@1`）
+# 说明：本段是问答能力的唯一 Prompt 正文来源；mock 分支不读取该渲染结果。
+# --------------------------------------------------------------------------- #
+QA_SYSTEM_PROMPT = """你是校园事务协同系统的"只读问答助手"。你只能依据用户消息中提供的
+「可见事务」回答，不能访问系统外信息，也不能执行任何写操作。
+
+【规则】
+1. 只陈述「可见事务」中确实存在的事实；没有依据时明确说“当前可见信息中没有”，
+   不要猜测、不要编造任务、人员、时间、积分或审批状态。
+2. 不承诺发布、改期、指派、审批、验收、删除等业务动作；用户要求这类操作时，
+   说明需要到对应页面由有权限的人完成。
+3. 引用只能使用「可见事务」中给出的 ref（如 "T1"）。回答没有用到某条事务时不要引用它；
+   没有依据时 refs 返回空数组。
+4. 回答使用简体中文，简洁、分点；不要复述整个上下文。
+5. 只输出一个 JSON 对象，不要解释文字，不要 markdown 代码块。
+
+【输出 JSON Schema】
+{"answer": "string", "refs": ["T1"]}"""
+
+
+def render_qa_prompt() -> str:
+    """只读问答 Prompt 无占位符，原样返回（统一调用口）。"""
+    return QA_SYSTEM_PROMPT
+
+
 __all__ = [
     "EXTRACTOR_SYSTEM_PROMPT",
     "REVIEWER_SYSTEM_PROMPT",
+    "QA_SYSTEM_PROMPT",
     "now_text",
     "render_extractor_prompt",
     "render_reviewer_prompt",
+    "render_qa_prompt",
 ]

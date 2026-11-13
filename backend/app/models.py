@@ -1,9 +1,9 @@
-"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1`，T1 冻结）。
+"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1`）。
 
-16 张表：users / tasks / checkins / credit_logs / notifications /
+18 张表：users / tasks / checkins / credit_logs / notifications /
 kb_entries / parse_sessions / progress_logs / task_applications / task_members /
 activities / organizations / org_members / invitations / user_sessions /
-password_resets。
+password_resets / ai_conversations / ai_messages。
 
 说明：Demo 期不建数据库级外键约束，仅做应用层校验（PLAN 2.2.1 A：
 「Demo 期不建数据库级外键，应用层校验」）；JSON 列落库为 SQLite TEXT，
@@ -329,6 +329,48 @@ class UserSession(Base):
     last_seen_at: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class AiConversation(Base):
+    """AI 只读问答会话（契约 `C-AI-DATA@1`）。
+
+    会话只按 ``user_id`` 归属；列表 / 详情 / 续写都由服务层校验归属，
+    不把客户端传入的 user_id 当作可信输入。``updated_at`` 在每次问答后刷新。
+    """
+
+    __tablename__ = "ai_conversations"
+    __table_args__ = (Index("ix_ai_conversations_user_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+    updated_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
+class AiMessage(Base):
+    """AI 会话消息（契约 `C-AI-DATA@1`）。
+
+    ``citations`` 只保存服务端从当前用户可见任务映射出的来源，不直接落模型
+    给出的标题或 ID；``mock`` 标记该条回答是否来自 mock 路径。
+    """
+
+    __tablename__ = "ai_messages"
+    __table_args__ = (Index("ix_ai_messages_conversation_id", "conversation_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)  # user | assistant
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    mock: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
 class PasswordReset(Base):
     """一次性密码重置凭据（契约 `C-DATA-AUTH@1`）：``used_at`` 非空即已消费。"""
 
@@ -363,4 +405,6 @@ __all__ = [
     "Invitation",
     "UserSession",
     "PasswordReset",
+    "AiConversation",
+    "AiMessage",
 ]

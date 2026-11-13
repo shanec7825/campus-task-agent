@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import ThemeToggle from '../components/common/ThemeToggle.vue'
@@ -10,19 +10,24 @@ import { useUserStore } from '../stores/user'
 import type { OrgMembership } from '../types/models'
 
 /**
- * 应用外壳（契约 C-ROUTE-NAV@1）。
+ * 应用外壳（契约 C-ROUTE-NAV@1 / C-FE-AI@1）。
  *
  * - ≥1025px：固定侧栏（品牌 / 主导航 / 管理入口 / 主题 / 用户与退出）+ 主内容列顶部组织上下文；
+ *   侧栏可在 208px 与 72px 之间折叠，状态存 `cta_sidebar_collapsed`；
  * - 769–1024px：顶部横向导航 + 组织上下文，无侧栏；
- * - ≤768px：顶部标题栏（当前页标题 + 组织上下文）+ 四项底部导航（每项 44×44）；
- * - 发布主入口仅出现在桌面侧栏，手机端由工作台标题区承载；
+ * - ≤768px：顶部标题栏（当前页标题 + 组织上下文）+ 四项底部导航（AI / 事务 / 消息 / 我的，每项 44×44）；
+ * - 发布主入口仅出现在桌面展开态侧栏，手机端由工作台标题区承载；
  * - 未读消息数在底部导航以文字呈现（如「消息 3」）。
  */
 interface NavItem {
   name: string
   path: string
   label: string
+  short: string
 }
+
+const SIDEBAR_COLLAPSED_KEY = 'cta_sidebar_collapsed'
+const MOBILE_NAMES = ['ai', 'hall', 'messages', 'profile']
 
 const route = useRoute()
 const router = useRouter()
@@ -34,6 +39,7 @@ const unread = computed<number>(() => notificationsStore.unread)
 const displayName = computed<string>(() => userStore.user?.display_name || userStore.user?.username || '')
 const isLoggedIn = computed<boolean>(() => userStore.isLoggedIn)
 const canAdmin = computed<boolean>(() => userStore.isAdmin || userStore.isPublisher)
+const collapsed = ref<boolean>(readCollapsed())
 
 const currentOrg = computed<OrgMembership | null>(() =>
   userStore.orgs.length > 0 ? userStore.orgs[0] : null
@@ -52,19 +58,39 @@ const pageTitle = computed<string>(() => {
 })
 
 const mainNav: NavItem[] = [
-  { name: 'workbench', path: '/workbench', label: '工作台' },
-  { name: 'hall', path: '/tasks', label: '事务' },
-  { name: 'messages', path: '/messages', label: '消息' },
-  { name: 'profile', path: '/profile', label: '我的' }
+  { name: 'ai', path: '/ai', label: 'AI 助手', short: 'AI' },
+  { name: 'workbench', path: '/workbench', label: '工作台', short: '台' },
+  { name: 'hall', path: '/tasks', label: '事务', short: '事' },
+  { name: 'messages', path: '/messages', label: '消息', short: '信' },
+  { name: 'profile', path: '/profile', label: '我的', short: '我' }
 ]
 
 const mobileNav = computed<NavItem[]>(() =>
-  mainNav.map((item) =>
-    item.name === 'messages' && unread.value > 0
-      ? { ...item, label: `${item.label} ${unread.value}` }
-      : item
-  )
+  mainNav
+    .filter((item) => MOBILE_NAMES.includes(item.name))
+    .map((item) =>
+      item.name === 'messages' && unread.value > 0
+        ? { ...item, label: `${item.label} ${unread.value}` }
+        : item
+    )
 )
+
+function readCollapsed(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function toggleSidebar(): void {
+  collapsed.value = !collapsed.value
+  try {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed.value ? '1' : '0')
+  } catch {
+    // 隐私模式下无法持久化时仅保留本次状态
+  }
+}
 
 function isActive(name: string): boolean {
   if (name === 'hall') {
@@ -78,7 +104,7 @@ function navigate(item: NavItem): void {
 }
 
 function goHome(): void {
-  if (route.name !== 'workbench') void router.push({ name: 'workbench' })
+  if (route.name !== 'ai') void router.push({ name: 'ai' })
 }
 
 function goAdmin(): void {
@@ -116,12 +142,36 @@ async function handleLogout(): Promise<void> {
 
 <template>
   <div class="app-shell">
-    <aside class="app-sidebar" data-testid="app-sidebar" aria-label="应用侧栏">
+    <aside
+      id="app-sidebar"
+      class="app-sidebar"
+      :class="{ 'is-collapsed': collapsed }"
+      data-testid="app-sidebar"
+      aria-label="应用侧栏"
+    >
       <div class="sidebar-head">
-        <a class="brand" href="/workbench" @click.prevent="goHome">
-          校园任务协同
+        <a class="brand" href="/ai" @click.prevent="goHome">
+          {{ collapsed ? '校园' : '校园任务协同' }}
         </a>
-        <el-button class="publish-button" type="primary" data-testid="publish-button" @click="openPublish">
+        <button
+          type="button"
+          class="collapse-button"
+          data-testid="sidebar-toggle"
+          aria-controls="app-sidebar"
+          :aria-label="collapsed ? '展开侧栏' : '收起侧栏'"
+          :aria-expanded="!collapsed"
+          :title="collapsed ? '展开侧栏' : '收起侧栏'"
+          @click="toggleSidebar"
+        >
+          {{ collapsed ? '展开' : '收起' }}
+        </button>
+        <el-button
+          v-if="!collapsed"
+          class="publish-button"
+          type="primary"
+          data-testid="publish-button"
+          @click="openPublish"
+        >
           发布事务
         </el-button>
       </div>
@@ -133,10 +183,12 @@ async function handleLogout(): Promise<void> {
           :href="item.path"
           class="nav-link"
           :class="{ 'is-active': isActive(item.name) }"
+          :aria-label="item.label"
           :aria-current="isActive(item.name) ? 'page' : undefined"
+          :title="item.label"
           @click.prevent="navigate(item)"
         >
-          {{ item.label }}
+          {{ collapsed ? item.short : item.label }}
         </a>
       </nav>
 
@@ -145,24 +197,32 @@ async function handleLogout(): Promise<void> {
           href="/admin"
           class="nav-link"
           :class="{ 'is-active': isActive('admin') }"
+          aria-label="管理"
           :aria-current="isActive('admin') ? 'page' : undefined"
+          title="管理"
           @click.prevent="goAdmin"
         >
-          管理
+          {{ collapsed ? '管' : '管理' }}
         </a>
       </nav>
 
       <div class="sidebar-foot">
         <ThemeToggle />
-        <p class="sidebar-user" :title="displayName">{{ displayName }}</p>
-        <button type="button" class="text-button logout-button" data-testid="logout-button" @click="handleLogout">
-          退出
+        <p v-if="!collapsed" class="sidebar-user" :title="displayName">{{ displayName }}</p>
+        <button
+          type="button"
+          class="text-button logout-button"
+          data-testid="logout-button"
+          aria-label="退出登录"
+          @click="handleLogout"
+        >
+          {{ collapsed ? '退' : '退出' }}
         </button>
       </div>
     </aside>
 
     <header class="app-topbar" data-testid="app-header">
-      <a class="brand" href="/workbench" @click.prevent="goHome">
+      <a class="brand" href="/ai" @click.prevent="goHome">
         校园任务协同
       </a>
 
@@ -219,7 +279,7 @@ async function handleLogout(): Promise<void> {
       </p>
     </header>
 
-    <main id="main-content" class="app-content">
+    <main id="main-content" class="app-content" :class="{ 'is-sidebar-collapsed': collapsed }">
       <div class="app-context-bar" data-testid="org-context">
         <span class="org-name">{{ orgName }}</span>
         <span class="org-role">{{ roleText }}</span>
@@ -427,12 +487,46 @@ async function handleLogout(): Promise<void> {
     padding: var(--app-space-4);
     background: var(--app-surface);
     border-right: 1px solid var(--app-border);
+    transition: width 0.2s ease, padding 0.2s ease;
+  }
+
+  .app-sidebar.is-collapsed {
+    width: 72px;
+    padding: var(--app-space-4) var(--app-space-2);
   }
 
   .sidebar-head {
     display: flex;
     flex-direction: column;
     gap: var(--app-space-3);
+  }
+
+  .app-sidebar.is-collapsed .sidebar-head {
+    align-items: center;
+  }
+
+  .collapse-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: var(--app-touch);
+    padding: 0 var(--app-space-2);
+    border: 1px solid var(--app-border);
+    border-radius: var(--app-radius-sm);
+    background: var(--app-surface-raised);
+    color: var(--app-text-secondary);
+    font-size: var(--app-font-aux-lg);
+    cursor: pointer;
+  }
+
+  .collapse-button:hover {
+    background: var(--app-surface-sunken);
+    color: var(--app-text);
+  }
+
+  .app-sidebar.is-collapsed .collapse-button {
+    width: var(--app-touch);
   }
 
   .publish-button {
@@ -446,6 +540,12 @@ async function handleLogout(): Promise<void> {
     gap: var(--app-space-1);
   }
 
+  .app-sidebar.is-collapsed .nav-link {
+    justify-content: center;
+    padding: 0;
+  }
+
+
   .sidebar-admin {
     padding-top: var(--app-space-3);
     border-top: 1px solid var(--app-border);
@@ -458,6 +558,11 @@ async function handleLogout(): Promise<void> {
     margin-top: auto;
     padding-top: var(--app-space-3);
     border-top: 1px solid var(--app-border);
+  }
+
+  .app-sidebar.is-collapsed .sidebar-foot {
+    flex-direction: column;
+    align-items: center;
   }
 
   .sidebar-user {
@@ -475,6 +580,11 @@ async function handleLogout(): Promise<void> {
     margin-left: 208px;
     padding: var(--app-space-5) 0;
     padding-bottom: var(--app-space-6);
+    transition: margin-left 0.2s ease;
+  }
+
+  .app-content.is-sidebar-collapsed {
+    margin-left: 72px;
   }
 
   .app-context-bar {

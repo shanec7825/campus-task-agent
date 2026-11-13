@@ -10,7 +10,7 @@ import { useUserStore } from '../stores/user'
 /**
  * 邀请注册页（契约 C-FE-AUTH@1 / C-ORG@1）。
  *
- * 邀请凭据从 query 的 `invite` 读取；注册成功后服务端直接建立会话，进入工作台。
+ * 邀请凭据从 query 的 `invite` 读取；注册成功后服务端直接建立会话，进入 AI 助手。
  */
 const route = useRoute()
 const router = useRouter()
@@ -62,7 +62,7 @@ async function submit(): Promise<void> {
       invite_token: inviteToken.value
     })
     userStore.setSession(result.user, result.orgs)
-    await router.replace({ name: 'workbench' })
+    await router.replace({ name: 'ai' })
   } catch (error) {
     errorMessage.value = error instanceof ApiError ? error.message : '注册失败，请稍后重试'
   } finally {

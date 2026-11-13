@@ -734,6 +734,77 @@ class KbSimilarOut(BaseModel):
     threshold: float = 0.6
 
 
+# --------------------------------------------------------------------------- #
+# AI 只读问答（契约 `C-AI-CHAT@1`）
+# --------------------------------------------------------------------------- #
+
+
+class AiChatIn(BaseModel):
+    """问答请求：``conversation_id`` 缺省时新建会话。
+
+    空消息不在这里判 422，交给服务层统一返回业务错误 4001。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    conversation_id: int | None = None
+    message: str = Field(max_length=2000)
+
+
+class AiCitation(BaseModel):
+    """回答来源：只由服务端从当前用户可见任务映射生成。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    type: Literal["task"] = "task"
+    id: int
+    title: str
+    activity_id: int | None = None
+
+
+class AiMessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    role: Literal["user", "assistant"]
+    content: str
+    citations: list[AiCitation] = Field(default_factory=list)
+    mock: bool = False
+    created_at: str
+
+
+class AiChatOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    conversation_id: int
+    user_message: AiMessageOut
+    assistant_message: AiMessageOut
+    mock: bool = False
+
+
+class AiConversationSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    created_at: str
+    updated_at: str
+    message_count: int = 0
+
+
+class AiConversationListOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    items: list[AiConversationSummary] = Field(default_factory=list)
+
+
+class AiConversationDetailOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    conversation: AiConversationSummary
+    messages: list[AiMessageOut] = Field(default_factory=list)
+
+
 __all__ = [
     "ReminderRule",
     "UserOut",
@@ -796,6 +867,13 @@ __all__ = [
     "StreamParseOut",
     "SimilarItem",
     "KbSimilarOut",
+    "AiChatIn",
+    "AiCitation",
+    "AiMessageOut",
+    "AiChatOut",
+    "AiConversationSummary",
+    "AiConversationListOut",
+    "AiConversationDetailOut",
 ]
 
 # --------------------------------------------------------------------------- #

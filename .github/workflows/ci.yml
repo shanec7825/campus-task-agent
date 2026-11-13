@@ -39,6 +39,8 @@ jobs:
       - run: python -m pytest tests/backend/test_reliability.py -q
       - name: Run auth, organization and activity workflow behavior suites
         run: python -m pytest tests/backend/test_auth_org_permissions.py tests/backend/test_activity_hierarchy.py tests/backend/test_activity_workflow.py -q
+      - name: Run AI read-only console suite
+        run: python -m pytest tests/backend/test_ai_console.py -q
 
   backend-integration:
     name: Backend API and SSE integration

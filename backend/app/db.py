@@ -196,13 +196,15 @@ def _migrate(conn) -> None:
 def init_db() -> None:
     """建表 + 幂等迁移（可重复调用）。调用前必须先 import app.models 以注册全部表。
 
-    ``Base.metadata.create_all`` 创建缺失的表（含 ``task_members``、``activities`` 与
+    ``Base.metadata.create_all`` 创建缺失的表（含 ``task_members``、``activities``、
     阶段 2 的 ``organizations`` / ``org_members`` / ``invitations`` / ``user_sessions`` /
-    ``password_resets``）；随后 ``_migrate`` 对旧库补齐 ``notifications.dedupe_key``、
-    去重索引、具名唯一索引 ``uq_task_members_task_user``、legacy ``approved`` 报名与逐人
-    成员行、``tasks.activity_id``，以及阶段 2 的 ``users`` 认证列、``tasks`` /
+    ``password_resets``，以及阶段 19 的 ``ai_conversations`` / ``ai_messages``）；随后
+    ``_migrate`` 对旧库补齐 ``notifications.dedupe_key``、去重索引、具名唯一索引
+    ``uq_task_members_task_user``、legacy ``approved`` 报名与逐人成员行、
+    ``tasks.activity_id``，以及阶段 2 的 ``users`` 认证列、``tasks`` /
     ``activities`` 的 ``org_id`` 与组织相关索引，并把无密码旧账号标记为
-    ``legacy_unclaimed``。全程不使用 DROP / 删列 / 删行，重复执行不会产生重复数据。
+    ``legacy_unclaimed``。AI 会话表只新增、不修改既有表；全程不使用 DROP / 删列 / 删行，
+    重复执行不会产生重复数据。
     """
     from app import models  # noqa: F401  （注册 ORM 映射，避免循环导入）
 

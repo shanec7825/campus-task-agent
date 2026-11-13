@@ -1,8 +1,16 @@
 /**
- * 双 Agent API（契约 C-FEAPI@1 / C-AGENT@2 / C-FEAPI-AGENT@2）。
+ * 双 Agent API（契约 C-FEAPI@1 / C-AGENT@2 / C-FEAPI-AGENT@2 / C-AI-CHAT@1）。
  */
 import { request } from './client'
-import type { Draft, ExtractResult, ReviewResult, StreamParseResult } from '../types/models'
+import type {
+  AiChatResult,
+  AiConversationDetail,
+  AiConversationList,
+  Draft,
+  ExtractResult,
+  ReviewResult,
+  StreamParseResult
+} from '../types/models'
 
 /**
  * `extract` 的可选第二参数（契约 C-FEAPI-AGENT@2）。
@@ -45,4 +53,20 @@ export function streamParse(
     chunk,
     is_final: isFinal
   })
+}
+/** 权限内只读问答；`conversationId` 缺省时由后端新建会话 */
+export function chat(message: string, conversationId?: number): Promise<AiChatResult> {
+  const body: Record<string, unknown> = { message }
+  if (conversationId !== undefined) body.conversation_id = conversationId
+  return request<AiChatResult>('POST', '/api/agent/chat', body)
+}
+
+/** 当前用户最近的会话 */
+export function listConversations(limit = 20): Promise<AiConversationList> {
+  return request<AiConversationList>('GET', '/api/agent/conversations', undefined, { limit })
+}
+
+/** 本人会话详情（跨账号由后端返回 4040） */
+export function getConversation(conversationId: number): Promise<AiConversationDetail> {
+  return request<AiConversationDetail>('GET', `/api/agent/conversations/${conversationId}`)
 }

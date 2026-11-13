@@ -10,7 +10,7 @@ import { useUserStore } from '../stores/user'
 /**
  * 登录页（契约 C-FE-AUTH@1）。
  *
- * 账号 + 密码登录，成功后跳转 `redirect` 指向的站内页面，缺省工作台。
+ * 账号 + 密码登录，成功后跳转 `redirect` 指向的站内页面，缺省 AI 助手。
  * 登录失败统一提示，不区分「账号不存在」与「密码错误」。
  */
 const LOGIN_FAILED_MESSAGE = '账号或密码错误，请重新输入'

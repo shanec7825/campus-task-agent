@@ -497,3 +497,52 @@ export interface SimilarResult {
   items: SimilarItem[]
   threshold: number
 }
+// --------------------------------------------------------------------------- //
+// AI 只读问答（`C-AI-CHAT@1`）
+// --------------------------------------------------------------------------- //
+
+/** 回答来源：只由服务端从当前用户可见任务映射生成 */
+export interface AiCitation {
+  type: 'task'
+  id: number
+  title: string
+  activity_id: number | null
+}
+
+/** 会话消息（`AiMessageOut`） */
+export interface AiChatMessage {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  citations: AiCitation[]
+  mock: boolean
+  created_at: string
+}
+
+/** 一次问答结果（`AiChatOut`） */
+export interface AiChatResult {
+  conversation_id: number
+  user_message: AiChatMessage
+  assistant_message: AiChatMessage
+  mock: boolean
+}
+
+/** 会话摘要（`AiConversationSummary`） */
+export interface AiConversationSummary {
+  id: number
+  title: string
+  created_at: string
+  updated_at: string
+  message_count: number
+}
+
+/** 会话列表（`AiConversationListOut`） */
+export interface AiConversationList {
+  items: AiConversationSummary[]
+}
+
+/** 会话详情（`AiConversationDetailOut`） */
+export interface AiConversationDetail {
+  conversation: AiConversationSummary
+  messages: AiChatMessage[]
+}

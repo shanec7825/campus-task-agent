@@ -5,6 +5,11 @@
 * ``POST /api/agent/extract``      —— 文字版解析（``full`` / ``incremental``）+ changes
 * ``POST /api/agent/review``      —— 审核（歧义 / 润色 / 拆解建议）+ changes
 * ``POST /api/agent/stream/parse`` —— 语音顺序增量解析 + 服务端草稿合并 + changes
+* ``POST /api/agent/chat``         —— 权限内只读问答（契约 `C-AI-CHAT@1`）
+* ``GET /api/agent/conversations`` —— 本人最近会话
+* ``GET /api/agent/conversations/{id}`` —— 本人会话详情（跨账号 4040）
+
+问答只写 ``ai_conversations`` / ``ai_messages``，不改变任务、活动、通知等业务数据。
 
 合并、diff、追溯文案、纯值校验的**唯一实现**是 ``app.agents.diffing``（纯函数）：
 本路由只负责编排与错误码，不再自己写合并逻辑，保证 extract / review / stream
@@ -21,7 +26,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.agents import diffing, extractor, reviewer
@@ -30,6 +35,7 @@ from app.deps import get_current_user, require_csrf
 from app.errors import ApiError, ok
 from app.models import ParseSession, User
 from app.schemas import (
+    AiChatIn,
     Draft,
     ExtractIn,
     ExtractOut,
@@ -37,6 +43,7 @@ from app.schemas import (
     StreamParseIn,
     StreamParseOut,
 )
+from app.services import ai_service
 
 router = APIRouter(
     prefix="/api/agent",
@@ -145,6 +152,48 @@ def stream_parse(
         changes=diffing.diff_draft(before, merged),
     )
     return ok(out.model_dump())
+
+
+# --------------------------------------------------------------------------- #
+# 只读问答（契约 `C-AI-CHAT@1`）：只写会话表，不改变业务数据。
+# --------------------------------------------------------------------------- #
+@router.post("/chat")
+def chat(
+    payload: AiChatIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """权限内只读问答；``conversation_id`` 缺省时新建会话。"""
+    return ok(
+        ai_service.chat(
+            db,
+            current_user,
+            conversation_id=payload.conversation_id,
+            message=payload.message,
+        ).model_dump()
+    )
+
+
+@router.get("/conversations")
+def list_conversations(
+    limit: int = Query(20, ge=1, le=ai_service.MAX_CONVERSATION_LIST),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """当前用户最近的会话（按更新时间倒序）。"""
+    return ok(ai_service.list_conversations(db, current_user, limit=limit).model_dump())
+
+
+@router.get("/conversations/{conversation_id}")
+def get_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """读取本人会话与消息；他人会话返回 4040。"""
+    return ok(
+        ai_service.get_conversation(db, current_user, conversation_id).model_dump()
+    )
 
 
 __all__ = ["router"]
