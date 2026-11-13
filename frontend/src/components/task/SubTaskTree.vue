@@ -146,16 +146,16 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
 }
 
 .current-node {
-  border: 1px solid #dcdfe6;
-  border-left: 4px solid #409eff;
-  border-radius: 8px;
+  border: 1px solid var(--app-border);
+  border-left: 4px solid var(--app-primary);
+  border-radius: var(--app-radius-sm);
   padding: 10px 12px;
-  background: #f5f9ff;
+  background: var(--app-primary-soft);
 }
 
 .current-node.is-blocked {
-  border-left-color: #f56c6c;
-  background: #fef6f6;
+  border-left-color: var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
 }
 
 .dependency-chain {
@@ -173,23 +173,28 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
 }
 
 .chain-arrow {
-  color: #909399;
+  color: var(--app-text-muted);
   font-weight: 700;
 }
 
 .chain-title {
   font-size: 14px;
-  color: #303133;
+  color: var(--app-text);
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 320px;
   white-space: nowrap;
 }
 
+.chain-id {
+  font-size: 13px;
+  color: var(--app-text-muted);
+}
+
 .blocked-tip {
   margin: 6px 0 0;
   font-size: 13px;
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 
 .node-list {
@@ -207,15 +212,18 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
   align-items: center;
   gap: 8px 12px;
   padding: 10px 12px;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface);
 }
 
 .node-item.is-blocked {
-  opacity: 0.7;
-  background: #fafafa;
+  background: var(--app-surface-sunken);
   border-style: dashed;
+}
+
+.node-item.is-blocked .node-title {
+  color: var(--app-text-muted);
 }
 
 .node-main {
@@ -228,7 +236,7 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
 
 .node-title {
   font-size: 15px;
-  color: #303133;
+  color: var(--app-text);
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -237,7 +245,7 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
 
 .node-id {
   font-size: 13px;
-  color: #c0c4cc;
+  color: var(--app-text-muted);
 }
 
 .node-dependency {
@@ -246,19 +254,52 @@ const hasContent = computed<boolean>(() => nodes.value.length > 0 || currentNode
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #606266;
+  color: var(--app-text-secondary);
 }
 
 .dependency-state {
   font-size: 13px;
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 
 .dependency-state.done {
-  color: #67c23a;
+  color: var(--el-color-success);
 }
 
 .node-actions {
   margin-left: auto;
+}
+
+@media (max-width: 768px) {
+  .chain-title {
+    max-width: 100%;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .node-main {
+    min-width: 0;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .node-title {
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .node-dependency {
+    width: 100%;
+  }
+
+  .node-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .node-actions :deep(.el-button) {
+    width: 100%;
+    min-height: var(--app-touch);
+  }
 }
 </style>

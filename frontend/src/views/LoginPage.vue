@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import ThemeToggle from '../components/common/ThemeToggle.vue'
 import { ApiError } from '../api/client'
 import { useUserStore } from '../stores/user'
 
@@ -65,9 +66,14 @@ onMounted(() => {
 
 <template>
   <section class="login-page">
-    <el-card class="login-card" shadow="never">
+    <div class="login-topbar">
+      <ThemeToggle />
+    </div>
+
+    <el-card class="login-card app-section-card" shadow="never">
       <div class="login-header">
-        <h2 class="login-title">校园任务协同</h2>
+        <div class="login-logo" aria-hidden="true">校</div>
+        <h1 class="login-title">校园任务协同</h1>
         <p class="login-subtitle">用演示账号登录，体验 AI 发布与任务流转</p>
       </div>
 
@@ -77,16 +83,20 @@ onMounted(() => {
         type="error"
         show-icon
         :closable="false"
+        role="alert"
         class="login-error"
       />
 
-      <el-form label-position="top" @submit.prevent>
+      <el-form class="login-form" label-position="top" @submit.prevent>
         <el-form-item label="用户名">
           <el-input
             v-model="username"
             placeholder="如 teacher01 / student01"
+            size="large"
             clearable
             maxlength="32"
+            autocomplete="username"
+            :disabled="loading"
             @keyup.enter="submit"
           />
         </el-form-item>
@@ -94,6 +104,7 @@ onMounted(() => {
 
       <el-button
         type="primary"
+        size="large"
         class="login-submit"
         :loading="loading"
         :disabled="loading"
@@ -122,45 +133,93 @@ onMounted(() => {
 
 <style scoped>
 .login-page {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  background: linear-gradient(135deg, #eef2ff 0%, #f5f7fa 55%, #ecfdf5 100%);
-  padding: 24px;
+  min-height: 100dvh;
   box-sizing: border-box;
+  padding: 64px 24px 32px;
+  background: var(--app-bg);
+  background-image:
+    radial-gradient(
+      circle at 12% 6%,
+      color-mix(in srgb, var(--app-primary) 16%, transparent),
+      transparent 46%
+    ),
+    radial-gradient(
+      circle at 88% 94%,
+      color-mix(in srgb, var(--app-primary) 10%, transparent),
+      transparent 50%
+    );
+}
+
+.login-topbar {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .login-card {
   width: 100%;
   max-width: 420px;
-  border-radius: 12px;
-  padding: 8px 12px;
+  box-sizing: border-box;
+}
+
+.login-card :deep(.el-card__body) {
+  padding: 28px 24px 24px;
 }
 
 .login-header {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   text-align: center;
+}
+
+.login-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 12px;
+  border-radius: var(--app-radius-lg);
+  background: var(--app-primary-soft);
+  color: var(--app-primary);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .login-title {
   margin: 0 0 6px;
-  font-size: 22px;
-  color: #303133;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--app-text);
 }
 
 .login-subtitle {
   margin: 0;
   font-size: 14px;
-  color: #909399;
+  line-height: 1.6;
+  color: var(--app-text-secondary);
 }
 
 .login-error {
   margin-bottom: 16px;
 }
 
+.login-form :deep(.el-form-item__label) {
+  color: var(--app-text-secondary);
+}
+
 .login-submit {
   width: 100%;
+  min-height: var(--app-touch);
   margin-top: 4px;
 }
 
@@ -168,13 +227,48 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   margin-top: 16px;
 }
 
+.demo-accounts :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
 .demo-label {
-  font-size: 13px;
-  color: #909399;
   margin-right: 4px;
+  font-size: 13px;
+  color: var(--app-text-muted);
+}
+
+@media (max-width: 768px) {
+  .login-page {
+    align-items: flex-start;
+    padding: 64px 16px calc(24px + var(--app-safe-bottom));
+  }
+
+  .login-card :deep(.el-card__body) {
+    padding: 24px 18px 20px;
+  }
+
+  .demo-accounts :deep(.el-button) {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 430px) {
+  .login-topbar {
+    top: 12px;
+    right: 12px;
+  }
+
+  .login-card {
+    max-width: none;
+  }
+
+  .login-title {
+    font-size: 22px;
+  }
 }
 </style>

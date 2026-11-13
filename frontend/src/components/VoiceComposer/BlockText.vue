@@ -111,6 +111,12 @@ function onSelect(): void {
   background: color-mix(in srgb, var(--block-color) 12%, transparent);
 }
 
+/* 键盘可达：全局 :focus-visible 规则之外再补一圈块色描边，避免 outline: none 丢失焦点提示 */
+.block-text:focus-visible {
+  outline: 2px solid var(--block-color);
+  outline-offset: 2px;
+}
+
 .block-text.is-pending {
   border-bottom-style: dashed;
 }

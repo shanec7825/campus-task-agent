@@ -144,55 +144,60 @@ const buttonText = computed<string>(() => {
 <template>
   <el-card class="task-card" shadow="hover" body-class="task-card-body">
     <div class="card-header">
-      <div class="title-line">
-        <h3 class="card-title" :title="task.title">{{ task.title }}</h3>
-        <el-tag v-if="isSubTask" size="small" type="warning" effect="plain">子任务</el-tag>
-      </div>
+      <h3 class="card-title" :title="task.title">{{ task.title }}</h3>
+      <!-- 三层状态：任务状态 / 我的报名状态 / 我的执行状态 -->
       <div class="status-line">
-        <StatusTag :status="task.status" />
+        <StatusTag :status="task.status" :size="'small'" />
         <el-tag
           v-if="task.my_application_status"
           :type="applicationMeta.type"
           size="small"
           effect="plain"
         >
-          {{ applicationMeta.text }}
+          报名：{{ applicationMeta.text }}
         </el-tag>
-        <el-tag
-          v-if="task.my_member_status"
-          :type="memberMeta.type"
-          size="small"
-          effect="dark"
-        >
+        <el-tag v-if="task.my_member_status" :type="memberMeta.type" size="small" effect="dark">
           我：{{ memberMeta.text }}
         </el-tag>
+        <el-tag v-if="isSubTask" size="small" type="warning" effect="plain">子任务</el-tag>
       </div>
     </div>
 
     <p class="card-description">{{ task.description || '暂无任务描述' }}</p>
 
-    <div class="card-meta">
-      <span class="meta-item">
-        <span class="meta-label">名额</span>{{ quotaProgress }}
-      </span>
-      <span v-if="task.applied_count > 0" class="meta-item">
-        <span class="meta-label">待审批</span>{{ task.applied_count }} 人
-      </span>
-      <span class="meta-item">
-        <span class="meta-label">奖励</span>{{ rewardText }}
-      </span>
-      <span class="meta-item">
-        <span class="meta-label">截止</span>{{ deadlineText }}
-      </span>
-      <span v-if="task.location" class="meta-item">
-        <span class="meta-label">地点</span>{{ task.location }}
-      </span>
-    </div>
+    <dl class="card-meta">
+      <div class="meta-item">
+        <dt>名额</dt>
+        <dd>{{ quotaProgress }}</dd>
+      </div>
+      <div v-if="task.applied_count > 0" class="meta-item">
+        <dt>待审批</dt>
+        <dd>{{ task.applied_count }} 人</dd>
+      </div>
+      <div class="meta-item">
+        <dt>奖励</dt>
+        <dd class="meta-reward">{{ rewardText }}</dd>
+      </div>
+      <div class="meta-item">
+        <dt>截止</dt>
+        <dd>{{ deadlineText }}</dd>
+      </div>
+      <div v-if="task.location" class="meta-item">
+        <dt>地点</dt>
+        <dd>{{ task.location }}</dd>
+      </div>
+    </dl>
+
+    <p v-if="blockReason" class="apply-reason" role="status" aria-live="polite">
+      不可报名原因：{{ blockReason }}
+    </p>
 
     <div class="card-footer">
       <span class="publisher">发布者：{{ task.publisher_name || '—' }}</span>
       <div class="actions">
-        <el-button size="small" text type="primary" @click="emit('open', task.id)">查看详情</el-button>
+        <el-button size="small" text type="primary" @click="emit('open', task.id)">
+          查看详情
+        </el-button>
         <el-button
           size="small"
           type="primary"
@@ -204,15 +209,12 @@ const buttonText = computed<string>(() => {
         </el-button>
       </div>
     </div>
-
-    <p v-if="blockReason" class="apply-reason">{{ blockReason }}</p>
   </el-card>
 </template>
 
 <style scoped>
 .task-card {
   height: 100%;
-  border-radius: 10px;
   display: flex;
   flex-direction: column;
 }
@@ -226,14 +228,7 @@ const buttonText = computed<string>(() => {
 
 .card-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.title-line {
-  display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 6px;
   min-width: 0;
 }
@@ -242,7 +237,8 @@ const buttonText = computed<string>(() => {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  line-height: 1.4;
+  color: var(--app-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -252,15 +248,13 @@ const buttonText = computed<string>(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
   gap: 4px;
-  flex-shrink: 0;
 }
 
 .card-description {
   margin: 0;
   font-size: 14px;
-  color: #606266;
+  color: var(--app-text-secondary);
   line-height: 1.6;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -271,16 +265,46 @@ const buttonText = computed<string>(() => {
 }
 
 .card-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 6px 14px;
+  margin: 0;
   font-size: 14px;
-  color: #303133;
 }
 
-.meta-label {
-  color: #909399;
-  margin-right: 4px;
+.meta-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.meta-item dt {
+  color: var(--app-text-muted);
+  flex-shrink: 0;
+}
+
+.meta-item dd {
+  margin: 0;
+  color: var(--app-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta-reward {
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+
+.apply-reason {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--app-radius-sm);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
 }
 
 .card-footer {
@@ -289,13 +313,13 @@ const buttonText = computed<string>(() => {
   justify-content: space-between;
   gap: 8px;
   margin-top: auto;
-  padding-top: 8px;
-  border-top: 1px dashed #ebeef5;
+  padding-top: 10px;
+  border-top: 1px dashed var(--app-border);
 }
 
 .publisher {
   font-size: 13px;
-  color: #909399;
+  color: var(--app-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -308,10 +332,24 @@ const buttonText = computed<string>(() => {
   flex-shrink: 0;
 }
 
-.apply-reason {
-  margin: 0;
-  font-size: 13px;
-  color: #e6a23c;
-  line-height: 1.5;
+@media (max-width: 768px) {
+  .card-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .publisher {
+    white-space: normal;
+  }
+
+  .actions {
+    width: 100%;
+  }
+
+  .actions :deep(.el-button) {
+    flex: 1 1 0;
+    margin-left: 0;
+  }
 }
 </style>

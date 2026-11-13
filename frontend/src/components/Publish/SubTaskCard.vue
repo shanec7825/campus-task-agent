@@ -300,9 +300,9 @@ defineExpose({ publishAll })
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 12px;
-  background: var(--el-bg-color);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
 }
 
 .subtask-card__header {
@@ -322,21 +322,21 @@ defineExpose({ publishAll })
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--app-text);
 }
 
 .subtask-card__hint {
   margin: 0;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--el-text-color-secondary);
+  color: var(--app-text-secondary);
 }
 
 /* 勾选制复选框：与卡片内容左对齐，突出「默认不勾选」的主操作 */
 .subtask-card__include {
   padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--el-fill-color-lighter);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
   font-weight: 600;
 }
 
@@ -345,9 +345,9 @@ defineExpose({ publishAll })
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 10px;
-  background: var(--el-fill-color-light);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
 }
 
 .subtask-card__item-header {
@@ -359,13 +359,14 @@ defineExpose({ publishAll })
 .subtask-card__index {
   font-size: 14px;
   font-weight: 600;
-  color: var(--el-color-primary);
+  color: var(--app-primary);
 }
 
 .subtask-card__field {
   display: flex;
   align-items: flex-start;
   gap: 8px;
+  min-width: 0;
 }
 
 .subtask-card__label {
@@ -373,7 +374,7 @@ defineExpose({ publishAll })
   width: 64px;
   padding-top: 4px;
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: var(--app-text-secondary);
 }
 
 .subtask-card__row {
@@ -385,6 +386,39 @@ defineExpose({ publishAll })
 .subtask-card__depends {
   margin: 0;
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: var(--app-text-muted);
+}
+
+@media (max-width: 768px) {
+  .subtask-card {
+    padding: 14px;
+  }
+
+  .subtask-card__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .subtask-card__field {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .subtask-card__label {
+    width: auto;
+    padding-top: 0;
+  }
+
+  .subtask-card__field .el-input,
+  .subtask-card__field .el-input-number,
+  .subtask-card__field .el-select,
+  .subtask-card__row {
+    width: 100%;
+  }
+
+  .subtask-card__row {
+    flex-direction: column;
+    gap: 8px;
+  }
 }
 </style>

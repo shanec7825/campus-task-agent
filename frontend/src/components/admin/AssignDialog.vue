@@ -93,14 +93,14 @@ async function submit(): Promise<void> {
     @update:model-value="emit('update:visible', $event)"
     @closed="formRef?.clearValidate()"
   >
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="96px">
+    <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="assign-form">
       <el-form-item label="任务">
         <span class="task-name">{{ task?.title ?? '—' }}</span>
         <el-tag v-if="task" size="small" effect="plain" class="task-id">#{{ task.id }}</el-tag>
       </el-form-item>
 
       <el-form-item label="指派方式">
-        <el-radio-group v-model="mode">
+        <el-radio-group v-model="mode" class="mode-switch">
           <el-radio-button value="known">从已知用户选择</el-radio-button>
           <el-radio-button value="manual">手动输入用户 ID</el-radio-button>
         </el-radio-group>
@@ -133,6 +133,7 @@ async function submit(): Promise<void> {
           :step="1"
           :precision="0"
           placeholder="请输入用户 ID"
+          class="manual-input"
         />
       </el-form-item>
 
@@ -149,24 +150,46 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped>
+.assign-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.assign-form :deep(.el-form-item__content) {
+  flex-wrap: wrap;
+}
+
 .task-name {
-  font-weight: 500;
-  color: #303133;
   margin-right: 6px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+  word-break: break-word;
 }
 
 .task-id {
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 
-.user-select {
+.mode-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mode-switch :deep(.el-radio-button__inner) {
+  white-space: normal;
+}
+
+.user-select,
+.manual-input {
   width: 100%;
 }
 
 .field-hint {
   margin: 4px 0 0;
   font-size: 13px;
-  color: #e6a23c;
+  color: var(--el-color-warning);
   line-height: 1.5;
 }
 

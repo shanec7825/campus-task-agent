@@ -1,8 +1,9 @@
 /**
- * 颜色池（契约 C-SHELL@1 / C-TRACE@1）
+ * 颜色池（契约 C-COLOR@1）
  *
- * 唯一颜色来源：T7 / T8 只能 import 本文件，禁止复制映射。
- * 色值需与 src/styles/color-pool.css 中的 CSS 变量保持一致。
+ * 唯一颜色来源：组件只能 import 本文件或引用 color-pool.css 变量，禁止复制映射。
+ * `FIELD_COLORS` / `WARN_COLOR` / `UNPARSED_COLOR` 与 4 个追溯色常量保留为浅色基线（静态检查依赖），
+ * 组件实际渲染统一走下面的 CSS 变量，由 color-pool.css 在 `html.dark` 下切换为高对比变体。
  */
 
 /** 固定字段 → 色值映射（7 个色值，含两个同色语义键；本轮不得修改） */
@@ -34,24 +35,49 @@ export const TRACE_COLORS: Record<TraceKind, string> = {
   live: '#3B82F6' // 蓝：语音 interim（虚线）
 }
 
+/** 字段 → 主题感知 CSS 变量（键集合与 FIELD_COLORS 一致，浅/深色由 color-pool.css 决定） */
+export const FIELD_CSS_VARS: Record<string, string> = {
+  time: 'var(--c-time)',
+  location: 'var(--c-location)',
+  quota: 'var(--c-quota)',
+  title: 'var(--c-title)',
+  extra_tags: 'var(--c-extra)',
+  requirements: 'var(--c-extra)',
+  unresolved: 'var(--c-warn)',
+  corrections: 'var(--c-warn)'
+}
+
+/** 追溯块 → 主题感知 CSS 变量 */
+export const TRACE_CSS_VARS: Record<TraceKind, string> = {
+  ai_applied: 'var(--c-ai-applied)',
+  user_edit: 'var(--c-user-edit)',
+  user_note: 'var(--c-user-note)',
+  live: 'var(--c-live)'
+}
+
+/** 警示色（主题感知） */
+export const WARN_CSS_COLOR = 'var(--c-warn)'
+
+/** 未解析文本色（主题感知） */
+export const UNPARSED_CSS_COLOR = 'var(--c-unparsed)'
+
 /**
- * 取字段对应颜色。
+ * 取字段对应颜色变量。
  * - `extra_tags.` 前缀的键统一取扩展项色（黄色）
- * - 未知字段或空值 → `UNPARSED_COLOR`
+ * - 未知字段或空值 → `UNPARSED_CSS_COLOR`
  */
 export function colorForField(field: string | null | undefined): string {
-  if (!field) return UNPARSED_COLOR
-  if (field.startsWith('extra_tags.')) return FIELD_COLORS.extra_tags
-  return FIELD_COLORS[field] ?? UNPARSED_COLOR
+  if (!field) return UNPARSED_CSS_COLOR
+  if (field.startsWith('extra_tags.')) return FIELD_CSS_VARS.extra_tags
+  return FIELD_CSS_VARS[field] ?? UNPARSED_CSS_COLOR
 }
 
 /**
- * 取文字块颜色（契约 C-TRACE@1 B）。
+ * 取文字块颜色变量（契约 C-COLOR@1）。
  * - `raw` → 按字段色（与右侧字段面板同色）
- * - `live` → 追溯蓝
- * - 其余追溯块 → `TRACE_COLORS[kind]`
+ * - 其余追溯块 → `TRACE_CSS_VARS[kind]`
  */
 export function colorForBlock(block: { kind: 'raw' | TraceKind; field: string | null }): string {
   if (block.kind === 'raw') return colorForField(block.field)
-  return TRACE_COLORS[block.kind] ?? UNPARSED_COLOR
+  return TRACE_CSS_VARS[block.kind] ?? UNPARSED_CSS_COLOR
 }

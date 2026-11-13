@@ -131,13 +131,13 @@ watch(
   }
 }
 
-/* 实时识别文本：颜色取自 Element Plus 语义变量，不硬编码色值 */
+/* 实时识别文本：颜色取自主题令牌，不硬编码色值 */
 .voice-button__live {
-  max-width: 320px;
+  max-width: 100%;
   margin: 0;
   font-size: 14px;
   line-height: 1.5;
-  color: var(--el-text-color-secondary);
+  color: var(--app-text-secondary);
   word-break: break-all;
 }
 
@@ -146,5 +146,15 @@ watch(
   font-size: 13px;
   line-height: 1.4;
   color: var(--c-warn);
+}
+
+@media (max-width: 768px) {
+  .voice-button {
+    width: 100%;
+  }
+
+  .voice-button .el-button {
+    width: 100%;
+  }
 }
 </style>

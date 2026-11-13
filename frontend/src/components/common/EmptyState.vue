@@ -11,7 +11,7 @@ withDefaults(defineProps<{ title?: string; description?: string }>(), {
 </script>
 
 <template>
-  <div class="empty-state">
+  <div class="empty-state" role="status">
     <el-empty :description="title" :image-size="72">
       <p v-if="description" class="empty-description">{{ description }}</p>
     </el-empty>
@@ -20,13 +20,36 @@ withDefaults(defineProps<{ title?: string; description?: string }>(), {
 
 <style scoped>
 .empty-state {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 24px 12px;
+  text-align: center;
+}
+
+.empty-state :deep(.el-empty) {
   padding: 8px 0;
 }
 
-.empty-description {
+.empty-state :deep(.el-empty__description p) {
   margin: 0;
-  font-size: 14px;
-  color: #909399;
+  font-size: 15px;
   line-height: 1.6;
+  color: var(--app-text-secondary);
+}
+
+.empty-description {
+  max-width: 36em;
+  margin: 4px auto 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--app-text-muted);
+}
+
+@media (max-width: 768px) {
+  .empty-state {
+    padding: 20px 4px;
+  }
 }
 </style>

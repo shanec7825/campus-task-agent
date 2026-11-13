@@ -58,8 +58,9 @@ const steps = computed<string[]>(() => {
   align-items: flex-start;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: 8px;
-  background: #f7f9fc;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
 }
 
 .step-index {
@@ -67,8 +68,8 @@ const steps = computed<string[]>(() => {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: #409eff;
-  color: #ffffff;
+  background: var(--app-primary);
+  color: var(--el-color-white);
   font-size: 13px;
   font-weight: 600;
   display: inline-flex;
@@ -78,8 +79,18 @@ const steps = computed<string[]>(() => {
 
 .step-text {
   font-size: 14px;
-  color: #303133;
+  color: var(--app-text);
   line-height: 1.7;
   word-break: break-word;
+}
+
+@media (max-width: 768px) {
+  .step-item {
+    padding: 10px 12px;
+  }
+
+  .step-text {
+    font-size: 15px;
+  }
 }
 </style>

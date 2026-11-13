@@ -15,7 +15,7 @@ import { ElMessage } from 'element-plus'
 import { applyTask } from '../api/applications'
 import { ApiError } from '../api/client'
 import { listTasks } from '../api/tasks'
-import { STATUS_MAP } from '../components/task/StatusTag.vue'
+import { STATUS_MAP, statusText } from '../components/task/StatusTag.vue'
 import TaskCard from '../components/task/TaskCard.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import ErrorState from '../components/common/ErrorState.vue'
@@ -48,6 +48,14 @@ const emptyDescription = computed<string>(() =>
     : '还没有人发布任务，去「发布任务」页创建第一个任务吧。'
 )
 
+/** 当前筛选摘要：不依赖按钮高亮即可读到「现在筛了什么」 */
+const activeFilterText = computed<string>(() => {
+  const parts: string[] = []
+  if (statusFilter.value !== 'all') parts.push(`状态：${statusText(statusFilter.value)}`)
+  if (scope.value !== 'all') parts.push('范围：我的任务')
+  return parts.length > 0 ? parts.join(' · ') : '全部任务'
+})
+
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.code === -1) return '无法连接后端服务，请确认后端已在 8000 端口启动'
@@ -72,6 +80,14 @@ async function load(): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+/** 清空筛选并重新加载（无筛选时为空操作） */
+function resetFilters(): void {
+  if (!hasFilter.value) return
+  statusFilter.value = 'all'
+  scope.value = 'all'
+  void load()
 }
 
 function goDetail(id: number): void {
@@ -101,36 +117,48 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="hall">
-    <header class="page-header">
-      <div>
-        <h2 class="page-title">任务大厅</h2>
-        <p class="page-subtitle">
+  <section class="app-page hall">
+    <header class="app-page-header hall-header">
+      <div class="hall-heading">
+        <h2 class="app-page-title">任务大厅</h2>
+        <p class="app-page-subtitle">
           共 {{ tasks.length }} 个任务 · 报名通过后可在任务详情页更新进度、签到并提交完成
         </p>
       </div>
       <el-button :loading="loading" @click="load">刷新</el-button>
     </header>
 
-    <el-card shadow="never" class="filter-bar">
+    <section class="app-section-card filter-bar" aria-label="任务筛选">
       <div class="filter-row">
         <span class="filter-label">状态</span>
-        <el-radio-group v-model="statusFilter" size="small" @change="load">
+        <el-radio-group v-model="statusFilter" class="filter-group" @change="load">
           <el-radio-button value="all">全部</el-radio-button>
-          <el-radio-button v-for="option in statusOptions" :key="option.value" :value="option.value">
+          <el-radio-button
+            v-for="option in statusOptions"
+            :key="option.value"
+            :value="option.value"
+          >
             {{ option.label }}
           </el-radio-button>
         </el-radio-group>
       </div>
+
       <div class="filter-row">
         <span class="filter-label">范围</span>
-        <el-radio-group v-model="scope" size="small" @change="load">
+        <el-radio-group v-model="scope" class="filter-group filter-group--scope" @change="load">
           <el-radio-button value="all">全部任务</el-radio-button>
           <el-radio-button value="mine">我的任务</el-radio-button>
         </el-radio-group>
         <span class="filter-hint">「我的任务」= 我发布的 + 我报名通过的任务</span>
       </div>
-    </el-card>
+
+      <div class="filter-current">
+        <span class="app-muted">当前筛选：{{ activeFilterText }}</span>
+        <el-button v-if="hasFilter" text type="primary" size="small" @click="resetFilters">
+          清除筛选
+        </el-button>
+      </div>
+    </section>
 
     <LoadingState v-if="loading" :rows="4" />
 
@@ -159,38 +187,19 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.hall {
-  max-width: 1200px;
-  margin: 0 auto;
+.hall-header {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.page-header {
-  display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.page-title {
-  margin: 0 0 4px;
-  font-size: 20px;
-  color: #303133;
-}
-
-.page-subtitle {
-  margin: 0;
-  font-size: 14px;
-  color: #909399;
+.hall-heading {
+  min-width: 0;
 }
 
 .filter-bar {
-  border-radius: 10px;
-}
-
-.filter-bar :deep(.el-card__body) {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -206,19 +215,63 @@ onMounted(() => {
 
 .filter-label {
   font-size: 14px;
-  color: #606266;
+  color: var(--app-text-secondary);
   width: 32px;
   flex-shrink: 0;
 }
 
+.filter-group {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .filter-hint {
   font-size: 13px;
-  color: #c0c4cc;
+  color: var(--app-text-muted);
+}
+
+.filter-current {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--app-border);
 }
 
 .task-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
   gap: 16px;
+}
+
+/* 触屏：筛选按钮 ≥44px，短标签不再挤压换行 */
+@media (max-width: 768px) {
+  .filter-label {
+    width: auto;
+    font-size: 15px;
+  }
+
+  .filter-group {
+    width: 100%;
+  }
+
+  .filter-group :deep(.el-radio-button) {
+    flex: 1 1 auto;
+  }
+
+  .filter-group :deep(.el-radio-button__inner) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--app-touch);
+    padding: 0 12px;
+    font-size: 15px;
+  }
+
+  .filter-group--scope :deep(.el-radio-button) {
+    flex: 1 1 0;
+  }
 }
 </style>

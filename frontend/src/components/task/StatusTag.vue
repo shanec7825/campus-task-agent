@@ -65,8 +65,14 @@ const meta = computed<StatusMeta>(() => statusMeta(props.status))
 </template>
 
 <style scoped>
+/* 文字色与浅底色都来自 Element Plus 语义变量（含 html.dark 覆盖），保证双主题可读 */
 .status-tag {
   flex-shrink: 0;
   font-weight: 500;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.status-tag :deep(.el-tag__content) {
+  white-space: nowrap;
 }
 </style>

@@ -2,7 +2,7 @@
 /**
  * 发布者后台（计划 T6 / R3-AC5 / R3-AC8 / R5）。
  *
- * - 任务列表（表格）：仅当前用户作为 `publisher_id` 的任务；
+ * - 任务列表：桌面表格（宽表效率）与手机事务卡片双视图，字段与操作一一对应；
  * - 指派弹窗：候选来自任务中已出现的用户，后端无用户列表接口时允许手输用户 ID；
  * - 验收：仅 `publisher_id === 当前用户` 且状态为 `submitted` 时可见，先选择通过/驳回（驳回必填原因）；
  * - 催办规则：`ReminderRuleForm` 校验通过后通过 `PATCH /api/tasks/{id}` 保存。
@@ -392,19 +392,19 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="admin">
-    <header class="page-header">
+  <section class="admin app-page">
+    <header class="app-page-header admin-header">
       <div>
-        <h2 class="page-title">发布者后台</h2>
-        <p class="page-subtitle">任务指派、验收结算与分级催办规则配置</p>
+        <h2 class="app-page-title">发布者后台</h2>
+        <p class="app-page-subtitle">任务指派、验收结算与分级催办规则配置</p>
       </div>
-      <div class="header-actions">
+      <div class="app-actions header-actions">
         <el-button @click="goPublish">发布新任务</el-button>
         <el-button :loading="loading" @click="load">刷新</el-button>
       </div>
     </header>
 
-    <el-card v-if="!isPublisher" shadow="never" class="section-card">
+    <el-card v-if="!isPublisher" shadow="never" class="app-section-card">
       <el-result
         icon="warning"
         title="当前账号不是发布者"
@@ -413,11 +413,13 @@ onMounted(async () => {
     </el-card>
 
     <template v-else>
-      <el-card shadow="never" class="section-card">
+      <el-card shadow="never" class="app-section-card">
         <template #header>
           <div class="card-header">
             <span class="card-title">我的发布任务（{{ tasks.length }}）</span>
-            <span class="header-hint">验收按成员逐人进行（仅列已提交成员）；催办规则保存后由后端调度器执行</span>
+            <span class="app-muted header-hint">
+              验收按成员逐人进行（仅列已提交成员）；催办规则保存后由后端调度器执行
+            </span>
           </div>
         </template>
 
@@ -434,125 +436,232 @@ onMounted(async () => {
           title="暂无发布的任务"
           description="在「发布任务」页创建任务后，即可在这里指派负责人、验收与配置催办。"
         />
-        <el-table v-else :data="tasks" size="small" stripe class="task-table">
-          <el-table-column prop="id" label="ID" width="70" />
-          <el-table-column label="标题" min-width="200">
-            <template #default="scope">
-              <el-link type="primary" :underline="false" @click="goDetail(scope.row.id)">
-                {{ scope.row.title }}
-              </el-link>
-              <el-tag v-if="scope.row.parent_id !== null" size="small" type="warning" effect="plain" class="row-tag">
-                子任务
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="95">
-            <template #default="scope">
-              <StatusTag :status="scope.row.status" size="small" />
-            </template>
-          </el-table-column>
-          <el-table-column label="分配" width="110">
-            <template #default="scope">
-              <el-tag size="small" effect="plain" :type="scope.row.claim_type === 'assign' ? 'info' : 'success'">
-                {{ scope.row.claim_type === 'assign' ? '指派' : '开放认领' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="成员" width="150">
-            <template #default="scope">
-              <div class="member-cell">
-                <span>{{ memberNames(scope.row) }}</span>
-                <el-tag
-                  v-if="submittedMembers(scope.row).length > 0"
-                  size="small"
-                  type="warning"
-                  effect="plain"
-                >
-                  待验收 {{ submittedMembers(scope.row).length }}
-                </el-tag>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="报名" width="150">
-            <template #default="scope">
-              <div class="apply-cell">
-                <span class="rule-summary">{{ quotaSummary(scope.row) }}</span>
-                <el-tag
-                  v-if="scope.row.applied_count > 0"
-                  size="small"
-                  type="warning"
-                  effect="plain"
-                >
-                  待审批 {{ scope.row.applied_count }}
-                </el-tag>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="截止" width="150">
-            <template #default="scope">{{ formatDeadline(scope.row.deadline) }}</template>
-          </el-table-column>
-          <el-table-column label="积分" width="80">
-            <template #default="scope">+{{ scope.row.credit_reward ?? 0 }}</template>
-          </el-table-column>
-          <el-table-column label="催办规则" min-width="170">
-            <template #default="scope">
-              <span class="rule-summary">{{ ruleSummary(scope.row) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="380" fixed="right">
-            <template #default="scope">
-              <div class="row-actions">
-                <el-button
-                  v-if="canAudit(scope.row)"
-                  size="small"
-                  text
-                  type="warning"
-                  @click="openAudit(scope.row)"
-                >
-                  审核报名（{{ scope.row.applied_count }}）
-                </el-button>
-                <el-button
-                  v-if="canAssign(scope.row)"
-                  size="small"
-                  text
-                  type="primary"
-                  @click="openAssign(scope.row)"
-                >
-                  指派
-                </el-button>
-                <el-button
-                  v-if="canVerify(scope.row)"
-                  size="small"
-                  text
-                  type="success"
-                  @click="openVerify(scope.row)"
-                >
-                  验收（{{ submittedMembers(scope.row).length }}）
-                </el-button>
-                <el-button
-                  v-if="canEditDeadline(scope.row)"
-                  size="small"
-                  text
-                  @click="openDeadline(scope.row)"
-                >
-                  改截止时间
-                </el-button>
-                <el-button size="small" text @click="openRule(scope.row)">催办规则</el-button>
-                <el-button size="small" text @click="goDetail(scope.row.id)">详情</el-button>
-                <el-button
-                  v-if="canCancel(scope.row)"
-                  size="small"
-                  text
-                  type="danger"
-                  :loading="cancelLoadingId === scope.row.id"
-                  @click="handleCancel(scope.row)"
-                >
-                  取消任务
-                </el-button>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
+        <template v-else>
+          <div class="app-desktop-table app-desktop-only">
+            <el-table :data="tasks" size="small" stripe class="task-table">
+              <el-table-column prop="id" label="ID" width="70" />
+              <el-table-column label="标题" min-width="200">
+                <template #default="scope">
+                  <el-link type="primary" :underline="false" @click="goDetail(scope.row.id)">
+                    {{ scope.row.title }}
+                  </el-link>
+                  <el-tag
+                    v-if="scope.row.parent_id !== null"
+                    size="small"
+                    type="warning"
+                    effect="plain"
+                    class="row-tag"
+                  >
+                    子任务
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="95">
+                <template #default="scope">
+                  <StatusTag :status="scope.row.status" size="small" />
+                </template>
+              </el-table-column>
+              <el-table-column label="分配" width="110">
+                <template #default="scope">
+                  <el-tag
+                    size="small"
+                    effect="plain"
+                    :type="scope.row.claim_type === 'assign' ? 'info' : 'success'"
+                  >
+                    {{ scope.row.claim_type === 'assign' ? '指派' : '开放认领' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="成员" width="150">
+                <template #default="scope">
+                  <div class="member-cell">
+                    <span>{{ memberNames(scope.row) }}</span>
+                    <el-tag
+                      v-if="submittedMembers(scope.row).length > 0"
+                      size="small"
+                      type="warning"
+                      effect="plain"
+                    >
+                      待验收 {{ submittedMembers(scope.row).length }}
+                    </el-tag>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="报名" width="150">
+                <template #default="scope">
+                  <div class="apply-cell">
+                    <span class="rule-summary">{{ quotaSummary(scope.row) }}</span>
+                    <el-tag
+                      v-if="scope.row.applied_count > 0"
+                      size="small"
+                      type="warning"
+                      effect="plain"
+                    >
+                      待审批 {{ scope.row.applied_count }}
+                    </el-tag>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="截止" width="150">
+                <template #default="scope">{{ formatDeadline(scope.row.deadline) }}</template>
+              </el-table-column>
+              <el-table-column label="积分" width="80">
+                <template #default="scope">+{{ scope.row.credit_reward ?? 0 }}</template>
+              </el-table-column>
+              <el-table-column label="催办规则" min-width="170">
+                <template #default="scope">
+                  <span class="rule-summary">{{ ruleSummary(scope.row) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="380" fixed="right">
+                <template #default="scope">
+                  <div class="row-actions">
+                    <el-button
+                      v-if="canAudit(scope.row)"
+                      size="small"
+                      text
+                      type="warning"
+                      @click="openAudit(scope.row)"
+                    >
+                      审核报名（{{ scope.row.applied_count }}）
+                    </el-button>
+                    <el-button
+                      v-if="canAssign(scope.row)"
+                      size="small"
+                      text
+                      type="primary"
+                      @click="openAssign(scope.row)"
+                    >
+                      指派
+                    </el-button>
+                    <el-button
+                      v-if="canVerify(scope.row)"
+                      size="small"
+                      text
+                      type="success"
+                      @click="openVerify(scope.row)"
+                    >
+                      验收（{{ submittedMembers(scope.row).length }}）
+                    </el-button>
+                    <el-button
+                      v-if="canEditDeadline(scope.row)"
+                      size="small"
+                      text
+                      @click="openDeadline(scope.row)"
+                    >
+                      改截止时间
+                    </el-button>
+                    <el-button size="small" text @click="openRule(scope.row)">催办规则</el-button>
+                    <el-button size="small" text @click="goDetail(scope.row.id)">详情</el-button>
+                    <el-button
+                      v-if="canCancel(scope.row)"
+                      size="small"
+                      text
+                      type="danger"
+                      :loading="cancelLoadingId === scope.row.id"
+                      @click="handleCancel(scope.row)"
+                    >
+                      取消任务
+                    </el-button>
+                  </div>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <div class="app-mobile-list app-mobile-only">
+            <ul class="mobile-list">
+              <li v-for="task in tasks" :key="task.id" class="mobile-card">
+                <div class="mobile-card__head">
+                  <el-link type="primary" :underline="false" @click="goDetail(task.id)">
+                    {{ task.title }}
+                  </el-link>
+                  <el-tag v-if="task.parent_id !== null" size="small" type="warning" effect="plain">
+                    子任务
+                  </el-tag>
+                  <StatusTag :status="task.status" size="small" />
+                </div>
+
+                <dl class="mobile-card__meta">
+                  <div class="meta-row">
+                    <dt>任务 ID</dt>
+                    <dd>#{{ task.id }}</dd>
+                  </div>
+                  <div class="meta-row">
+                    <dt>分配</dt>
+                    <dd>
+                      <el-tag size="small" effect="plain" :type="task.claim_type === 'assign' ? 'info' : 'success'">
+                        {{ task.claim_type === 'assign' ? '指派' : '开放认领' }}
+                      </el-tag>
+                    </dd>
+                  </div>
+                  <div class="meta-row">
+                    <dt>成员</dt>
+                    <dd>
+                      <span>{{ memberNames(task) }}</span>
+                      <el-tag
+                        v-if="submittedMembers(task).length > 0"
+                        size="small"
+                        type="warning"
+                        effect="plain"
+                      >
+                        待验收 {{ submittedMembers(task).length }}
+                      </el-tag>
+                    </dd>
+                  </div>
+                  <div class="meta-row">
+                    <dt>报名</dt>
+                    <dd>
+                      <span>{{ quotaSummary(task) }}</span>
+                      <el-tag v-if="task.applied_count > 0" size="small" type="warning" effect="plain">
+                        待审批 {{ task.applied_count }}
+                      </el-tag>
+                    </dd>
+                  </div>
+                  <div class="meta-row">
+                    <dt>截止</dt>
+                    <dd>{{ formatDeadline(task.deadline) }}</dd>
+                  </div>
+                  <div class="meta-row">
+                    <dt>积分</dt>
+                    <dd>+{{ task.credit_reward ?? 0 }}</dd>
+                  </div>
+                  <div class="meta-row">
+                    <dt>催办规则</dt>
+                    <dd>{{ ruleSummary(task) }}</dd>
+                  </div>
+                </dl>
+
+                <div class="mobile-card__actions">
+                  <el-button v-if="canAudit(task)" size="small" type="warning" plain @click="openAudit(task)">
+                    审核报名（{{ task.applied_count }}）
+                  </el-button>
+                  <el-button v-if="canAssign(task)" size="small" type="primary" plain @click="openAssign(task)">
+                    指派
+                  </el-button>
+                  <el-button v-if="canVerify(task)" size="small" type="success" plain @click="openVerify(task)">
+                    验收（{{ submittedMembers(task).length }}）
+                  </el-button>
+                  <el-button v-if="canEditDeadline(task)" size="small" @click="openDeadline(task)">
+                    改截止时间
+                  </el-button>
+                  <el-button size="small" @click="openRule(task)">催办规则</el-button>
+                  <el-button size="small" @click="goDetail(task.id)">详情</el-button>
+                  <el-button
+                    v-if="canCancel(task)"
+                    size="small"
+                    type="danger"
+                    plain
+                    :loading="cancelLoadingId === task.id"
+                    @click="handleCancel(task)"
+                  >
+                    取消任务
+                  </el-button>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </template>
       </el-card>
     </template>
 
@@ -589,7 +698,7 @@ onMounted(async () => {
                 </el-tag>
               </el-radio>
             </el-radio-group>
-            <span v-if="verifyTarget && submittedMembers(verifyTarget).length === 0" class="verify-hint">
+            <span v-if="verifyTarget && submittedMembers(verifyTarget).length === 0" class="verify-hint app-muted">
               当前没有待验收的成员
             </span>
           </el-form-item>
@@ -688,59 +797,115 @@ onMounted(async () => {
         title="没有待审批的报名"
         description="所有报名都已处理，或暂无新报名。"
       />
-      <el-table v-else :data="pendingApplications" size="small" stripe>
-        <el-table-column label="报名人" width="130">
-          <template #default="scope">
-            <span class="audit-user">{{ scope.row.user_name }}</span>
-            <el-tag
-              v-if="applicationStatusMeta(scope.row.status)"
-              size="small"
-              :type="applicationStatusMeta(scope.row.status).type"
-              effect="plain"
-              class="row-tag"
-            >
-              {{ applicationStatusMeta(scope.row.status).text }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="报名时间" width="170">
-          <template #default="scope">{{ scope.row.created_at }}</template>
-        </el-table-column>
-        <el-table-column label="拒绝原因（拒绝时必填）" min-width="200">
-          <template #default="scope">
-            <el-input
-              v-model="rejectReasons[scope.row.id]"
-              size="small"
-              maxlength="200"
-              placeholder="拒绝时请填写原因"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="140">
-          <template #default="scope">
-            <div class="row-actions">
-              <el-button
-                size="small"
-                text
-                type="success"
-                :loading="decideLoadingId === scope.row.id"
-                @click="decideOne(scope.row, true)"
-              >
-                通过
-              </el-button>
-              <el-button
-                size="small"
-                text
-                type="danger"
-                :loading="decideLoadingId === scope.row.id"
-                @click="decideOne(scope.row, false)"
-              >
-                拒绝
-              </el-button>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
+      <template v-else>
+        <div class="app-desktop-table app-desktop-only">
+          <el-table :data="pendingApplications" size="small" stripe>
+            <el-table-column label="报名人" width="130">
+              <template #default="scope">
+                <span class="audit-user">{{ scope.row.user_name }}</span>
+                <el-tag
+                  v-if="applicationStatusMeta(scope.row.status)"
+                  size="small"
+                  :type="applicationStatusMeta(scope.row.status).type"
+                  effect="plain"
+                  class="row-tag"
+                >
+                  {{ applicationStatusMeta(scope.row.status).text }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="报名时间" width="170">
+              <template #default="scope">{{ scope.row.created_at }}</template>
+            </el-table-column>
+            <el-table-column label="拒绝原因（拒绝时必填）" min-width="200">
+              <template #default="scope">
+                <el-input
+                  v-model="rejectReasons[scope.row.id]"
+                  size="small"
+                  maxlength="200"
+                  placeholder="拒绝时请填写原因"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="140">
+              <template #default="scope">
+                <div class="row-actions">
+                  <el-button
+                    size="small"
+                    text
+                    type="success"
+                    :loading="decideLoadingId === scope.row.id"
+                    @click="decideOne(scope.row, true)"
+                  >
+                    通过
+                  </el-button>
+                  <el-button
+                    size="small"
+                    text
+                    type="danger"
+                    :loading="decideLoadingId === scope.row.id"
+                    @click="decideOne(scope.row, false)"
+                  >
+                    拒绝
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <div class="app-mobile-list app-mobile-only">
+          <ul class="mobile-list">
+            <li v-for="item in pendingApplications" :key="item.id" class="mobile-card">
+              <div class="mobile-card__head">
+                <span class="audit-user">{{ item.user_name }}</span>
+                <el-tag
+                  v-if="applicationStatusMeta(item.status)"
+                  size="small"
+                  :type="applicationStatusMeta(item.status).type"
+                  effect="plain"
+                >
+                  {{ applicationStatusMeta(item.status).text }}
+                </el-tag>
+              </div>
+
+              <dl class="mobile-card__meta">
+                <div class="meta-row">
+                  <dt>报名时间</dt>
+                  <dd>{{ item.created_at }}</dd>
+                </div>
+              </dl>
+
+              <el-input
+                v-model="rejectReasons[item.id]"
+                maxlength="200"
+                placeholder="拒绝时请填写原因"
+              />
+
+              <div class="mobile-card__actions">
+                <el-button
+                  size="small"
+                  type="success"
+                  plain
+                  :loading="decideLoadingId === item.id"
+                  @click="decideOne(item, true)"
+                >
+                  通过
+                </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="decideLoadingId === item.id"
+                  @click="decideOne(item, false)"
+                >
+                  拒绝
+                </el-button>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </template>
 
       <template #footer>
         <el-button :loading="appsLoading" @click="loadApplications">刷新</el-button>
@@ -751,41 +916,12 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.admin {
-  max-width: 1200px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.page-header {
-  display: flex;
+.admin-header {
   flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.page-title {
-  margin: 0 0 4px;
-  font-size: 20px;
-  color: #303133;
-}
-
-.page-subtitle {
-  margin: 0;
-  font-size: 14px;
-  color: #909399;
 }
 
 .header-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.section-card {
-  border-radius: 10px;
+  flex-wrap: wrap;
 }
 
 .card-header {
@@ -799,12 +935,13 @@ onMounted(async () => {
 .card-title {
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 
 .header-hint {
+  min-width: 0;
   font-size: 13px;
-  color: #909399;
+  line-height: 1.6;
 }
 
 .task-table :deep(.el-table__cell) {
@@ -823,7 +960,7 @@ onMounted(async () => {
 
 .rule-summary {
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 
 .apply-cell {
@@ -857,7 +994,6 @@ onMounted(async () => {
 
 .verify-hint {
   font-size: 13px;
-  color: #909399;
 }
 
 .audit-hint {
@@ -869,7 +1005,8 @@ onMounted(async () => {
 
 .audit-user {
   font-weight: 500;
-  color: #303133;
+  color: var(--el-text-color-primary);
+  word-break: break-word;
 }
 
 .verify-body {
@@ -882,7 +1019,78 @@ onMounted(async () => {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
   word-break: break-word;
+}
+
+.mobile-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mobile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-raised);
+}
+
+.mobile-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.mobile-card__meta {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.meta-row dt {
+  margin: 0;
+  font-size: 13px;
+  color: var(--app-text-muted);
+}
+
+.meta-row dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--app-text);
+  word-break: break-word;
+}
+
+.mobile-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mobile-card__actions :deep(.el-button) {
+  margin-left: 0 !important;
 }
 </style>

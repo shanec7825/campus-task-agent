@@ -1,14 +1,13 @@
 <script setup lang="ts">
 /**
- * 个人中心（计划 T6 / R5-AC9 / R6-AC5 / R16-AC5）。
+ * 个人中心（计划 T6 / R6）。
  *
- * 五个区块：
- * 1. 我的任务：按「我发布的 / 我报名通过的」分栏；
- * 2. 积分：余额 + 流水表（正负变动着色）；
- * 3. 签到记录表；
- * 4. 我的报名：锚点 `id="my-applications"`，展示审批状态 / 拒绝原因，可跳任务详情；
- * 5. 通知中心：锚点 `id="notifications"`（顶栏红点跳 `/profile#notifications`）、未读高亮、
- *    标记已读、按 `task_id` 快捷跳转详情。
+ * 自上而下：
+ * 1. 用户与积分总览 + 待处理摘要（待审批报名 / 待验收成员 / 未读通知，点击跳区块）；
+ * 2. 当前任务分组：我发布的 / 我认领的；
+ * 3. 积分流水、签到记录：桌面表格 + 手机卡片双视图（`C-MOBILELIST@1`）；
+ * 4. 我的报名：锚点 `id="my-applications"`；
+ * 5. 通知中心：锚点 `id="notifications"`（顶栏红点跳 `/profile#notifications`）。
  *
  * 所有列表请求都持有 loading / error 两个 ref，并在 `finally` 中复位。
  */
@@ -53,7 +52,7 @@ const checkins = ref<CheckinItem[]>([])
 const checkinsLoading = ref(false)
 const checkinsError = ref('')
 
-/** 我的报名（R16-AC5）：报名记录 + 任务摘要 */
+/** 我的报名：报名记录 + 任务摘要 */
 const myApplicationsList = ref<ApplicationWithTask[]>([])
 const applicationsLoading = ref(false)
 const applicationsError = ref('')
@@ -87,6 +86,14 @@ const assignedTasks = computed<TaskItem[]>(() =>
 function pendingVerifyCount(task: TaskItem): number {
   return (task.members ?? []).filter((member) => member.status === 'submitted').length
 }
+
+const pendingVerifyTotal = computed<number>(() =>
+  publishedTasks.value.reduce((sum, task) => sum + pendingVerifyCount(task), 0)
+)
+
+const pendingApprovalCount = computed<number>(() =>
+  myApplicationsList.value.filter((record) => record.application.status === 'pending').length
+)
 
 /** 成员视角：「我」在该任务中的执行状态文案 */
 function myMemberMeta(task: TaskItem) {
@@ -122,6 +129,15 @@ function errorMessage(err: unknown): string {
 function shortTime(value: string | null): string {
   if (!value) return '—'
   return value.length > 16 ? value.slice(0, 16) : value
+}
+
+function deltaType(delta: number): 'success' | 'danger' {
+  return Number(delta) >= 0 ? 'success' : 'danger'
+}
+
+function deltaText(delta: number): string {
+  const value = Number(delta)
+  return `${value > 0 ? '+' : ''}${value}`
 }
 
 async function loadTasks(): Promise<void> {
@@ -224,11 +240,24 @@ async function markAllRead(): Promise<void> {
   }
 }
 
+/** 固定顶栏高度（含安全间距）：锚点滚动必须落在 header 之下 */
+function anchorOffset(): number {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--app-header-height')
+  const parsed = Number.parseInt(raw, 10)
+  return (Number.isFinite(parsed) && parsed > 0 ? parsed : 60) + 16
+}
+
+function scrollToSection(id: string): void {
+  const element = document.getElementById(id)
+  if (!element) return
+  const top = element.getBoundingClientRect().top + window.scrollY - anchorOffset()
+  window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' })
+}
+
 /** 顶栏红点跳 `/profile#notifications` 时滚动到通知中心 */
 function scrollToAnchor(): void {
   if (route.hash !== '#notifications') return
-  const element = document.getElementById('notifications')
-  if (element) element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  scrollToSection('notifications')
 }
 
 onMounted(async () => {
@@ -254,39 +283,60 @@ watch(
 </script>
 
 <template>
-  <section class="profile">
-    <header class="page-header">
+  <section class="profile app-page">
+    <header class="app-page-header">
       <div>
-        <h2 class="page-title">个人中心</h2>
-        <p class="page-subtitle">我的任务、积分流水、签到记录、我的报名与通知中心</p>
+        <h2 class="app-page-title">个人中心</h2>
+        <p class="app-page-subtitle">我的任务、积分流水、签到记录、我的报名与通知中心</p>
       </div>
-      <el-button @click="refreshAll">刷新全部</el-button>
+      <div class="app-actions">
+        <el-button @click="refreshAll">刷新全部</el-button>
+      </div>
     </header>
 
-    <el-card shadow="never" class="user-card">
-      <div class="user-main">
-        <div class="user-info">
-          <h3 class="user-name">{{ displayName }}</h3>
-          <p class="user-meta">
+    <section class="app-section-card overview">
+      <div class="overview-main">
+        <div class="overview-user">
+          <h3 class="overview-name">{{ displayName }}</h3>
+          <p class="overview-meta">
             <el-tag size="small" effect="plain">{{ roleText }}</el-tag>
-            <span class="user-account">{{ userStore.user?.username || '—' }}</span>
-            <span v-if="userStore.user?.org" class="user-org">{{ userStore.user?.org }}</span>
+            <span>{{ userStore.user?.username || '—' }}</span>
+            <span v-if="userStore.user?.org">{{ userStore.user?.org }}</span>
           </p>
         </div>
-        <div class="user-credits">
+        <div class="overview-credits">
           <span class="credits-value">{{ creditsBalance }}</span>
           <span class="credits-label">当前积分</span>
         </div>
       </div>
-    </el-card>
 
-    <el-card id="my-tasks" shadow="never" class="section-card">
-      <template #header>
-        <div class="card-header">
-          <span class="card-title">我的任务</span>
-          <span class="header-hint">共 {{ myTasks.length }} 个（发布 + 认领）</span>
-        </div>
-      </template>
+      <ul class="overview-stats">
+        <li>
+          <button type="button" class="stat-item" @click="scrollToSection('my-applications')">
+            <span class="stat-value">{{ pendingApprovalCount }}</span>
+            <span class="stat-label">待审批报名</span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="stat-item" @click="scrollToSection('my-tasks')">
+            <span class="stat-value">{{ pendingVerifyTotal }}</span>
+            <span class="stat-label">待验收成员</span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="stat-item" @click="scrollToSection('notifications')">
+            <span class="stat-value">{{ unreadCount }}</span>
+            <span class="stat-label">未读通知</span>
+          </button>
+        </li>
+      </ul>
+    </section>
+
+    <section id="my-tasks" class="app-section-card section">
+      <header class="section-head">
+        <span class="card-title">我的任务</span>
+        <span class="header-hint">共 {{ myTasks.length }} 个（发布 + 认领）</span>
+      </header>
 
       <LoadingState v-if="tasksLoading" :rows="4" />
       <ErrorState
@@ -358,15 +408,13 @@ watch(
           </el-col>
         </el-row>
       </template>
-    </el-card>
+    </section>
 
-    <el-card id="credits" shadow="never" class="section-card">
-      <template #header>
-        <div class="card-header">
-          <span class="card-title">积分</span>
-          <span class="credits-inline">余额 <strong>{{ creditsBalance }}</strong></span>
-        </div>
-      </template>
+    <section id="credits" class="app-section-card section">
+      <header class="section-head">
+        <span class="card-title">积分</span>
+        <span class="credits-inline">余额 <strong>{{ creditsBalance }}</strong></span>
+      </header>
 
       <LoadingState v-if="creditsLoading" :rows="3" />
       <ErrorState
@@ -382,40 +430,64 @@ watch(
           title="暂无积分流水"
           description="任务验收通过后会自动结算积分，逾期会扣分。"
         />
-        <el-table v-else :data="creditLogs" size="small" stripe>
-          <el-table-column prop="created_at" label="时间" width="180" />
-          <el-table-column prop="reason" label="事由" min-width="220" />
-          <el-table-column label="变动" width="100">
-            <template #default="scope">
-              <el-tag :type="Number(scope.row.delta) >= 0 ? 'success' : 'danger'" size="small">
-                {{ Number(scope.row.delta) > 0 ? '+' : '' }}{{ scope.row.delta }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="任务" width="110">
-            <template #default="scope">
-              <el-link
-                v-if="scope.row.task_id !== null"
-                type="primary"
-                :underline="false"
-                @click="openTask(scope.row.task_id)"
-              >
-                #{{ scope.row.task_id }}
-              </el-link>
-              <span v-else>—</span>
-            </template>
-          </el-table-column>
-        </el-table>
+        <template v-else>
+          <div class="app-desktop-table">
+            <el-table :data="creditLogs" size="small" stripe>
+              <el-table-column prop="created_at" label="时间" width="180" />
+              <el-table-column prop="reason" label="事由" min-width="220" />
+              <el-table-column label="变动" width="100">
+                <template #default="scope">
+                  <el-tag :type="deltaType(scope.row.delta)" size="small">
+                    {{ deltaText(scope.row.delta) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="任务" width="110">
+                <template #default="scope">
+                  <el-link
+                    v-if="scope.row.task_id !== null"
+                    type="primary"
+                    :underline="false"
+                    @click="openTask(scope.row.task_id)"
+                  >
+                    #{{ scope.row.task_id }}
+                  </el-link>
+                  <span v-else>—</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+          <ul class="app-mobile-list">
+            <li v-for="log in creditLogs" :key="log.id" class="mobile-card">
+              <div class="mobile-card-head">
+                <span class="mobile-card-title">{{ log.reason }}</span>
+                <el-tag :type="deltaType(log.delta)" size="small">
+                  {{ deltaText(log.delta) }}
+                </el-tag>
+              </div>
+              <div class="mobile-card-meta">
+                <span>{{ log.created_at }}</span>
+                <el-link
+                  v-if="log.task_id !== null"
+                  type="primary"
+                  :underline="false"
+                  @click="openTask(log.task_id)"
+                >
+                  任务 #{{ log.task_id }}
+                </el-link>
+                <span v-else>任务 —</span>
+              </div>
+            </li>
+          </ul>
+        </template>
       </template>
-    </el-card>
+    </section>
 
-    <el-card id="checkins" shadow="never" class="section-card">
-      <template #header>
-        <div class="card-header">
-          <span class="card-title">签到记录</span>
-          <span class="header-hint">共 {{ checkins.length }} 条</span>
-        </div>
-      </template>
+    <section id="checkins" class="app-section-card section">
+      <header class="section-head">
+        <span class="card-title">签到记录</span>
+        <span class="header-hint">共 {{ checkins.length }} 条</span>
+      </header>
 
       <LoadingState v-if="checkinsLoading" :rows="3" />
       <ErrorState
@@ -431,26 +503,41 @@ watch(
           title="暂无签到记录"
           description="在任务详情页点击「签到」后会记录在这里。"
         />
-        <el-table v-else :data="checkins" size="small" stripe>
-          <el-table-column label="任务" min-width="240">
-            <template #default="scope">
-              <el-link type="primary" :underline="false" @click="openTask(scope.row.task_id)">
-                {{ scope.row.task_title || `任务 #${scope.row.task_id}` }}
-              </el-link>
-            </template>
-          </el-table-column>
-          <el-table-column prop="checkin_time" label="签到时间" width="200" />
-        </el-table>
+        <template v-else>
+          <div class="app-desktop-table">
+            <el-table :data="checkins" size="small" stripe>
+              <el-table-column label="任务" min-width="240">
+                <template #default="scope">
+                  <el-link type="primary" :underline="false" @click="openTask(scope.row.task_id)">
+                    {{ scope.row.task_title || `任务 #${scope.row.task_id}` }}
+                  </el-link>
+                </template>
+              </el-table-column>
+              <el-table-column prop="checkin_time" label="签到时间" width="200" />
+            </el-table>
+          </div>
+          <ul class="app-mobile-list">
+            <li v-for="item in checkins" :key="item.id" class="mobile-card">
+              <div class="mobile-card-head">
+                <el-link type="primary" :underline="false" @click="openTask(item.task_id)">
+                  {{ item.task_title || `任务 #${item.task_id}` }}
+                </el-link>
+                <el-tag size="small" effect="plain">已签到</el-tag>
+              </div>
+              <div class="mobile-card-meta">
+                <span>签到时间：{{ item.checkin_time }}</span>
+              </div>
+            </li>
+          </ul>
+        </template>
       </template>
-    </el-card>
+    </section>
 
-    <el-card id="my-applications" shadow="never" class="section-card">
-      <template #header>
-        <div class="card-header">
-          <span class="card-title">我的报名</span>
-          <span class="header-hint">共 {{ myApplicationsList.length }} 条 · 待审批可撤回</span>
-        </div>
-      </template>
+    <section id="my-applications" class="app-section-card section">
+      <header class="section-head">
+        <span class="card-title">我的报名</span>
+        <span class="header-hint">共 {{ myApplicationsList.length }} 条 · 待审批可撤回</span>
+      </header>
 
       <LoadingState v-if="applicationsLoading" :rows="3" />
       <ErrorState
@@ -505,23 +592,21 @@ watch(
           </li>
         </ul>
       </template>
-    </el-card>
+    </section>
 
-    <el-card id="notifications" shadow="never" class="section-card notice-card">
-      <template #header>
-        <div class="card-header">
-          <span class="card-title">
-            通知中心
-            <el-badge v-if="unreadCount > 0" :value="unreadCount" :max="99" class="notice-badge" />
-          </span>
-          <div class="header-actions">
-            <el-button size="small" :disabled="unreadIds.length === 0" @click="markAllRead">
-              全部标为已读
-            </el-button>
-            <el-button size="small" :loading="noticesLoading" @click="loadNotices">刷新</el-button>
-          </div>
+    <section id="notifications" class="app-section-card section notice-card">
+      <header class="section-head">
+        <span class="card-title">
+          通知中心
+          <el-badge v-if="unreadCount > 0" :value="unreadCount" :max="99" class="notice-badge" />
+        </span>
+        <div class="header-actions">
+          <el-button size="small" :disabled="unreadIds.length === 0" @click="markAllRead">
+            全部标为已读
+          </el-button>
+          <el-button size="small" :loading="noticesLoading" @click="loadNotices">刷新</el-button>
         </div>
-      </template>
+      </header>
 
       <LoadingState v-if="noticesLoading" :rows="3" />
       <ErrorState
@@ -570,43 +655,13 @@ watch(
           </li>
         </ul>
       </template>
-    </el-card>
+    </section>
   </section>
 </template>
 
 <style scoped>
-.profile {
-  max-width: 1000px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.page-title {
-  margin: 0 0 4px;
-  font-size: 20px;
-  color: #303133;
-}
-
-.page-subtitle {
-  margin: 0;
-  font-size: 14px;
-  color: #909399;
-}
-
-.user-card {
-  border-radius: 10px;
-}
-
-.user-main {
+/* 仅页内布局；令牌、公共类与响应式规则由 C-STYLE@1（theme.css）提供 */
+.overview-main {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -614,61 +669,95 @@ watch(
   gap: 16px;
 }
 
-.user-name {
+.overview-name {
   margin: 0 0 6px;
   font-size: 18px;
-  color: #303133;
+  color: var(--app-text);
 }
 
-.user-meta {
+.overview-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin: 0;
   font-size: 14px;
-  color: #909399;
+  color: var(--app-text-muted);
 }
 
-.user-account {
-  color: #606266;
-}
-
-.user-org {
-  color: #909399;
-}
-
-.user-credits {
+.overview-credits {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  padding: 4px 12px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #eef5ff 0%, #f5f7fa 100%);
+  padding: 6px 14px;
+  border-radius: var(--app-radius-md);
+  background: var(--app-primary-soft);
 }
 
 .credits-value {
   font-size: 26px;
   font-weight: 700;
-  color: #409eff;
+  color: var(--app-primary);
   line-height: 1.2;
 }
 
 .credits-label {
   font-size: 13px;
-  color: #909399;
+  color: var(--app-text-secondary);
 }
 
-.section-card {
-  border-radius: 10px;
+.overview-stats {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 0;
 }
 
-.card-header {
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: var(--app-touch);
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stat-item:hover {
+  border-color: var(--app-border-strong);
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--app-text);
+  line-height: 1.2;
+}
+
+.stat-label {
+  font-size: 13px;
+  color: var(--app-text-muted);
+}
+
+.section {
+  min-width: 0;
+}
+
+.section-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  margin-bottom: 12px;
 }
 
 .card-title {
@@ -677,27 +766,28 @@ watch(
   gap: 10px;
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: var(--app-text);
 }
 
 .header-hint {
   font-size: 13px;
-  color: #909399;
+  color: var(--app-text-muted);
 }
 
 .header-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .credits-inline {
   font-size: 14px;
-  color: #606266;
+  color: var(--app-text-secondary);
 }
 
 .credits-inline strong {
-  color: #409eff;
   font-size: 16px;
+  color: var(--app-primary);
 }
 
 .task-column {
@@ -708,7 +798,7 @@ watch(
   margin: 0 0 8px;
   font-size: 14px;
   font-weight: 600;
-  color: #606266;
+  color: var(--app-text-secondary);
 }
 
 .mini-list {
@@ -726,14 +816,16 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 6px 10px;
-  padding: 8px 10px;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  background: #fafbfc;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+  min-width: 0;
 }
 
 .mini-main {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -741,11 +833,49 @@ watch(
 
 .mini-meta {
   font-size: 13px;
-  color: #909399;
+  color: var(--app-text-muted);
+}
+
+.mobile-card {
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+  min-width: 0;
+}
+
+.mobile-card + .mobile-card {
+  margin-top: 8px;
+}
+
+.mobile-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mobile-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--app-text);
+  word-break: break-word;
+}
+
+.mobile-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--app-text-muted);
+  word-break: break-word;
 }
 
 .notice-card {
-  scroll-margin-top: 12px;
+  scroll-margin-top: calc(var(--app-header-height) + 16px);
 }
 
 .apply-list {
@@ -759,9 +889,10 @@ watch(
 
 .apply-item {
   padding: 10px 12px;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+  min-width: 0;
 }
 
 .apply-main {
@@ -778,18 +909,19 @@ watch(
   gap: 4px 12px;
   margin-top: 6px;
   font-size: 13px;
-  color: #909399;
+  color: var(--app-text-muted);
 }
 
 .apply-reason {
   margin: 6px 0 0;
   font-size: 13px;
-  color: #f56c6c;
+  color: var(--el-color-danger);
   line-height: 1.6;
+  word-break: break-word;
 }
 
 .pending-reason {
-  color: #e6a23c;
+  color: var(--el-color-warning);
 }
 
 .notice-badge {
@@ -807,14 +939,15 @@ watch(
 
 .notice-item {
   padding: 10px 12px;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+  min-width: 0;
 }
 
 .notice-item.unread {
-  border-color: #c6e2ff;
-  background: #f5f9ff;
+  border-color: var(--el-color-primary-light-7);
+  background: var(--el-color-primary-light-9);
 }
 
 .notice-head {
@@ -827,24 +960,25 @@ watch(
 .notice-title {
   font-size: 15px;
   font-weight: 600;
-  color: #303133;
+  color: var(--app-text);
+  word-break: break-word;
 }
 
 .unread-flag {
   font-size: 13px;
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 
 .notice-time {
   margin-left: auto;
   font-size: 13px;
-  color: #909399;
+  color: var(--app-text-muted);
 }
 
 .notice-content {
   margin: 6px 0 0;
   font-size: 14px;
-  color: #606266;
+  color: var(--app-text-secondary);
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
@@ -855,5 +989,15 @@ watch(
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 4px;
+}
+
+@media (max-width: 768px) {
+  .overview-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-credits {
+    align-items: flex-start;
+  }
 }
 </style>

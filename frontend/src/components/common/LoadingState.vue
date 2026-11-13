@@ -16,12 +16,26 @@ withDefaults(defineProps<{ rows?: number }>(), { rows: 3 })
 
 <style scoped>
 .loading-state {
+  width: 100%;
+  box-sizing: border-box;
   padding: 12px 4px;
 }
 
 .loading-text {
   margin: 0 0 12px;
   font-size: 14px;
-  color: #909399;
+  line-height: 1.6;
+  color: var(--app-text-muted);
+}
+
+.loading-state :deep(.el-skeleton) {
+  --el-skeleton-color: var(--app-surface-sunken);
+  --el-skeleton-to-color: var(--app-border);
+}
+
+@media (max-width: 768px) {
+  .loading-state {
+    padding: 8px 0;
+  }
 }
 </style>

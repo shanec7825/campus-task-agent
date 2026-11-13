@@ -41,7 +41,7 @@ import { createTask, getTask } from '../../api/tasks'
 import { supported as voiceSupported, useVoiceComposer } from '../../composables/useVoiceComposer'
 import { useDraftStore, type Block } from '../../stores/draft'
 import type { Change, SimilarItem, SubTaskSuggestion } from '../../types/models'
-import { WARN_COLOR } from '../../utils/colorPool'
+import { WARN_CSS_COLOR } from '../../utils/colorPool'
 import { formatChangeText } from '../../utils/traceText'
 import ErrorState from '../common/ErrorState.vue'
 import BlockText from '../VoiceComposer/BlockText.vue'
@@ -687,7 +687,7 @@ function onClearDraft(): void {
 
     <div class="ai-panel__grid">
       <!-- 输入区 / 块容器 -->
-      <section class="composer">
+      <section class="composer" data-testid="ai-composer">
         <header class="composer__header">
           <span class="composer__title">任务描述</span>
           <el-tag v-if="draft.mockMode" size="small" type="warning" effect="plain">
@@ -797,7 +797,7 @@ function onClearDraft(): void {
       </section>
 
       <!-- 任务数据面板：与文字块同字段同色（颜色由 colorForField 提供） -->
-      <aside class="fields">
+      <aside class="fields" data-testid="ai-fields">
         <header class="fields__header">
           <span class="fields__title">任务数据面板</span>
           <el-tag v-if="draft.pendingCount > 0" size="small" type="info" effect="plain">
@@ -838,7 +838,7 @@ function onClearDraft(): void {
         </header>
         <ul class="unresolved">
           <li v-for="item in visibleUnresolved" :key="item.index" class="unresolved__item">
-            <span class="unresolved__text" :style="{ color: WARN_COLOR }">{{ item.text }}</span>
+            <span class="unresolved__text" :style="{ color: WARN_CSS_COLOR }">{{ item.text }}</span>
             <el-button link type="primary" size="small" @click="markUnresolvedHandled(item.index)">
               标记已处理
             </el-button>
@@ -940,8 +940,8 @@ function onClearDraft(): void {
         @remove="onRemoveSubTask"
       />
 
-      <!-- 发布栏 -->
-      <footer class="publish-bar">
+      <!-- 发布栏：移动端吸底于底部导航之上 -->
+      <footer class="publish-bar" data-testid="publish-bar">
         <div class="publish-bar__info">
           <span v-if="draft.suggestedSubTasks.length >= 2" class="publish-bar__summary">
             {{
@@ -953,6 +953,7 @@ function onClearDraft(): void {
           <span v-if="publishBlockReason" class="publish-bar__reason">{{ publishBlockReason }}</span>
         </div>
         <el-button
+          data-testid="publish-button"
           type="primary"
           size="large"
           :loading="submitting"
@@ -989,10 +990,11 @@ function onClearDraft(): void {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
   padding: 16px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 12px;
-  background: var(--el-bg-color);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
 }
 
 .composer__header,
@@ -1142,9 +1144,9 @@ function onClearDraft(): void {
   flex-direction: column;
   gap: 10px;
   padding: 16px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 12px;
-  background: var(--el-bg-color);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
 }
 
 .review__card-header {
@@ -1242,9 +1244,10 @@ function onClearDraft(): void {
   justify-content: space-between;
   gap: 16px;
   padding: 14px 16px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 12px;
-  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-raised);
+  box-shadow: var(--app-shadow-sm);
 }
 
 .publish-bar__info {
@@ -1267,6 +1270,56 @@ function onClearDraft(): void {
 @media (max-width: 960px) {
   .ai-panel__grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 移动端：按「输入 → 字段 → 审核结果」顺序单栏阅读，发布栏吸底且不遮挡最后的控件 */
+@media (max-width: 768px) {
+  .composer,
+  .fields,
+  .review__card {
+    padding: 14px;
+  }
+
+  .composer__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .composer__parse {
+    flex-wrap: wrap;
+  }
+
+  .composer__append-actions {
+    align-items: stretch;
+  }
+
+  .suggest,
+  .unresolved__item,
+  .polished__row {
+    flex-wrap: wrap;
+  }
+
+  .polished__label {
+    width: auto;
+  }
+
+  /* 为吸底发布栏留出可滚动余量，保证最后一项控件能完整露出 */
+  .review {
+    padding-bottom: calc(var(--app-bottom-nav-height) + var(--app-safe-bottom) + 88px);
+  }
+
+  .publish-bar {
+    position: sticky;
+    bottom: calc(var(--app-bottom-nav-height) + var(--app-safe-bottom) + 8px);
+    z-index: 10;
+    flex-wrap: wrap;
+    background: var(--app-surface-raised);
+    box-shadow: var(--app-shadow-md);
+  }
+
+  .publish-bar .el-button {
+    width: 100%;
   }
 }
 </style>

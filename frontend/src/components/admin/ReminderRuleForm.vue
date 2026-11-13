@@ -74,9 +74,16 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" class="reminder-form">
+  <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="reminder-form">
     <el-form-item label="提前提醒天数" prop="days_before">
-      <el-input-number v-model="form.days_before" :min="0" :max="365" :step="1" :precision="0" />
+      <el-input-number
+        v-model="form.days_before"
+        :min="0"
+        :max="365"
+        :step="1"
+        :precision="0"
+        class="rule-days"
+      />
       <span class="field-hint">距截止时间超过 24 小时且剩余天数 ≤ 该值时提醒（warning）</span>
     </el-form-item>
 
@@ -101,10 +108,20 @@ async function submit(): Promise<void> {
   padding-top: 4px;
 }
 
+.reminder-form :deep(.el-form-item__content) {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.rule-days {
+  width: 100%;
+}
+
 .field-hint {
-  margin-left: 12px;
+  display: block;
+  margin-top: 6px;
   font-size: 13px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   line-height: 1.6;
 }
 </style>

@@ -296,10 +296,10 @@ function onAdoptCorrection(key: string, suggestion: string): void {
   align-items: center;
   gap: 10px;
   padding: 6px 10px;
-  border: 1px solid color-mix(in srgb, var(--field-color) 40%, transparent);
+  border: 1px solid color-mix(in srgb, var(--field-color) 40%, var(--app-border));
   border-left: 3px solid var(--field-color);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--field-color) 5%, transparent);
+  border-radius: var(--app-radius-sm);
+  background: color-mix(in srgb, var(--field-color) 8%, var(--app-surface));
 }
 
 .field-row__label {
@@ -331,5 +331,34 @@ function onAdoptCorrection(key: string, suggestion: string): void {
 .field-panel__footer {
   display: flex;
   padding-top: 2px;
+}
+
+/* 移动端：标签换行显示完整字段名，值区占满整行，触控区域更大 */
+@media (max-width: 768px) {
+  .field-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .field-row__label {
+    min-width: 0;
+  }
+
+  .field-row__name {
+    max-width: none;
+    white-space: normal;
+  }
+
+  .field-row__value {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .field-row__value .el-input,
+  .field-row__value .el-input-number {
+    width: 100%;
+  }
 }
 </style>

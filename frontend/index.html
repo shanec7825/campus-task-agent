@@ -2,8 +2,27 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>校园任务协同 AI Agent</title>
+    <script>
+      // 首屏前应用主题，避免深色偏好下闪白；与 composables/useTheme.ts 规则一致，且不写入存储
+      ;(function () {
+        try {
+          var stored = window.localStorage.getItem('cta_theme')
+          var theme =
+            stored === 'light' || stored === 'dark'
+              ? stored
+              : window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+          var root = document.documentElement
+          root.classList.toggle('dark', theme === 'dark')
+          root.dataset.theme = theme
+        } catch (ignored) {
+          document.documentElement.dataset.theme = 'light'
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

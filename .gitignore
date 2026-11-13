@@ -34,6 +34,9 @@ Thumbs.db
 .codeartsdoer/
 .merkle-snapshot.json
 .tmp/
+/outputs/
+/.playwright-mcp/
+/work/
 frontend/.t1-voice-check/
 tests/frontend/.tmp-voice/
 *.db-wal

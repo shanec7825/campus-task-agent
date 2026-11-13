@@ -374,7 +374,7 @@ async function handleSubmit(): Promise<void> {
 }
 
 .manual-form__alert {
-  border-radius: 10px;
+  border-radius: var(--app-radius-sm);
 }
 
 .manual-form__body {
@@ -389,8 +389,10 @@ async function handleSubmit(): Promise<void> {
   gap: 0 20px;
 }
 
+/* 日期选择器始终占满表单列宽：移动端点击区域更大，也不会把后面的字段挤出视口 */
 .manual-form__picker {
   width: 100%;
+  min-width: 0;
 }
 
 .manual-form__extras {
@@ -417,17 +419,41 @@ async function handleSubmit(): Promise<void> {
   align-items: center;
   gap: 12px;
   padding-top: 8px;
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--app-border);
 }
 
 .manual-form__tip {
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: var(--app-text-secondary);
 }
 
 @media (max-width: 768px) {
+  /* 移动端单栏：日期/时间控件宽度已在上方统一 100% */
   .manual-form__grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .manual-form__extra-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manual-form__extra-row .el-button {
+    align-self: flex-start;
+  }
+
+  .manual-form__switches {
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+
+  .manual-form__footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manual-form__footer .el-button {
+    width: 100%;
   }
 }
 </style>

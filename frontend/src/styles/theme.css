@@ -1,0 +1,378 @@
+/* ==========================================================================
+   主题设计令牌与全局规则（契约 C-STYLE@1）
+   - :root 提供 Light 基线；html.dark 覆盖 Dark 主题。
+   - 组件只引用 --app-* / --el-* 令牌与 .app-* 公共类，不重复定义。
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Element Plus 语义令牌（Light 基线） ---- */
+  --el-color-primary: #409eff;
+  --el-color-primary-light-3: #79bbff;
+  --el-color-primary-light-5: #a0cfff;
+  --el-color-primary-light-7: #c6e2ff;
+  --el-color-primary-light-8: #d9ecff;
+  --el-color-primary-light-9: #ecf5ff;
+  --el-color-primary-dark-2: #337ecc;
+
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #f5f7fa;
+  --el-bg-color-overlay: #ffffff;
+
+  --el-text-color-primary: #303133;
+  --el-text-color-regular: #606266;
+  --el-text-color-secondary: #909399;
+  --el-text-color-placeholder: #a8abb2;
+  --el-text-color-disabled: #c0c4cc;
+
+  --el-border-color: #dcdfe6;
+  --el-border-color-light: #e4e7ed;
+  --el-border-color-lighter: #ebeef5;
+  --el-border-color-extra-light: #f2f6fc;
+  --el-border-color-dark: #d4d7de;
+  --el-border-color-darker: #cdd0d6;
+
+  --el-fill-color: #f0f2f5;
+  --el-fill-color-light: #f5f7fa;
+  --el-fill-color-lighter: #fafafa;
+  --el-fill-color-blank: #ffffff;
+
+  --el-mask-color: rgba(255, 255, 255, 0.9);
+  --el-box-shadow: 0 12px 32px 4px rgba(0, 0, 0, 0.04), 0 8px 20px rgba(0, 0, 0, 0.08);
+  --el-box-shadow-light: 0 0 12px rgba(0, 0, 0, 0.12);
+  --el-box-shadow-lighter: 0 0 6px rgba(0, 0, 0, 0.12);
+
+  --el-border-radius-base: 8px;
+
+  /* ---- 应用令牌（Light） ---- */
+  --app-bg: var(--el-bg-color-page);
+  --app-surface: var(--el-bg-color);
+  --app-surface-raised: var(--el-bg-color-overlay);
+  --app-surface-sunken: var(--el-fill-color);
+  --app-border: var(--el-border-color);
+  --app-border-strong: var(--el-border-color-dark);
+  --app-text: var(--el-text-color-primary);
+  --app-text-secondary: var(--el-text-color-regular);
+  --app-text-muted: var(--el-text-color-secondary);
+  --app-primary: var(--el-color-primary);
+  --app-primary-soft: var(--el-color-primary-light-9);
+  --app-shadow-sm: var(--el-box-shadow-lighter);
+  --app-shadow-md: var(--el-box-shadow-light);
+  --app-shadow-lg: var(--el-box-shadow);
+
+  --app-radius-sm: 8px;
+  --app-radius-md: 12px;
+  --app-radius-lg: 16px;
+
+  --app-header-height: 60px;
+  --app-bottom-nav-height: 60px;
+  --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --app-touch: 44px;
+  --app-content-max: 1200px;
+
+  --app-space-1: 4px;
+  --app-space-2: 8px;
+  --app-space-3: 12px;
+  --app-space-4: 16px;
+  --app-space-5: 24px;
+  --app-space-6: 32px;
+}
+
+html.dark {
+  color-scheme: dark;
+
+  /* ---- Element Plus 语义令牌（Dark，与官方 dark/css-vars.css 对齐） ---- */
+  --el-color-primary: #409eff;
+  --el-color-primary-light-3: #3375b9;
+  --el-color-primary-light-5: #2a598a;
+  --el-color-primary-light-7: #213d5b;
+  --el-color-primary-light-8: #1d3043;
+  --el-color-primary-light-9: #18222b;
+  --el-color-primary-dark-2: #66b1ff;
+
+  --el-bg-color: #141414;
+  --el-bg-color-page: #0a0a0a;
+  --el-bg-color-overlay: #1d1e1f;
+
+  --el-text-color-primary: #e5eaf3;
+  --el-text-color-regular: #cfd3dc;
+  --el-text-color-secondary: #a3a6ad;
+  --el-text-color-placeholder: #8d9095;
+  --el-text-color-disabled: #6c6e72;
+
+  --el-border-color: #4c4d4f;
+  --el-border-color-light: #414243;
+  --el-border-color-lighter: #363637;
+  --el-border-color-extra-light: #2b2b2c;
+  --el-border-color-dark: #58585b;
+  --el-border-color-darker: #636466;
+
+  --el-fill-color: #303030;
+  --el-fill-color-light: #262727;
+  --el-fill-color-lighter: #1d1d1d;
+  --el-fill-color-blank: #141414;
+
+  --el-mask-color: rgba(0, 0, 0, 0.8);
+  --el-box-shadow: 0 12px 32px 4px rgba(0, 0, 0, 0.36), 0 8px 20px rgba(0, 0, 0, 0.72);
+  --el-box-shadow-light: 0 0 12px rgba(0, 0, 0, 0.72);
+  --el-box-shadow-lighter: 0 0 6px rgba(0, 0, 0, 0.72);
+
+  --el-border-radius-base: 8px;
+
+  /* ---- 应用令牌（Dark） ---- */
+  --app-bg: var(--el-bg-color-page);
+  --app-surface: var(--el-bg-color);
+  --app-surface-raised: var(--el-bg-color-overlay);
+  --app-surface-sunken: var(--el-fill-color);
+  --app-border: var(--el-border-color);
+  --app-border-strong: var(--el-border-color-dark);
+  --app-text: var(--el-text-color-primary);
+  --app-text-secondary: var(--el-text-color-regular);
+  --app-text-muted: var(--el-text-color-secondary);
+  --app-primary: var(--el-color-primary);
+  --app-primary-soft: var(--el-color-primary-light-9);
+  --app-shadow-sm: var(--el-box-shadow-lighter);
+  --app-shadow-md: var(--el-box-shadow-light);
+  --app-shadow-lg: var(--el-box-shadow);
+
+  --app-radius-sm: 8px;
+  --app-radius-md: 12px;
+  --app-radius-lg: 16px;
+
+  --app-header-height: 60px;
+  --app-bottom-nav-height: 60px;
+  --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --app-touch: 44px;
+  --app-content-max: 1200px;
+
+  --app-space-1: 4px;
+  --app-space-2: 8px;
+  --app-space-3: 12px;
+  --app-space-4: 16px;
+  --app-space-5: 24px;
+  --app-space-6: 32px;
+}
+
+/* ---- 公共类 ---- */
+.app-page {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-4);
+  width: 100%;
+  max-width: var(--app-content-max);
+  margin: 0 auto;
+  padding: var(--app-space-4) var(--app-space-4) calc(var(--app-space-6) + var(--app-safe-bottom));
+}
+
+.app-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+}
+
+.app-page-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--app-text);
+}
+
+.app-page-subtitle {
+  margin: var(--app-space-1) 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--app-text-secondary);
+}
+
+.app-section-card {
+  padding: var(--app-space-4);
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  box-shadow: var(--app-shadow-sm);
+}
+
+/* el-card 自带 20px body 内边距：与 .app-section-card 叠加会造成双重留白 */
+.app-section-card.el-card {
+  padding: var(--app-space-4);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  box-shadow: var(--app-shadow-sm);
+}
+
+.app-section-card.el-card > .el-card__body {
+  padding: 0;
+}
+
+.app-muted {
+  color: var(--app-text-muted);
+}
+
+.app-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--app-space-2);
+}
+
+.app-mobile-only {
+  display: none;
+}
+
+.app-desktop-only,
+.app-desktop-table {
+  display: block;
+}
+
+.app-mobile-list {
+  display: none;
+}
+
+.app-scroll-x {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---- 全局规则 ---- */
+body {
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
+.el-dialog,
+.el-message-box,
+.el-popper,
+.el-select-dropdown,
+.el-picker-panel,
+.el-tooltip,
+.el-dropdown-menu {
+  background-color: var(--el-bg-color-overlay);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---- 手机专项（≤768px 单断点） ---- */
+@media (max-width: 768px) {
+  .app-page {
+    padding-bottom: calc(var(--app-bottom-nav-height) + var(--app-safe-bottom) + var(--app-space-4));
+  }
+
+  .app-mobile-only {
+    display: block;
+  }
+
+  .app-desktop-only {
+    display: none;
+  }
+
+  .app-mobile-list {
+    display: block;
+  }
+}
+
+@media (min-width: 769px) {
+  .app-mobile-list {
+    display: none !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-desktop-table {
+    display: none !important;
+  }
+
+  /* 弹窗：贴合视口宽度，正文内部滚动，底部操作区始终可见 */
+  .el-dialog {
+    width: calc(100vw - 24px) !important;
+    max-height: 90dvh;
+    display: flex;
+    flex-direction: column;
+    margin: 5vh auto;
+  }
+
+  .el-dialog__header,
+  .el-dialog__footer {
+    flex-shrink: 0;
+  }
+
+  .el-dialog__body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+  }
+
+  .el-message-box {
+    width: calc(100vw - 32px) !important;
+    max-height: 90dvh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .el-message-box__content {
+    overflow-y: auto;
+  }
+
+  .el-message-box__btns {
+    flex-shrink: 0;
+  }
+
+  /* 浮层与日期面板：不超出视口，内部滚动 */
+  .el-popper,
+  .el-select-dropdown,
+  .el-picker-panel,
+  .el-dropdown-menu,
+  .el-tooltip {
+    max-width: calc(100vw - 16px);
+  }
+
+  .el-select-dropdown__wrap {
+    max-height: 40dvh;
+  }
+
+  .el-picker-panel__body-wrapper,
+  .el-picker-panel__body {
+    max-width: 100%;
+    max-height: 60dvh;
+    overflow-y: auto;
+  }
+
+  /* 触控目标 ≥ 44×44 */
+  .el-button--small {
+    min-height: var(--app-touch);
+  }
+
+  .el-button.is-circle {
+    width: var(--app-touch);
+    height: var(--app-touch);
+  }
+
+  .el-button.is-text,
+  .el-button.is-link {
+    min-height: var(--app-touch);
+  }
+
+  /* ≥16px 输入字号，避免 iOS 聚焦自动放大 */
+  .el-input__inner,
+  .el-textarea__inner {
+    font-size: 16px;
+  }
+}

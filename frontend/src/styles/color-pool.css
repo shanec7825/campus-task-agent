@@ -30,6 +30,34 @@
   --c-live: #3B82F6;
 }
 
+/*
+ * 深色主题变体（契约 C-COLOR@1）：
+ * 与 :root 保持同一语义键、同一色相，只提升亮度以保证深色背景下的可读性。
+ * `--el-*` 与页面背景由 theme.css 的 html.dark 令牌提供。
+ */
+html.dark {
+  /* 时间 */
+  --c-time: #93C5FD;
+  /* 地点 */
+  --c-location: #86EFAC;
+  /* 名额 */
+  --c-quota: #FDBA74;
+  /* 标题 */
+  --c-title: #C4B5FD;
+  /* 扩展项 / 要求 */
+  --c-extra: #FDE047;
+  /* 待确认 / 更正（警示角标） */
+  --c-warn: #FCA5A5;
+  /* 未解析文本 */
+  --c-unparsed: #D1D5DB;
+
+  /* 追溯块：同色相提亮 */
+  --c-ai-applied: #C4B5FD;
+  --c-user-edit: #67E8F9;
+  --c-user-note: #D1D5DB;
+  --c-live: #93C5FD;
+}
+
 /* 便于 T7/T8 直接使用的语义类（可选，不强制） */
 .c-field-time {
   color: var(--c-time);

@@ -10,11 +10,11 @@
  * - 进度 / 提交按本人成员状态（`my_member_status`）开放，签到仅「已通过审核的成员」可用；
  * - 成员执行状态表逐人展示状态 / 提交时间 / 验收时间 / 退回原因。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { applyTask, withdrawApply } from '../api/applications'
+import { applyTask, myApplications, withdrawApply } from '../api/applications'
 import { ApiError } from '../api/client'
 import { checkin, myCheckins } from '../api/checkin'
 import { getTask, submitTask, updateProgress } from '../api/tasks'
@@ -44,6 +44,9 @@ const userStore = useUserStore()
 const NOT_MEMBER_HINT = '仅已通过审核的成员可操作'
 /** 任务已取消时的统一提示（后端对已取消任务的成员操作返回 4090） */
 const CANCELLED_HINT = '任务已取消，无法继续操作'
+/** 超过该长度或行数的任务要求默认折叠，避免详情页首屏被长文本占满 */
+const DESCRIPTION_PREVIEW_LIMIT = 240
+const DESCRIPTION_PREVIEW_LINES = 8
 
 const task = ref<TaskDetail | null>(null)
 const predecessor = ref<TaskBrief | null>(null)
@@ -58,6 +61,12 @@ const submitLoading = ref(false)
 const progressVisible = ref(false)
 const progressText = ref('')
 const progressLoading = ref(false)
+const descriptionExpanded = ref(false)
+/** 最近一次被拒报名的原因（仅 rejected 状态查询，失败不阻塞详情） */
+const rejectReason = ref('')
+const isMobile = ref(false)
+
+let mobileQuery: MediaQueryList | null = null
 
 const taskId = computed<number>(() => Number(props.id))
 const currentUserId = computed<number | null>(() => userStore.user?.id ?? null)
@@ -102,6 +111,21 @@ const myMember = computed<TaskMember | null>(() => {
 })
 /** 成员状态表：按报名先后顺序原样展示 */
 const memberRows = computed<TaskMember[]>(() => task.value?.members ?? [])
+
+/** 信息卡的「我的报名 / 我的执行」摘要 */
+const myApplyLabel = computed<string>(() =>
+  applicationStatus.value ? `报名${applicationMeta.value.text}` : '未报名'
+)
+const myExecLabel = computed<string>(() =>
+  myMemberStatus.value ? memberStatusMeta(myMemberStatus.value).text : '非任务成员'
+)
+const descriptionText = computed<string>(() => task.value?.description || '暂无任务描述')
+const descriptionIsLong = computed<boolean>(() => {
+  const text = descriptionText.value
+  return text.length > DESCRIPTION_PREVIEW_LIMIT || text.split('\n').length > DESCRIPTION_PREVIEW_LINES
+})
+/** 窄屏下信息表改为单列，避免标签与值挤在一起 */
+const infoColumns = computed<number>(() => (isMobile.value ? 1 : 2))
 
 /** 成员时间列展示：截断到分钟，空值显示「—」 */
 function memberTime(value: string | null): string {
@@ -155,6 +179,26 @@ const checkinHint = computed<string>(() => {
   return ''
 })
 
+/**
+ * 不可用操作的可见原因（触屏无 hover，`:title` 在手机上不可达）。
+ * 同一原因合并到一行，避免三个按钮重复输出同一段提示。
+ */
+const actionHints = computed<string[]>(() => {
+  if (!task.value) return []
+  const hints = new Map<string, string[]>()
+  const push = (action: string, reason: string) => {
+    if (!reason) return
+    const actions = hints.get(reason) ?? []
+    actions.push(action)
+    hints.set(reason, actions)
+  }
+  if (showApplyAction.value) push('报名', applyReason.value)
+  push('更新进度', progressHint.value)
+  push('提交完成', submitHint.value)
+  if (!checkedIn.value) push('签到', checkinHint.value)
+  return [...hints.entries()].map(([reason, actions]) => `${actions.join(' / ')}不可用：${reason}`)
+})
+
 const subtasks = computed<TaskBrief[]>(() => task.value?.children ?? [])
 const sortedProgress = computed(() =>
   [...(task.value?.progress ?? [])].sort((a, b) => {
@@ -201,6 +245,10 @@ function formatExtra(value: unknown): string {
   }
 }
 
+function handleMobileChange(event: MediaQueryListEvent): void {
+  isMobile.value = event.matches
+}
+
 /** 查询当前用户是否已对该任务签到（失败不阻塞详情展示） */
 async function loadCheckinState(): Promise<void> {
   if (!isApproved.value) {
@@ -216,6 +264,24 @@ async function loadCheckinState(): Promise<void> {
     checkedIn.value = false
   } finally {
     checkinStateLoading.value = false
+  }
+}
+
+/** 报名被拒时补充发布者填写的拒绝原因（详情接口不含该字段） */
+async function loadRejectReason(): Promise<void> {
+  const requestedTaskId = taskId.value
+  rejectReason.value = ''
+  if (task.value?.my_application_status !== 'rejected') return
+  try {
+    const result = await myApplications()
+    // 快速切换子任务时丢弃过期响应，避免把上一个任务的拒绝原因贴到当前任务
+    if (taskId.value !== requestedTaskId) return
+    const record = result.items.find(
+      (item) => item.task.id === requestedTaskId && item.application.status === 'rejected'
+    )
+    rejectReason.value = record?.application.reason ?? ''
+  } catch {
+    // 拒绝原因是辅助信息，失败时仍展示通用说明
   }
 }
 
@@ -248,6 +314,7 @@ async function load(): Promise<void> {
       }
     }
     await loadCheckinState()
+    await loadRejectReason()
   } catch (err) {
     task.value = null
     error.value = errorMessage(err)
@@ -400,21 +467,30 @@ async function handleCheckin(): Promise<void> {
 }
 
 onMounted(() => {
+  mobileQuery = window.matchMedia('(max-width: 768px)')
+  isMobile.value = mobileQuery.matches
+  mobileQuery.addEventListener('change', handleMobileChange)
   void load()
+})
+
+onBeforeUnmount(() => {
+  mobileQuery?.removeEventListener('change', handleMobileChange)
+  mobileQuery = null
 })
 
 // 同路由不同 id（子任务之间跳转）时重新拉取
 watch(
   () => props.id,
   () => {
+    descriptionExpanded.value = false
     void load()
   }
 )
 </script>
 
 <template>
-  <section class="detail">
-    <el-page-header content="任务详情" class="page-header" @back="backToHall" />
+  <section class="app-page detail">
+    <el-page-header title="返回" content="任务详情" class="page-header" @back="backToHall" />
 
     <LoadingState v-if="loading" :rows="6" />
 
@@ -427,10 +503,11 @@ watch(
     />
 
     <template v-else-if="task">
-      <el-card shadow="never" class="section-card">
-        <div class="title-row">
-          <div class="title-main">
-            <h2 class="task-title">{{ task.title }}</h2>
+      <!-- 首屏信息卡：任务要求 / 截止 / 我的状态 / 当前操作 -->
+      <el-card shadow="never" class="app-section-card">
+        <div class="key-head">
+          <h2 class="task-title">{{ task.title }}</h2>
+          <div class="key-tags">
             <StatusTag :status="task.status" />
             <el-tag v-if="task.parent_id !== null" size="small" type="warning" effect="plain">
               子任务 #{{ task.id }}
@@ -454,55 +531,96 @@ watch(
               我的执行状态：{{ memberStatusMeta(myMemberStatus).text }}
             </el-tag>
           </div>
+        </div>
 
-          <div class="title-actions">
-            <!-- 报名 / 撤回报名 -->
-            <el-button
-              v-if="showApplyAction"
-              type="primary"
-              :disabled="!canApply"
-              :title="applyReason"
-              :loading="applyLoading"
-              @click="handleApply"
-            >
-              报名
-            </el-button>
-            <el-button v-if="canWithdraw" :loading="withdrawLoading" @click="handleWithdraw">
-              撤回报名
-            </el-button>
-
-            <!-- 成员权限操作：仅已通过审核的成员可用（否则置灰并提示） -->
-            <el-button
-              :disabled="!canProgress"
-              :title="canProgress ? '' : progressHint"
-              @click="openProgressDialog"
-            >
-              更新进度
-            </el-button>
-            <el-button
-              type="success"
-              :disabled="!canSubmit"
-              :title="canSubmit ? '' : submitHint"
-              :loading="submitLoading"
-              @click="handleSubmit"
-            >
-              提交完成
-            </el-button>
-            <el-button
-              type="warning"
-              plain
-              :disabled="!canCheckin"
-              :title="checkinHint"
-              :loading="checkinLoading || checkinStateLoading"
-              @click="handleCheckin"
-            >
-              {{ checkedIn ? '已签到' : '签到' }}
-            </el-button>
-
-            <el-button v-if="isPublisher && task.status === 'submitted'" type="success" @click="goAdmin">
-              去验收
-            </el-button>
+        <div class="key-meta">
+          <div class="meta-item meta-deadline">
+            <span class="meta-label">截止时间</span>
+            <span class="meta-value">{{ formatDeadline(task.deadline) }}</span>
           </div>
+          <div class="meta-item">
+            <span class="meta-label">我的报名</span>
+            <span class="meta-value">{{ myApplyLabel }}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">我的执行</span>
+            <span class="meta-value">{{ myExecLabel }}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">名额进度</span>
+            <span class="meta-value">{{ quotaProgress }}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">积分奖励</span>
+            <span class="meta-value">+{{ task.credit_reward ?? 0 }}</span>
+          </div>
+        </div>
+
+        <!-- 当前操作：按角色分组，移动端整行堆叠 -->
+        <div class="action-block">
+          <span class="block-label">当前操作</span>
+          <div class="action-groups">
+            <div v-if="showApplyAction || canWithdraw" class="action-group">
+              <span class="action-group-label">报名</span>
+              <div class="action-group-buttons">
+                <el-button
+                  v-if="showApplyAction"
+                  type="primary"
+                  :disabled="!canApply"
+                  :title="applyReason"
+                  :loading="applyLoading"
+                  @click="handleApply"
+                >
+                  报名
+                </el-button>
+                <el-button v-if="canWithdraw" :loading="withdrawLoading" @click="handleWithdraw">
+                  撤回报名
+                </el-button>
+              </div>
+            </div>
+
+            <div class="action-group">
+              <span class="action-group-label">我的执行</span>
+              <div class="action-group-buttons">
+                <el-button
+                  :disabled="!canProgress"
+                  :title="canProgress ? '' : progressHint"
+                  @click="openProgressDialog"
+                >
+                  更新进度
+                </el-button>
+                <el-button
+                  type="success"
+                  :disabled="!canSubmit"
+                  :title="canSubmit ? '' : submitHint"
+                  :loading="submitLoading"
+                  @click="handleSubmit"
+                >
+                  提交完成
+                </el-button>
+                <el-button
+                  type="warning"
+                  plain
+                  :disabled="!canCheckin"
+                  :title="checkinHint"
+                  :loading="checkinLoading || checkinStateLoading"
+                  @click="handleCheckin"
+                >
+                  {{ checkedIn ? '已签到' : '签到' }}
+                </el-button>
+              </div>
+            </div>
+
+            <div v-if="isPublisher && task.status === 'submitted'" class="action-group">
+              <span class="action-group-label">发布者</span>
+              <div class="action-group-buttons">
+                <el-button type="success" @click="goAdmin">去验收</el-button>
+              </div>
+            </div>
+          </div>
+          <ul v-if="actionHints.length > 0" class="hint-list">
+            <li v-for="hint in actionHints" :key="hint" class="hint-item">{{ hint }}</li>
+          </ul>
         </div>
 
         <!-- 报名状态说明 -->
@@ -529,7 +647,9 @@ watch(
           :closable="false"
           show-icon
           class="inline-alert"
-        />
+        >
+          <p v-if="rejectReason" class="inline-alert__reason">拒绝原因：{{ rejectReason }}</p>
+        </el-alert>
         <el-alert
           v-else-if="applicationStatus === 'cancelled'"
           type="info"
@@ -558,9 +678,24 @@ watch(
           class="inline-alert"
         />
 
-        <p class="description">{{ task.description || '暂无任务描述' }}</p>
+        <div class="desc-block">
+          <span class="block-label">任务要求</span>
+          <p class="description" :class="{ 'is-collapsed': descriptionIsLong && !descriptionExpanded }">
+            {{ descriptionText }}
+          </p>
+          <el-button
+            v-if="descriptionIsLong"
+            text
+            type="primary"
+            size="small"
+            class="expand-toggle"
+            @click="descriptionExpanded = !descriptionExpanded"
+          >
+            {{ descriptionExpanded ? '收起' : '展开全部' }}
+          </el-button>
+        </div>
 
-        <el-descriptions :column="2" border size="small" class="info-table">
+        <el-descriptions :column="infoColumns" border size="small" class="info-table">
           <el-descriptions-item label="发布者">{{ task.publisher_name || '—' }}</el-descriptions-item>
           <el-descriptions-item label="首批成员">{{ task.assignee_name || '暂无成员' }}</el-descriptions-item>
           <el-descriptions-item label="名额进度">
@@ -575,7 +710,7 @@ watch(
           </el-descriptions-item>
           <el-descriptions-item label="积分奖励">+{{ task.credit_reward ?? 0 }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ formatDeadline(task.created_at) }}</el-descriptions-item>
-          <el-descriptions-item label="风格要求" :span="2">{{ task.style_note || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="风格要求" :span="infoColumns">{{ task.style_note || '—' }}</el-descriptions-item>
         </el-descriptions>
 
         <div v-if="extrasEntries.length > 0" class="extras">
@@ -586,7 +721,7 @@ watch(
         </div>
       </el-card>
 
-      <el-card shadow="never" class="section-card">
+      <el-card shadow="never" class="app-section-card">
         <template #header>
           <div class="card-header">
             <span class="card-title">成员与名额</span>
@@ -609,53 +744,92 @@ watch(
           </el-button>
         </p>
 
-        <!-- 成员执行状态表：个人状态与任务聚合状态分离展示（R2） -->
+        <!-- 成员执行状态：桌面表格 + 移动卡片双视图（C-MOBILELIST@1） -->
         <EmptyState
           v-if="memberRows.length === 0"
           title="暂无成员执行记录"
           description="报名通过审核后，成员的执行状态会在这里逐人展示。"
         />
-        <el-table
-          v-else
-          :data="memberRows"
-          size="small"
-          stripe
-          class="member-table"
-          :row-class-name="memberRowClass"
-        >
-          <el-table-column label="成员" min-width="130">
-            <template #default="scope">
-              <span class="member-name">{{ scope.row.user_name || `用户 #${scope.row.user_id}` }}</span>
-              <el-tag v-if="scope.row.user_id === myMember?.user_id" size="small" effect="plain" class="row-tag">
-                我
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="执行状态" width="110">
-            <template #default="scope">
-              <el-tag :type="memberStatusMeta(scope.row.status).type" size="small" effect="plain">
-                {{ memberStatusMeta(scope.row.status).text }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="提交时间" width="160">
-            <template #default="scope">{{ memberTime(scope.row.submitted_at) }}</template>
-          </el-table-column>
-          <el-table-column label="验收时间" width="160">
-            <template #default="scope">{{ memberTime(scope.row.verified_at) }}</template>
-          </el-table-column>
-          <el-table-column label="退回原因" min-width="160">
-            <template #default="scope">
-              <span v-if="scope.row.status === 'rejected' && scope.row.rejection_reason" class="member-reason">
-                {{ scope.row.rejection_reason }}
-              </span>
-              <span v-else>—</span>
-            </template>
-          </el-table-column>
-        </el-table>
+        <template v-else>
+          <div class="app-desktop-table">
+            <el-table
+              :data="memberRows"
+              size="small"
+              stripe
+              class="member-table"
+              :row-class-name="memberRowClass"
+            >
+              <el-table-column label="成员" min-width="130">
+                <template #default="scope">
+                  <span class="member-name">{{ scope.row.user_name || `用户 #${scope.row.user_id}` }}</span>
+                  <el-tag v-if="scope.row.user_id === myMember?.user_id" size="small" effect="plain" class="row-tag">
+                    我
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="执行状态" width="110">
+                <template #default="scope">
+                  <el-tag :type="memberStatusMeta(scope.row.status).type" size="small" effect="plain">
+                    {{ memberStatusMeta(scope.row.status).text }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="提交时间" width="160">
+                <template #default="scope">{{ memberTime(scope.row.submitted_at) }}</template>
+              </el-table-column>
+              <el-table-column label="验收时间" width="160">
+                <template #default="scope">{{ memberTime(scope.row.verified_at) }}</template>
+              </el-table-column>
+              <el-table-column label="退回原因" min-width="160">
+                <template #default="scope">
+                  <span v-if="scope.row.status === 'rejected' && scope.row.rejection_reason" class="member-reason">
+                    {{ scope.row.rejection_reason }}
+                  </span>
+                  <span v-else>—</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <ul class="app-mobile-list member-cards">
+            <li
+              v-for="row in memberRows"
+              :key="row.user_id"
+              class="member-card"
+              :class="{ 'is-me': row.user_id === myMember?.user_id }"
+            >
+              <div class="member-card-head">
+                <span class="member-name">{{ row.user_name || `用户 #${row.user_id}` }}</span>
+                <el-tag v-if="row.user_id === myMember?.user_id" size="small" effect="plain">我</el-tag>
+                <el-tag :type="memberStatusMeta(row.status).type" size="small" effect="plain">
+                  {{ memberStatusMeta(row.status).text }}
+                </el-tag>
+              </div>
+              <dl class="member-card-fields">
+                <div class="member-card-field">
+                  <dt>提交时间</dt>
+                  <dd>{{ memberTime(row.submitted_at) }}</dd>
+                </div>
+                <div class="member-card-field">
+                  <dt>验收时间</dt>
+                  <dd>{{ memberTime(row.verified_at) }}</dd>
+                </div>
+                <div
+                  class="member-card-field"
+                  :class="{ 'is-danger': row.status === 'rejected' && !!row.rejection_reason }"
+                >
+                  <dt>退回原因</dt>
+                  <dd>
+                    {{ row.status === 'rejected' && row.rejection_reason ? row.rejection_reason : '—' }}
+                  </dd>
+                </div>
+              </dl>
+            </li>
+          </ul>
+        </template>
       </el-card>
 
-      <el-card shadow="never" class="section-card">
+      <el-card shadow="never" class="app-section-card">
         <template #header>
           <div class="card-header">
             <span class="card-title">前置依赖</span>
@@ -688,7 +862,7 @@ watch(
         </div>
       </el-card>
 
-      <el-card shadow="never" class="section-card">
+      <el-card shadow="never" class="app-section-card">
         <template #header>
           <div class="card-header">
             <span class="card-title">子任务与依赖（{{ subtasks.length }}）</span>
@@ -703,7 +877,7 @@ watch(
         />
       </el-card>
 
-      <el-card shadow="never" class="section-card">
+      <el-card shadow="never" class="app-section-card">
         <template #header>
           <div class="card-header">
             <span class="card-title">实施指导（SOP）</span>
@@ -712,7 +886,7 @@ watch(
         <SopSteps :guide="task.sop_guide" />
       </el-card>
 
-      <el-card shadow="never" class="section-card">
+      <el-card shadow="never" class="app-section-card">
         <template #header>
           <div class="card-header">
             <span class="card-title">进度时间线（{{ sortedProgress.length }}）</span>
@@ -748,7 +922,12 @@ watch(
       </el-card>
     </template>
 
-    <el-dialog v-model="progressVisible" title="更新进度" width="520px" :close-on-click-modal="false">
+    <el-dialog
+      v-model="progressVisible"
+      title="更新进度"
+      width="min(520px, calc(100vw - 32px))"
+      :close-on-click-modal="false"
+    >
       <el-form label-position="top">
         <el-form-item label="进度内容" required>
           <el-input
@@ -782,11 +961,7 @@ watch(
   background: transparent;
 }
 
-.section-card {
-  border-radius: 10px;
-}
-
-.title-row {
+.key-head {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -794,7 +969,14 @@ watch(
   gap: 12px;
 }
 
-.title-main {
+.task-title {
+  margin: 0;
+  font-size: 20px;
+  color: var(--app-text);
+  word-break: break-word;
+}
+
+.key-tags {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -802,34 +984,129 @@ watch(
   min-width: 0;
 }
 
-.task-title {
-  margin: 0;
-  font-size: 20px;
-  color: #303133;
+.key-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+}
+
+.meta-label {
+  font-size: 13px;
+  color: var(--app-text-muted);
+}
+
+.meta-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--app-text);
   word-break: break-word;
 }
 
-.title-actions {
+.meta-deadline .meta-value {
+  color: var(--app-primary);
+}
+
+.block-label,
+.action-group-label {
+  display: inline-block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-text-muted);
+}
+
+.action-block,
+.desc-block {
+  margin-top: 16px;
+}
+
+.action-groups {
   display: flex;
   flex-wrap: wrap;
+  gap: 12px;
+}
+
+.action-group {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-sunken);
+}
+
+.action-group-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+
+.action-group-buttons :deep(.el-button) {
+  margin: 0;
+}
+
+.hint-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hint-item {
+  font-size: 13px;
+  color: var(--el-color-warning);
+  word-break: break-word;
 }
 
 .inline-alert {
   margin-top: 10px;
 }
 
+.inline-alert__reason {
+  margin: 4px 0 0;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
 .description {
-  margin: 14px 0;
+  margin: 0;
   font-size: 15px;
-  color: #606266;
+  color: var(--app-text-secondary);
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.info-table {
+.description.is-collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+  white-space: normal;
+}
+
+.expand-toggle {
   margin-top: 4px;
+  padding: 0;
+}
+
+.info-table {
+  margin-top: 14px;
 }
 
 .extras {
@@ -841,8 +1118,8 @@ watch(
 }
 
 .extras-label {
-  font-size: 14px;
-  color: #909399;
+  font-size: 13px;
+  color: var(--app-text-muted);
 }
 
 .extra-tag {
@@ -860,12 +1137,12 @@ watch(
 .card-title {
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: var(--app-text);
 }
 
 .header-hint {
   font-size: 13px;
-  color: #909399;
+  color: var(--app-text-muted);
 }
 
 .members-line {
@@ -875,15 +1152,15 @@ watch(
   gap: 8px;
   margin: 0 0 6px;
   font-size: 14px;
-  color: #303133;
+  color: var(--app-text);
 }
 
 .members-label {
-  color: #909399;
+  color: var(--app-text-muted);
 }
 
 .members-empty {
-  color: #c0c4cc;
+  color: var(--app-text-muted);
 }
 
 .member-table {
@@ -897,6 +1174,7 @@ watch(
 .member-name {
   font-weight: 500;
   color: var(--el-text-color-primary);
+  word-break: break-word;
 }
 
 .row-tag {
@@ -908,9 +1186,72 @@ watch(
   font-size: 13px;
 }
 
+.member-cards {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.member-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-raised);
+}
+
+.member-card + .member-card {
+  margin-top: 10px;
+}
+
+.member-card.is-me {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+
+.member-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.member-card-fields {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.member-card-field {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.member-card-field dt {
+  flex-shrink: 0;
+  color: var(--app-text-muted);
+}
+
+.member-card-field dd {
+  margin: 0;
+  color: var(--app-text-secondary);
+  text-align: right;
+  word-break: break-word;
+}
+
+.member-card-field.is-danger dd {
+  color: var(--el-color-danger);
+}
+
 .dependency-empty {
   font-size: 14px;
-  color: #909399;
+  color: var(--app-text-muted);
 }
 
 .dependency-line {
@@ -919,22 +1260,25 @@ watch(
   align-items: center;
   gap: 10px;
   font-size: 14px;
-  color: #303133;
+  color: var(--app-text);
 }
 
 .dependency-node {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  word-break: break-word;
 }
 
 .dependency-arrow {
-  color: #909399;
+  color: var(--app-text-muted);
   font-weight: 700;
 }
 
 .dependency-missing {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 
 .progress-item {
@@ -946,15 +1290,64 @@ watch(
 .progress-user {
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: var(--app-text);
 }
 
 .progress-content {
   margin: 0;
   font-size: 14px;
-  color: #606266;
+  color: var(--app-text-secondary);
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+@media (max-width: 768px) {
+  .detail {
+    gap: 12px;
+  }
+
+  .key-meta {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  }
+
+  .action-groups {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .action-group {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .action-group-buttons {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .action-group-buttons :deep(.el-button) {
+    width: 100%;
+    min-height: var(--app-touch);
+  }
+
+  .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .card-header :deep(.el-button) {
+    width: 100%;
+    min-height: var(--app-touch);
+  }
+
+  .expand-toggle {
+    min-height: var(--app-touch);
+  }
+
+  .dependency-line {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 </style>

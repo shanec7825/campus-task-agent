@@ -37,11 +37,11 @@ const mockMode = computed<boolean>(() => draft.mockMode)
 </script>
 
 <template>
-  <section class="publish-page">
-    <header class="publish-page__header">
+  <section class="publish-page app-page">
+    <header class="publish-page__header app-page-header">
       <div class="publish-page__heading">
-        <h2 class="publish-page__title">发布任务</h2>
-        <p class="publish-page__subtitle">
+        <h2 class="publish-page__title app-page-title">发布任务</h2>
+        <p class="publish-page__subtitle app-page-subtitle">
           手动填写兜底，或用一句话让 AI 帮你整理成结构化任务；解析后还能继续补充（增量解析只改被说到的字段），
           每次 AI 建议、你的手改与补充都会在左侧留下可追溯的彩色块。
         </p>
@@ -111,7 +111,7 @@ const mockMode = computed<boolean>(() => draft.mockMode)
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 1180px;
+  max-width: var(--app-content-max);
   margin: 0 auto;
 }
 
@@ -127,19 +127,20 @@ const mockMode = computed<boolean>(() => draft.mockMode)
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .publish-page__title {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--app-text);
 }
 
 .publish-page__subtitle {
   margin: 0;
   font-size: 14px;
-  color: var(--el-text-color-secondary);
+  color: var(--app-text-secondary);
 }
 
 .publish-page__badges {
@@ -154,17 +155,17 @@ const mockMode = computed<boolean>(() => draft.mockMode)
   align-self: flex-start;
   gap: 4px;
   padding: 4px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 10px;
-  background: var(--el-fill-color-light);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-sunken);
 }
 
 .mode-tabs__item {
   padding: 8px 20px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--app-radius-sm);
   background: transparent;
-  color: var(--el-text-color-regular);
+  color: var(--app-text-secondary);
   font-size: 15px;
   line-height: 1.2;
   cursor: pointer;
@@ -172,14 +173,14 @@ const mockMode = computed<boolean>(() => draft.mockMode)
 }
 
 .mode-tabs__item:hover {
-  color: var(--el-color-primary);
+  color: var(--app-primary);
 }
 
 .mode-tabs__item.is-active {
-  background: var(--el-bg-color);
-  color: var(--el-color-primary);
+  background: var(--app-surface-raised);
+  color: var(--app-primary);
   font-weight: 600;
-  box-shadow: 0 1px 4px var(--el-box-shadow-lighter);
+  box-shadow: var(--app-shadow-sm);
 }
 
 .mode-panel {
@@ -189,6 +190,27 @@ const mockMode = computed<boolean>(() => draft.mockMode)
 }
 
 .mode-panel__notice {
-  border-radius: 10px;
+  border-radius: var(--app-radius-sm);
+}
+
+/* 移动端：标题与徽标上下排列，模式页签占满整行，阅读顺序固定为「说明 → 页签 → 表单」 */
+@media (max-width: 768px) {
+  .publish-page__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mode-tabs {
+    display: flex;
+    width: 100%;
+    align-self: stretch;
+  }
+
+  .mode-tabs__item {
+    flex: 1;
+    min-height: var(--app-touch);
+    padding: 8px 12px;
+    font-size: 15px;
+  }
 }
 </style>

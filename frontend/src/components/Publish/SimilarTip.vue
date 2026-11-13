@@ -77,10 +77,11 @@ const adoptTip = computed<string>(() =>
   justify-content: space-between;
   gap: 16px;
   padding: 12px 16px;
-  border: 1px solid var(--el-color-warning-light-5);
+  border: 1px solid var(--app-border);
   border-left: 4px solid var(--el-color-warning);
-  border-radius: 10px;
-  background: var(--el-color-warning-light-9);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-raised);
+  box-shadow: var(--app-shadow-sm);
 }
 
 .similar-tip__main {
@@ -98,7 +99,7 @@ const adoptTip = computed<string>(() =>
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--app-text);
 }
 
 .similar-tip__icon {
@@ -109,7 +110,7 @@ const adoptTip = computed<string>(() =>
   margin: 0;
   font-size: 14px;
   line-height: 1.5;
-  color: var(--el-text-color-regular);
+  color: var(--app-text-secondary);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -119,7 +120,7 @@ const adoptTip = computed<string>(() =>
 .similar-tip__meta {
   margin: 0;
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: var(--app-text-muted);
 }
 
 .similar-tip__actions {
@@ -127,5 +128,17 @@ const adoptTip = computed<string>(() =>
   align-items: center;
   gap: 4px;
   flex: none;
+}
+
+@media (max-width: 768px) {
+  .similar-tip {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .similar-tip__actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 </style>
