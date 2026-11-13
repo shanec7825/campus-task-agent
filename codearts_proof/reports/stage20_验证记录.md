@@ -44,7 +44,13 @@
 - 未验证：从详情返回的滚动位置、AgentDock 长条/微展开/完整页、390×844 手机抽屉、深色主题、真实模型。MCP 同消息重复调用后按约定停止，未产出阶段截图。
 - 记录：`outputs/aiw02/walkthrough.md`（本地忽略）。
 
-## 5. 结论口径
+## 5. 提交与 CI
+
+- 代码提交 `8b7f818be49d0b78c1bdc6c18f7353a5df8084ac`，已推送 `origin/main`（`9ad625f..8b7f818`，推送前 `0 0` 无分叉）。
+- CI run `43466871644`：Frontend、Backend reliability（ubuntu/windows）、Backend integration 四个 job 均 **success**。
+- 未部署；docs 回填提交不改变业务代码。
+
+## 6. 结论口径
 
 - 自动测试：后端相关套件与前端门禁通过；属于本地真实执行结果。
 - 浏览器：仅部分验证；不以静态检查或代码阅读替代。
