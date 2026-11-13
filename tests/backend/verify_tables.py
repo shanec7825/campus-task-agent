@@ -2,15 +2,16 @@
 """建表与数据形态校验（契约 `C-DATA@2` / `C-DATA-AUTH@1`，阶段 2 口径）。
 
 断言范围：
-1. **19 张表**全部存在（阶段 1 的 11 张 + 阶段 2 的 organizations / org_members /
+1. **22 张表**全部存在（阶段 1 的 11 张 + 阶段 2 的 organizations / org_members /
    invitations / user_sessions / password_resets + 阶段 19 的 ai_conversations / ai_messages
-   + AIW-03 的 task_dependencies）；
+   + AIW-03 的 task_dependencies + AIW-04 的 activity_resources / task_submissions /
+   submission_prechecks）；
 2. ``task_applications`` 列齐全且存在 ``uq_task_applications_task_user``
    （PRAGMA 元数据 + 真实重复插入双证，后者事务内回滚）；
 3. ``checkins`` 存在 ``UNIQUE(task_id, user_id)`` —— 双证同上；
 4. ``tasks.extras`` / ``tasks.reminder_rule`` 读回为 dict —— JSON 接口 + SQLite 原始列双证；
 5. ``progress_logs`` 表及其列存在；
-6. ``/api/health`` 的 ``tables`` 为 18 项且与期望集合完全一致；
+6. ``/api/health`` 的 ``tables`` 为 22 项且与期望集合完全一致；
 7. 阶段 2 认证列的落库形态（``users.status`` 默认 ``active``、``platform_admin`` 默认 0、
    ``tasks.org_id`` / ``activities.org_id`` 可空）与 ``task_members`` 具名唯一索引。
 
@@ -36,8 +37,8 @@ import urllib.request
 BASE_URL = os.getenv("T10_BASE_URL", "http://127.0.0.1:8021").rstrip("/")
 DB_PATH = (os.getenv("T10_DB_PATH") or "").strip()
 
-#: 期望的 19 张表（阶段 1 的 11 张 + 阶段 2 认证与组织的 5 张 + 阶段 19 的 AI 会话 2 张
-#: + AIW-03 的任务依赖边 1 张）
+#: 期望的 22 张表（阶段 1 的 11 张 + 阶段 2 认证与组织的 5 张 + 阶段 19 的 AI 会话 2 张
+#: + AIW-03 的任务依赖边 1 张 + AIW-04 的资料与成果 3 张）
 EXPECTED_TABLES: frozenset[str] = frozenset(
     {
         "users",
@@ -59,6 +60,9 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
         "ai_conversations",
         "ai_messages",
         "task_dependencies",
+        "activity_resources",
+        "task_submissions",
+        "submission_prechecks",
     }
 )
 
@@ -74,7 +78,7 @@ TASK_APPLICATION_UNIQUE_NAME = "uq_task_applications_task_user"
 PROGRESS_LOG_COLUMNS: frozenset[str] = frozenset({"id", "task_id", "user_id", "content", "created_at"})
 
 #: 建表校验任务（deadline 留空，避免被催办扫描命中）
-TABLE_CHECK_TITLE = "T8 建表校验任务（19 表）"
+TABLE_CHECK_TITLE = "T8 建表校验任务（22 表）"
 TABLE_CHECK_EXTRAS = {"装备": "矿泉水", "联系人": "张三"}
 TABLE_CHECK_RULE = {"days_before": 3, "day_of": False, "on_overdue": False}
 
@@ -199,11 +203,11 @@ def main() -> int:
 
     conn = sqlite3.connect(DB_PATH, isolation_level=None)
     try:
-        # ---- 1) 19 张表 ----------------------------------------------------
+        # ---- 1) 22 张表 ----------------------------------------------------
         names = table_names(conn)
         missing = sorted(EXPECTED_TABLES - names)
-        expect(not missing, f"19 张表全部存在（缺失：{missing or '无'}；实际 {sorted(names)}）")
-        expect(len(EXPECTED_TABLES) == 19, f"期望表集合固定为 19 张（实际定义 {len(EXPECTED_TABLES)} 张）")
+        expect(not missing, f"22 张表全部存在（缺失：{missing or '无'}；实际 {sorted(names)}）")
+        expect(len(EXPECTED_TABLES) == 22, f"期望表集合固定为 22 张（实际定义 {len(EXPECTED_TABLES)} 张）")
 
         # ---- 2) checkins 唯一约束 ----------------------------------------
         unique_sets = unique_column_sets(conn, "checkins")
@@ -314,6 +318,115 @@ def main() -> int:
         ).fetchone()[0]
         expect(int(dependency_remaining) == 0, "task_dependencies 探测数据已回滚（无残留行）")
 
+        # ---- 4c) AIW-04 资料与成果表 -------------------------------------
+        expect("activity_resources" in names, "activity_resources 表存在（AIW-04 第 20 张表）")
+        resource_columns = column_names(conn, "activity_resources")
+        expect(
+            {
+                "id",
+                "resource_key",
+                "activity_id",
+                "task_id",
+                "org_id",
+                "title",
+                "summary",
+                "resource_type",
+                "url",
+                "version",
+                "created_by",
+                "created_at",
+            }
+            <= resource_columns,
+            f"activity_resources 列齐全（实际 {sorted(resource_columns)}）",
+        )
+        resource_unique_sets = unique_column_sets(conn, "activity_resources")
+        expect(
+            ("resource_key", "version") in resource_unique_sets
+            or ("version", "resource_key") in resource_unique_sets,
+            "activity_resources 存在 UNIQUE(resource_key, version)"
+            f"（实际唯一组合：{sorted(resource_unique_sets)}）",
+        )
+        resource_ddl_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='activity_resources'"
+        ).fetchone()
+        resource_ddl = str(resource_ddl_row[0]) if resource_ddl_row and resource_ddl_row[0] else ""
+        expect(
+            "CONSTRAINT uq_activity_resources_key_version UNIQUE" in resource_ddl,
+            "activity_resources DDL 保留契约约束名 uq_activity_resources_key_version",
+        )
+        resource_indexes = index_names(conn, "activity_resources")
+        expect(
+            {"ix_activity_resources_activity_id", "ix_activity_resources_task_id", "ix_activity_resources_org_id"}
+            <= resource_indexes,
+            f"activity_resources 归属索引齐全（实际 {sorted(resource_indexes)}）",
+        )
+        resource_sql = (
+            "INSERT INTO activity_resources "
+            "(resource_key, title, url, created_by, version, created_at) "
+            "VALUES (?, 't', 'https://example.com', 1, 1, datetime('now','localtime'))"
+        )
+        expect(
+            assert_duplicate_insert_rejected(conn, resource_sql, ("probe-key",)),
+            "activity_resources 重复 (resource_key, version) 插入被数据库拒绝（IntegrityError）",
+        )
+        resource_remaining = conn.execute(
+            "SELECT COUNT(*) FROM activity_resources WHERE resource_key=?", ("probe-key",)
+        ).fetchone()[0]
+        expect(int(resource_remaining) == 0, "activity_resources 探测数据已回滚（无残留行）")
+
+        expect("task_submissions" in names, "task_submissions 表存在（AIW-04 第 21 张表）")
+        submission_columns = column_names(conn, "task_submissions")
+        expect(
+            {"id", "task_id", "user_id", "version", "content", "resource_url", "created_at"}
+            <= submission_columns,
+            f"task_submissions 列齐全（实际 {sorted(submission_columns)}）",
+        )
+        submission_unique_sets = unique_column_sets(conn, "task_submissions")
+        expect(
+            ("task_id", "user_id", "version") in submission_unique_sets
+            or ("user_id", "task_id", "version") in submission_unique_sets
+            or ("version", "task_id", "user_id") in submission_unique_sets,
+            "task_submissions 存在 UNIQUE(task_id, user_id, version)"
+            f"（实际唯一组合：{sorted(submission_unique_sets)}）",
+        )
+        submission_sql = (
+            "INSERT INTO task_submissions "
+            "(task_id, user_id, version, created_at) VALUES (?, ?, ?, datetime('now','localtime'))"
+        )
+        expect(
+            assert_duplicate_insert_rejected(conn, submission_sql, (990008, 990009, 1)),
+            "task_submissions 重复 (task_id, user_id, version) 插入被数据库拒绝（IntegrityError）",
+        )
+        submission_remaining = conn.execute(
+            "SELECT COUNT(*) FROM task_submissions WHERE task_id=? AND user_id=?",
+            (990008, 990009),
+        ).fetchone()[0]
+        expect(int(submission_remaining) == 0, "task_submissions 探测数据已回滚（无残留行）")
+
+        expect("submission_prechecks" in names, "submission_prechecks 表存在（AIW-04 第 22 张表）")
+        precheck_columns = column_names(conn, "submission_prechecks")
+        expect(
+            {
+                "id",
+                "submission_id",
+                "requirement_digest",
+                "checks",
+                "verdict",
+                "summary",
+                "ai_suggestions",
+                "mock",
+                "ai_error",
+                "created_at",
+            }
+            <= precheck_columns,
+            f"submission_prechecks 列齐全（实际 {sorted(precheck_columns)}）",
+        )
+        expect(
+            "ix_submission_prechecks_submission_id" in index_names(conn, "submission_prechecks"),
+            "submission_prechecks 存在 submission_id 索引"
+            f"（实际 {sorted(index_names(conn, 'submission_prechecks'))}）",
+        )
+
         # ---- 5) tasks 关键列 ---------------------------------------------
         task_columns = column_names(conn, "tasks")
         expect(
@@ -322,14 +435,14 @@ def main() -> int:
             f"（实际 {len(task_columns)} 列）",
         )
 
-        # ---- 6) 健康检查（19 表 + mock）------------------------------------
+        # ---- 6) 健康检查（22 表 + mock）------------------------------------
         health = api_ok("GET", "/api/health", label="健康检查")
         health_tables = sorted(health.get("tables") or [])
         expect(
             health_tables == sorted(EXPECTED_TABLES),
-            f"health.tables 与 19 张表完全一致（实际 {health.get('tables')}）",
+            f"health.tables 与 22 张表完全一致（实际 {health.get('tables')}）",
         )
-        expect(len(health_tables) == 19, f"health.tables 数量为 19（实际 {len(health_tables)}）")
+        expect(len(health_tables) == 22, f"health.tables 数量为 22（实际 {len(health_tables)}）")
         expect(health.get("mock") is True, f"health.mock 为 true（实际 {health.get('mock')}）")
 
         # ---- 7) tasks.extras / reminder_rule 落库形态 ---------------------
@@ -404,7 +517,7 @@ def main() -> int:
     finally:
         conn.close()
 
-    print(f"---- verify_tables.py 全部通过：{_passed} 项断言（19 表 + 阶段 2 认证与组织列 + AI 会话表 + 依赖边表）----")
+    print(f"---- verify_tables.py 全部通过：{_passed} 项断言（22 表 + 阶段 2 认证与组织列 + AI 会话表 + 依赖边表 + 资料与成果表）----")
     return 0
 
 

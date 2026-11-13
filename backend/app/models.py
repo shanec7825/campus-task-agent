@@ -1,9 +1,10 @@
-"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1` / `C-TASK-GRAPH@1`）。
+"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1` / `C-TASK-GRAPH@1` / `C-RESOURCE@1` / `C-SUBMISSION@1` / `C-PRECHECK@1`）。
 
-19 张表：users / tasks / checkins / credit_logs / notifications /
+22 张表：users / tasks / checkins / credit_logs / notifications /
 kb_entries / parse_sessions / progress_logs / task_applications / task_members /
 activities / organizations / org_members / invitations / user_sessions /
-password_resets / ai_conversations / ai_messages / task_dependencies。
+password_resets / ai_conversations / ai_messages / task_dependencies /
+activity_resources / task_submissions / submission_prechecks。
 
 说明：Demo 期不建数据库级外键约束，仅做应用层校验（PLAN 2.2.1 A：
 「Demo 期不建数据库级外键，应用层校验」）；JSON 列落库为 SQLite TEXT，
@@ -394,6 +395,94 @@ class AiMessage(Base):
     )
 
 
+class ActivityResource(Base):
+    """往期资料（契约 `C-RESOURCE@1`）。
+
+    - ``resource_key`` 是同一资料的稳定逻辑标识，``version`` 在同一 key 内递增；
+      ``UNIQUE(resource_key, version)`` 防止重复版本。
+    - ``activity_id`` / ``task_id`` / ``org_id`` 只表达归属，不替代任务工作层级；
+      三者必须与任务/活动的既有归属一致（应用层校验）。
+    - 可见范围由 ``services.resource_service`` 按任务/活动/组织统一计算，不在本表冗余 ACL。
+    """
+
+    __tablename__ = "activity_resources"
+    __table_args__ = (
+        UniqueConstraint("resource_key", "version", name="uq_activity_resources_key_version"),
+        Index("ix_activity_resources_activity_id", "activity_id"),
+        Index("ix_activity_resources_task_id", "task_id"),
+        Index("ix_activity_resources_org_id", "org_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    resource_key: Mapped[str] = mapped_column(Text, nullable=False)
+    activity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    org_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resource_type: Mapped[str] = mapped_column(
+        Text, nullable=False, default="link", server_default=text("'link'")
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
+class TaskSubmission(Base):
+    """成果版本（契约 `C-SUBMISSION@1`）。
+
+    每次成员从 ``in_progress|rejected`` 进入 ``submitted`` 时新增一行，版本号按
+    ``(task_id, user_id)`` 递增；旧版本保留用于追溯，但验收只能绑定最新版本。
+    """
+
+    __tablename__ = "task_submissions"
+    __table_args__ = (
+        UniqueConstraint("task_id", "user_id", "version", name="uq_task_submissions_task_user_version"),
+        Index("ix_task_submissions_task_user", "task_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resource_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
+class SubmissionPrecheck(Base):
+    """成果预审记录（契约 `C-PRECHECK@1`）。
+
+    - 绑定具体 ``submission_id``，不改变成员、任务、积分或通知；
+    - ``requirement_digest`` 记录当次任务/活动要求摘要，要求变化后旧预审标记过期；
+    - ``checks`` 只存规则预审结果，``ai_suggestions`` 只存模型建议；``mock`` 与
+      ``ai_error`` 分开标注，模型失败不得冒充通过。
+    """
+
+    __tablename__ = "submission_prechecks"
+    __table_args__ = (Index("ix_submission_prechecks_submission_id", "submission_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    requirement_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    checks: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    verdict: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_suggestions: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list, server_default=text("'[]'")
+    )
+    mock: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    ai_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
 class PasswordReset(Base):
     """一次性密码重置凭据（契约 `C-DATA-AUTH@1`）：``used_at`` 非空即已消费。"""
 
@@ -431,4 +520,7 @@ __all__ = [
     "PasswordReset",
     "AiConversation",
     "AiMessage",
+    "ActivityResource",
+    "TaskSubmission",
+    "SubmissionPrecheck",
 ]

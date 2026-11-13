@@ -18,7 +18,8 @@ import { applyTask, myApplications, withdrawApply } from '../api/applications'
 import { getActivity } from '../api/activities'
 import { ApiError } from '../api/client'
 import { checkin, myCheckins } from '../api/checkin'
-import { getTask, submitTask, updateProgress } from '../api/tasks'
+import { getTask, getTaskSubmissions, precheckSubmission, submitTask, updateProgress, verifyTask } from '../api/tasks'
+import { listResources } from '../api/resources'
 import AgentDock from '../components/ai/AgentDock.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import ErrorState from '../components/common/ErrorState.vue'
@@ -40,6 +41,10 @@ import { useUserStore } from '../stores/user'
 import type {
   ApplicationStatus,
   MemberStatus,
+  PrecheckResult,
+  PrecheckStatus,
+  ResourceItem,
+  SubmissionItem,
   TaskBrief,
   TaskDetail,
   TaskGraph as TaskGraphModel,
@@ -67,6 +72,21 @@ const checkinLoading = ref(false)
 const applyLoading = ref(false)
 const withdrawLoading = ref(false)
 const submitLoading = ref(false)
+const submitDialogVisible = ref(false)
+const submitContent = ref('')
+const submitResourceUrl = ref('')
+/** 当前任务可见的成果版本（管理者看全部，普通成员只看自己） */
+const submissions = ref<SubmissionItem[]>([])
+const submissionsLoading = ref(false)
+/** 成果版本加载失败：与「确实没有版本」区分，失败时禁止盲批 */
+const submissionsError = ref('')
+/** 本次会话内已运行过的预审结果（key = submission_id） */
+const precheckResults = ref<Record<number, PrecheckResult>>({})
+const precheckLoading = ref<number | null>(null)
+const verifyLoading = ref<number | null>(null)
+/** 任务相关资料（同活动 + 同组织往期，权限内） */
+const relatedResources = ref<ResourceItem[]>([])
+const resourcesLoading = ref(false)
 const progressVisible = ref(false)
 const progressText = ref('')
 const progressLoading = ref(false)
@@ -120,6 +140,52 @@ const myMember = computed<TaskMember | null>(() => {
 })
 /** 成员状态表：按报名先后顺序原样展示 */
 const memberRows = computed<TaskMember[]>(() => task.value?.members ?? [])
+
+/** 本人成果版本（历史 + 最新） */
+const mySubmissions = computed<SubmissionItem[]>(() =>
+  submissions.value.filter((item) => item.user_id === currentUserId.value)
+)
+
+/** 每位成员的最新成果版本（发布者同页验收使用） */
+const latestByMember = computed<Map<number, SubmissionItem>>(() => {
+  const map = new Map<number, SubmissionItem>()
+  for (const item of submissions.value) {
+    if (!item.latest) continue
+    map.set(item.user_id, item)
+  }
+  return map
+})
+
+/** 待验收成员 + 其最新成果版本（无版本时保持 null，兼容历史提交） */
+const pendingVerifications = computed<
+  Array<{ member: TaskMember; submission: SubmissionItem | null }>
+>(() =>
+  memberRows.value
+    .filter((member) => member.status === 'submitted')
+    .map((member) => ({ member, submission: latestByMember.value.get(member.user_id) ?? null }))
+)
+
+function precheckMeta(status: PrecheckStatus): { type: '' | 'success' | 'warning' | 'danger' | 'info'; text: string } {
+  if (status === 'pass') return { type: 'success', text: '通过' }
+  if (status === 'fail') return { type: 'danger', text: '不通过' }
+  if (status === 'warn') return { type: 'warning', text: '需确认' }
+  return { type: 'info', text: '待补充' }
+}
+
+function verdictText(verdict: 'pass' | 'fail' | 'unknown'): string {
+  if (verdict === 'pass') return '规则预审未发现冲突'
+  if (verdict === 'fail') return '规则预审发现不通过项'
+  return '规则预审有信息缺失'
+}
+
+function submissionPrecheck(submission: SubmissionItem): PrecheckResult | null {
+  return precheckResults.value[submission.id] ?? null
+}
+
+/** 外链只允许 http/https，避免 javascript/data 链接被直接打开 */
+function isHttpUrl(value: string | null): boolean {
+  return Boolean(value && /^https?:\/\//i.test(value))
+}
 
 /** 信息卡的「我的报名 / 我的执行」摘要 */
 const myApplyLabel = computed<string>(() =>
@@ -351,6 +417,40 @@ async function loadRejectReason(): Promise<void> {
   }
 }
 
+/** 成果版本与相关资料属于辅助信息：失败不阻塞任务详情主流程 */
+async function loadSubmissions(): Promise<void> {
+  if (!task.value) {
+    submissions.value = []
+    submissionsError.value = ''
+    return
+  }
+  submissionsLoading.value = true
+  submissionsError.value = ''
+  try {
+    submissions.value = (await getTaskSubmissions(task.value.id)).items
+  } catch (err) {
+    submissions.value = []
+    submissionsError.value = errorMessage(err)
+  } finally {
+    submissionsLoading.value = false
+  }
+}
+
+async function loadRelatedResources(): Promise<void> {
+  if (!task.value) {
+    relatedResources.value = []
+    return
+  }
+  resourcesLoading.value = true
+  try {
+    relatedResources.value = (await listResources({ related_task_id: task.value.id, limit: 5 })).items
+  } catch {
+    relatedResources.value = []
+  } finally {
+    resourcesLoading.value = false
+  }
+}
+
 async function load(): Promise<void> {
   if (!Number.isFinite(taskId.value) || taskId.value <= 0) {
     error.value = '任务编号无效'
@@ -367,6 +467,8 @@ async function load(): Promise<void> {
     activityGraphError.value = ''
     await loadCheckinState()
     await loadRejectReason()
+    // 成果版本与资料是辅助区块，任一失败都不影响任务详情
+    await Promise.allSettled([loadSubmissions(), loadRelatedResources()])
   } catch (err) {
     task.value = null
     error.value = errorMessage(err)
@@ -459,26 +561,107 @@ async function submitProgress(): Promise<void> {
   }
 }
 
-async function handleSubmit(): Promise<void> {
-  if (!task.value || !canSubmit.value) return
-  try {
-    await ElMessageBox.confirm(
-      '提交后任务进入「待验收」状态，发布者验收通过后才会结算积分。',
-      '提交完成',
-      { type: 'warning', confirmButtonText: '确认提交', cancelButtonText: '再等等' }
-    )
-  } catch {
+function openSubmitDialog(): void {
+  if (!task.value) return
+  if (!canSubmit.value) {
+    ElMessage.warning(submitHint.value || '当前不可提交')
     return
   }
+  submitContent.value = ''
+  submitResourceUrl.value = ''
+  submitDialogVisible.value = true
+}
+
+async function confirmSubmit(): Promise<void> {
+  if (!task.value || submitLoading.value) return
   submitLoading.value = true
   try {
-    await submitTask(task.value.id)
+    await submitTask(task.value.id, {
+      content: submitContent.value.trim() || null,
+      resource_url: submitResourceUrl.value.trim() || null
+    })
+    submitDialogVisible.value = false
     ElMessage.success('已提交，等待发布者验收')
     await load()
   } catch (err) {
     ElMessage.error(errorMessage(err))
   } finally {
     submitLoading.value = false
+  }
+}
+
+/** 对某个成果版本运行规则预审 + AI 建议（只写预审记录，不改变业务状态） */
+async function handlePrecheck(submission: SubmissionItem): Promise<void> {
+  if (!task.value || precheckLoading.value !== null) return
+  precheckLoading.value = submission.id
+  try {
+    const result = await precheckSubmission(task.value.id, submission.id)
+    precheckResults.value = { ...precheckResults.value, [submission.id]: result }
+    ElMessage.success('预审完成；预审不等于验收，仍需负责人确认')
+    await loadSubmissions()
+  } catch (err) {
+    ElMessage.error(errorMessage(err))
+  } finally {
+    precheckLoading.value = null
+  }
+}
+
+/** 发布者同页验收：通过 / 退回都绑定当前展示的成果版本 */
+async function handleVerifyMember(
+  member: TaskMember,
+  submission: SubmissionItem | null,
+  pass: boolean
+): Promise<void> {
+  if (!task.value || verifyLoading.value !== null) return
+  if (submissionsLoading.value) {
+    ElMessage.warning('成果版本正在加载，请稍候再验收')
+    return
+  }
+  if (submissionsError.value) {
+    ElMessage.warning('成果版本未能加载，请刷新后再验收，避免在看不到成果时盲批')
+    return
+  }
+  let reason: string | undefined
+  try {
+    if (pass) {
+      await ElMessageBox.confirm(
+        `确认通过「${member.user_name || `用户 #${member.user_id}`}」的成果版本？通过后按任务奖励结算积分。`,
+        '验收通过',
+        { type: 'success', confirmButtonText: '确认通过', cancelButtonText: '再看看' }
+      )
+    } else {
+      const result = await ElMessageBox.prompt('请说明退回原因，成员会收到通知并可重新提交。', '退回收成', {
+        type: 'warning',
+        confirmButtonText: '确认退回',
+        cancelButtonText: '取消',
+        inputValidator: (value: string) => (value.trim() ? true : '请填写退回原因')
+      })
+      reason = result.value.trim()
+    }
+  } catch {
+    return
+  }
+
+  verifyLoading.value = member.user_id
+  try {
+    const result = await verifyTask(task.value.id, pass, reason, member.user_id, submission?.id)
+    if (pass) {
+      ElMessage.success(
+        result.credit_delta > 0 ? `验收通过，成员获得 ${result.credit_delta} 积分` : '验收通过'
+      )
+    } else {
+      ElMessage.success('已退回，成员会收到修改通知')
+    }
+    await load()
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 4090) {
+      ElMessage.warning('该成果版本已不是最新版本，请刷新后再验收')
+      await loadSubmissions()
+      return
+    }
+    ElMessage.error(errorMessage(err))
+  } finally {
+    verifyLoading.value = null
   }
 }
 
@@ -664,7 +847,7 @@ watch(
                   :disabled="!canSubmit"
                   :title="canSubmit ? '' : submitHint"
                   :loading="submitLoading"
-                  @click="handleSubmit"
+                  @click="openSubmitDialog"
                 >
                   提交完成
                 </el-button>
@@ -881,6 +1064,199 @@ watch(
         </template>
       </el-card>
 
+      <el-card shadow="never" class="app-section-card review-card">
+        <template #header>
+          <div class="card-header">
+            <span class="card-title">成果与验收</span>
+            <span class="header-hint">提交版本、规则预审与人工验收同页完成；预审不等于验收</span>
+          </div>
+        </template>
+
+        <!-- 本人成果版本：普通成员只看自己的版本 -->
+        <section
+          v-if="isApproved && mySubmissions.length > 0"
+          class="review-block"
+          aria-labelledby="my-submissions-heading"
+        >
+          <h3 id="my-submissions-heading" class="review-subtitle">我的成果版本</h3>
+          <ul class="submission-list">
+            <li v-for="item in mySubmissions" :key="item.id" class="submission-item">
+              <div class="submission-head">
+                <span class="submission-version">v{{ item.version }}</span>
+                <el-tag v-if="item.latest" size="small" type="success" effect="plain">最新</el-tag>
+                <span class="submission-time">{{ memberTime(item.created_at) }}</span>
+                <el-tag
+                  v-if="item.precheck"
+                  :type="precheckMeta(item.precheck.verdict).type"
+                  size="small"
+                  effect="plain"
+                >
+                  {{ verdictText(item.precheck.verdict) }}
+                </el-tag>
+                <el-tag v-if="item.precheck?.stale" size="small" type="warning" effect="plain">
+                  要求已变化，预审过期
+                </el-tag>
+              </div>
+              <p v-if="item.content" class="submission-text">{{ item.content }}</p>
+              <a
+                v-if="isHttpUrl(item.resource_url)"
+                class="submission-link"
+                :href="item.resource_url || undefined"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                查看成果链接
+              </a>
+              <p v-if="item.precheck?.summary" class="precheck-summary">{{ item.precheck.summary }}</p>
+              <p v-if="item.precheck?.ai_error" class="precheck-error">{{ item.precheck.ai_error }}</p>
+              <div class="submission-actions">
+                <el-button
+                  size="small"
+                  :loading="precheckLoading === item.id"
+                  @click="handlePrecheck(item)"
+                >
+                  运行预审
+                </el-button>
+              </div>
+              <div v-if="submissionPrecheck(item)" class="precheck-detail">
+                <p class="precheck-verdict">规则结论：{{ verdictText(submissionPrecheck(item)!.verdict) }}</p>
+                <ul class="precheck-list">
+                  <li v-for="check in submissionPrecheck(item)!.checks" :key="check.key" class="precheck-row">
+                    <el-tag :type="precheckMeta(check.status).type" size="small" effect="plain">
+                      {{ precheckMeta(check.status).text }}
+                    </el-tag>
+                    <span class="precheck-label">{{ check.label }}</span>
+                    <span class="precheck-message">{{ check.message }}</span>
+                    <span v-if="check.evidence" class="precheck-evidence">证据：{{ check.evidence }}</span>
+                  </li>
+                </ul>
+                <p v-if="submissionPrecheck(item)!.mock" class="precheck-mock">
+                  mock 预审：本次未调用真实模型，规则结论仍有效
+                </p>
+                <ul v-if="submissionPrecheck(item)!.ai_suggestions.length > 0" class="precheck-list">
+                  <li
+                    v-for="suggestion in submissionPrecheck(item)!.ai_suggestions"
+                    :key="suggestion.key"
+                    class="precheck-row"
+                  >
+                    <span class="precheck-label">AI 建议</span>
+                    <span class="precheck-message">{{ suggestion.message }}</span>
+                  </li>
+                </ul>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <!-- 发布者同页验收：始终绑定当前展示的最新成果版本 -->
+        <section v-if="isPublisher" class="review-block" aria-labelledby="pending-review-heading">
+          <h3 id="pending-review-heading" class="review-subtitle">
+            待验收（{{ pendingVerifications.length }}）
+          </h3>
+          <el-alert
+            v-if="submissionsError"
+            type="error"
+            :title="`成果版本未能加载：${submissionsError}`"
+            description="为避免在看不到成果时盲批，验收按钮已禁用；请刷新后重试。"
+            :closable="false"
+            show-icon
+            class="inline-alert"
+          />
+          <p v-if="pendingVerifications.length === 0" class="review-empty">当前没有待验收成员。</p>
+          <ul v-else class="submission-list">
+            <li
+              v-for="{ member, submission } in pendingVerifications"
+              :key="member.user_id"
+              class="submission-item review-pending"
+            >
+              <div class="submission-head">
+                <span class="submission-member">{{ member.user_name || `用户 #${member.user_id}` }}</span>
+                <span v-if="submission" class="submission-version">v{{ submission.version }}</span>
+                <span class="submission-time">{{ memberTime(member.submitted_at) }}</span>
+              </div>
+              <template v-if="submission">
+                <p v-if="submission.content" class="submission-text">{{ submission.content }}</p>
+                <a
+                  v-if="isHttpUrl(submission.resource_url)"
+                  class="submission-link"
+                  :href="submission.resource_url || undefined"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  查看成果链接
+                </a>
+                <p v-if="submission.precheck?.summary" class="precheck-summary">
+                  {{ verdictText(submission.precheck.verdict) }}：{{ submission.precheck.summary }}
+                </p>
+                <p v-if="submission.precheck?.stale" class="precheck-warning">
+                  任务要求已变化，该预审已过期，请重新运行或人工核对。
+                </p>
+                <p v-if="submission.precheck?.ai_error" class="precheck-error">
+                  {{ submission.precheck.ai_error }}
+                </p>
+              </template>
+              <p v-else-if="submissionsLoading" class="review-empty">正在加载成果版本…</p>
+              <p v-else-if="!submissionsError" class="review-empty">历史提交没有成果版本；可按现有成员状态人工验收。</p>
+              <div class="submission-actions">
+                <el-button
+                  v-if="submission"
+                  size="small"
+                  :loading="precheckLoading === submission.id"
+                  @click="handlePrecheck(submission)"
+                >
+                  运行预审
+                </el-button>
+                <el-button
+                  type="success"
+                  size="small"
+                  :disabled="!!submissionsError || submissionsLoading"
+                  :loading="verifyLoading === member.user_id"
+                  @click="handleVerifyMember(member, submission, true)"
+                >
+                  通过
+                </el-button>
+                <el-button
+                  type="danger"
+                  plain
+                  size="small"
+                  :disabled="!!submissionsError || submissionsLoading"
+                  :loading="verifyLoading === member.user_id"
+                  @click="handleVerifyMember(member, submission, false)"
+                >
+                  退回
+                </el-button>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <!-- 任务相关资料：同活动 + 同组织往期，后端权限过滤 -->
+        <section class="review-block" aria-labelledby="related-resources-heading">
+          <h3 id="related-resources-heading" class="review-subtitle">相关资料</h3>
+          <p v-if="resourcesLoading" class="review-empty">正在加载资料…</p>
+          <p v-else-if="relatedResources.length === 0" class="review-empty">
+            当前没有可引用的资料；往届资料只作结构参考，不替代本届要求。
+          </p>
+          <ul v-else class="resource-list">
+            <li v-for="resource in relatedResources" :key="resource.id" class="resource-item">
+              <span class="resource-title">{{ resource.title }}</span>
+              <span class="resource-meta">
+                v{{ resource.version }} · {{ resource.activity_title || '未绑定活动' }}
+              </span>
+              <a
+                v-if="isHttpUrl(resource.url)"
+                class="resource-link"
+                :href="resource.url"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                打开原始链接
+              </a>
+            </li>
+          </ul>
+        </section>
+      </el-card>
+
       <el-card shadow="never" class="app-section-card">
         <template #header>
           <div class="card-header">
@@ -1021,6 +1397,42 @@ watch(
       <template #footer>
         <el-button :disabled="progressLoading" @click="progressVisible = false">取消</el-button>
         <el-button type="primary" :loading="progressLoading" @click="submitProgress">提交进度</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="submitDialogVisible"
+      title="提交完成"
+      width="min(560px, calc(100vw - 32px))"
+      :close-on-click-modal="false"
+    >
+      <el-form label-position="top">
+        <el-form-item label="成果说明">
+          <el-input
+            v-model="submitContent"
+            type="textarea"
+            :rows="5"
+            maxlength="5000"
+            show-word-limit
+            placeholder="例如：推文终稿已发布，活动时间为 2026-12-25 19:00，地点为礼堂。"
+          />
+        </el-form-item>
+        <el-form-item label="成果链接">
+          <el-input
+            v-model="submitResourceUrl"
+            maxlength="1000"
+            placeholder="可选，例如 https://example.com/final-post"
+          />
+        </el-form-item>
+        <el-alert
+          type="info"
+          :closable="false"
+          title="每次提交会保存一个成果版本；退回后重新提交会生成新版本，旧版本不能用于验收。"
+        />
+      </el-form>
+      <template #footer>
+        <el-button :disabled="submitLoading" @click="submitDialogVisible = false">取消</el-button>
+        <el-button type="success" :loading="submitLoading" @click="confirmSubmit">确认提交</el-button>
       </template>
     </el-dialog>
   </section>
@@ -1450,6 +1862,179 @@ watch(
   word-break: break-word;
 }
 
+.review-block + .review-block {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--app-border);
+}
+
+.review-subtitle {
+  margin: 0 0 10px;
+  font-size: var(--app-font-aux-lg);
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.review-empty {
+  margin: 0;
+  font-size: var(--app-font-aux-lg);
+  color: var(--app-text-muted);
+  line-height: 1.6;
+}
+
+.submission-list,
+.resource-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.submission-item {
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+}
+
+.submission-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.submission-version {
+  font-size: var(--app-font-aux-lg);
+  font-weight: 700;
+  color: var(--app-text);
+}
+
+.submission-member {
+  font-size: var(--app-font-body);
+  font-weight: 600;
+  color: var(--app-text);
+  word-break: break-word;
+}
+
+.submission-time,
+.resource-meta {
+  font-size: var(--app-font-aux);
+  color: var(--app-text-muted);
+}
+
+.submission-text {
+  margin: 8px 0 0;
+  font-size: var(--app-font-body);
+  line-height: 1.7;
+  color: var(--app-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.submission-link,
+.resource-link {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: var(--app-font-aux-lg);
+  color: var(--app-primary);
+}
+
+.submission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.precheck-summary,
+.precheck-verdict {
+  margin: 8px 0 0;
+  font-size: var(--app-font-aux-lg);
+  color: var(--app-text-secondary);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.precheck-warning {
+  margin: 6px 0 0;
+  font-size: var(--app-font-aux-lg);
+  color: var(--el-color-warning);
+  word-break: break-word;
+}
+
+.precheck-error {
+  margin: 6px 0 0;
+  font-size: var(--app-font-aux-lg);
+  color: var(--el-color-danger);
+  word-break: break-word;
+}
+
+.precheck-mock {
+  margin: 8px 0 0;
+  font-size: var(--app-font-aux);
+  color: var(--app-text-muted);
+}
+
+.precheck-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--app-border);
+}
+
+.precheck-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.precheck-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--app-font-aux-lg);
+  color: var(--app-text-secondary);
+  line-height: 1.6;
+}
+
+.precheck-label {
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.precheck-message,
+.precheck-evidence {
+  word-break: break-word;
+}
+
+.precheck-evidence {
+  color: var(--app-text-muted);
+}
+
+.resource-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+}
+
+.resource-title {
+  font-size: var(--app-font-body);
+  font-weight: 600;
+  color: var(--app-text);
+  word-break: break-word;
+}
+
 @media (max-width: 768px) {
   .detail {
     gap: 12px;
@@ -1486,6 +2071,11 @@ watch(
 
   .card-header :deep(.el-button) {
     width: 100%;
+    min-height: var(--app-touch);
+  }
+
+  .submission-actions :deep(.el-button) {
+    flex: 1 1 100%;
     min-height: var(--app-touch);
   }
 

@@ -248,6 +248,7 @@ export interface Activity {
   owner_id: number
   owner_name: string
   org: string | null
+  org_id: number | null
   status: string
   created_at: string
   progress: ActivityProgress
@@ -582,4 +583,109 @@ export interface AiConversationList {
 export interface AiConversationDetail {
   conversation: AiConversationSummary
   messages: AiChatMessage[]
+}
+// --------------------------------------------------------------------------- //
+// 资料与成果审核（`C-RESOURCE@1` / `C-SUBMISSION@1` / `C-PRECHECK@1`）
+// --------------------------------------------------------------------------- //
+
+/** 资料条目（`ResourceOut`）：同一 `resource_key` 可有多个版本 */
+export interface ResourceItem {
+  id: number
+  resource_key: string
+  activity_id: number | null
+  task_id: number | null
+  org_id: number | null
+  activity_title: string | null
+  title: string
+  summary: string | null
+  resource_type: string
+  url: string
+  version: number
+  created_by: number
+  created_by_name: string
+  created_at: string
+}
+
+export interface ResourceListResult {
+  items: ResourceItem[]
+  total: number
+}
+
+/** 资料创建 / 追加版本入参 */
+export interface ResourceCreatePayload {
+  title: string
+  url: string
+  summary?: string | null
+  resource_type?: string
+  activity_id?: number | null
+  task_id?: number | null
+  org_id?: number | null
+  resource_key?: string | null
+}
+
+/** 成果提交入参：两项均可留空（保持旧的无 body 提交语义） */
+export interface SubmitPayload {
+  content?: string | null
+  resource_url?: string | null
+}
+
+export type PrecheckStatus = 'pass' | 'fail' | 'warn' | 'unknown'
+export type PrecheckVerdict = 'pass' | 'fail' | 'unknown'
+
+export interface PrecheckItem {
+  key: string
+  label: string
+  status: PrecheckStatus
+  message: string
+  evidence: string | null
+  source: string | null
+}
+
+export interface PrecheckSuggestion {
+  key: string
+  message: string
+  evidence: string | null
+}
+
+/** 预审结果（`PrecheckOut`）：规则结论 + 可选 AI 建议 */
+export interface PrecheckResult {
+  submission_id: number
+  requirement_digest: string
+  checks: PrecheckItem[]
+  verdict: PrecheckVerdict
+  summary: string | null
+  ai_suggestions: PrecheckSuggestion[]
+  mock: boolean
+  ai_error: string | null
+  created_at: string
+}
+
+/** 版本列表中的预审摘要；`stale` 表示任务要求已变化 */
+export interface PrecheckSummary {
+  id: number
+  verdict: PrecheckVerdict
+  summary: string | null
+  mock: boolean
+  ai_error: string | null
+  requirement_digest: string
+  stale: boolean
+  created_at: string
+}
+
+/** 单条成果版本（`SubmissionOut`） */
+export interface SubmissionItem {
+  id: number
+  task_id: number
+  user_id: number
+  user_name: string
+  version: number
+  content: string | null
+  resource_url: string | null
+  created_at: string
+  latest: boolean
+  precheck: PrecheckSummary | null
+}
+
+export interface SubmissionListResult {
+  items: SubmissionItem[]
 }

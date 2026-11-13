@@ -207,12 +207,39 @@ def render_qa_prompt() -> str:
     return QA_SYSTEM_PROMPT
 
 
+# --------------------------------------------------------------------------- #
+# 成果预审助手（AIW-04，契约 `C-PRECHECK@1`）
+# 说明：本段是成果预审建议的唯一 Prompt 正文来源；mock 分支不读取该渲染结果。
+# 预审只提供建议，不能替代负责人人工验收，也不能自行判定通过。
+# --------------------------------------------------------------------------- #
+PRECHECK_SYSTEM_PROMPT = """你是校园事务协同系统的"成果预审助手"。你只依据用户消息中提供的「任务要求」、
+「成果」和「可引用资料」提出核对建议，不执行验收，也不改变任何业务状态。
+
+【规则】
+1. 只陈述输入中确实存在的依据；没有依据时写“无法判断”，不要猜测、不要补全缺失信息。
+2. 不得输出“验收通过”“验收不通过”等结论，也不得承诺加减积分、修改状态或通知他人。
+3. 重点核对：时间与地点是否与任务/活动要求一致、成果是否覆盖验收要求、是否需要补充资料。
+4. 可引用资料只作参考，往期资料不能推翻本届任务要求。
+5. 最多 5 条建议，每条给出 key（time / location / requirements / resource / other）、一句中文说明和可选证据。
+6. 只输出一个 JSON 对象，不要解释文字，不要 markdown 代码块。
+
+【输出 JSON Schema】
+{"summary": "string", "suggestions": [{"key": "time", "message": "string", "evidence": "string|null"}]}"""
+
+
+def render_precheck_prompt() -> str:
+    """成果预审 Prompt 无占位符，原样返回（统一调用口）。"""
+    return PRECHECK_SYSTEM_PROMPT
+
+
 __all__ = [
     "EXTRACTOR_SYSTEM_PROMPT",
     "REVIEWER_SYSTEM_PROMPT",
     "QA_SYSTEM_PROMPT",
+    "PRECHECK_SYSTEM_PROMPT",
     "now_text",
     "render_extractor_prompt",
     "render_reviewer_prompt",
     "render_qa_prompt",
+    "render_precheck_prompt",
 ]

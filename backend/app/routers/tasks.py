@@ -31,6 +31,7 @@ from app.schemas import (
     Draft,
     ProgressIn,
     ProgressOut,
+    SubmitIn,
     TaskBrief,
     TaskCreate,
     TaskDetailOut,
@@ -44,6 +45,7 @@ from app.services import application_service
 from app.services import authz
 from app.services import credit as credit_service
 from app.services import member_service, notify_service
+from app.services import submission_service
 from app.services import task_graph_service
 from app.services.task_state import ALLOWED_TRANSITIONS
 
@@ -884,13 +886,16 @@ def add_progress(
 @router.post("/{task_id}/submit")
 def submit_task(
     task_id: int,
+    payload: SubmitIn | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """成员提交完成（逐人语义）：只把**本人**成员状态置为 ``submitted``。
 
-    重复提交由 ``record_submit`` 幂等处理（返回 ``changed=False``），不重复通知发布者；
-    通知去重键为 ``submit:{task_id}:{user_id}:{submitted_at}``（`C-TASK-API@1`）。
+    可选请求体 ``{content?, resource_url?}`` 生成一条成果版本（`C-SUBMISSION@1`）；
+    旧的无 body 调用仍然可用，按空内容记录版本，保持「每次提交都有版本」。
+    重复提交由 ``record_submit`` 幂等处理（返回 ``changed=False``），不新增版本，
+    也不重复通知发布者；通知去重键沿用 ``submit:{task_id}:{user_id}:{submitted_at}``。
     """
     task = _get_task_or_404(db, task_id)
     authz.require_task_view(db, current_user, task)
@@ -901,6 +906,13 @@ def submit_task(
 
     member, changed = member_service.record_submit(db, task, int(current_user.id))
     if changed:
+        submission_service.create_submission(
+            db,
+            task,
+            int(current_user.id),
+            content=payload.content if payload is not None else None,
+            resource_url=payload.resource_url if payload is not None else None,
+        )
         notify_service.create_notification(
             db,
             user_id=int(task.publisher_id),
@@ -922,6 +934,32 @@ def submit_task(
     db.refresh(task)
 
     return ok(_single_task_payload(db, task, current_user.id))
+
+
+@router.get("/{task_id}/submissions")
+def list_task_submissions(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """成果版本列表：管理者看全部成员，普通成员只看自己的版本。"""
+    task = _get_task_or_404(db, task_id)
+    items = submission_service.list_submissions(db, task, current_user)
+    return ok({"items": [item.model_dump() for item in items]})
+
+
+@router.post("/{task_id}/submissions/{submission_id}/precheck")
+def precheck_submission(
+    task_id: int,
+    submission_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """对成果版本执行规则预审 + AI 建议；只写预审记录，不改变业务状态。"""
+    task = _get_task_or_404(db, task_id)
+    authz.require_task_view(db, current_user, task)
+    result = submission_service.precheck(db, current_user, task, submission_id)
+    return ok(result.model_dump())
 
 
 # --------------------------------------------------------------------------- #
@@ -970,12 +1008,25 @@ def verify_task(
     """
     task = _get_task_or_404(db, task_id)
     authz.require_task_view(db, current_user, task)
-    authz.require_task_manage(db, current_user, task)
+    submission_service.require_task_review(db, current_user, task)
     if str(task.status) == "cancelled":
         raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
 
     members = member_service.effective_members(db, task)
     targets = _verify_targets(members, payload)
+
+    # 验收绑定成果版本（`C-SUBMISSION@1`）：指定时必须等于该成员最新版本，
+    # 防止页面上停留的旧稿批准新稿。校验先于任何状态写入。
+    if payload.submission_id is not None:
+        if len(targets) != 1:
+            raise ApiError(ERR_INVALID_PARAM, "指定成果版本时只能验收一名成员")
+        target = targets[0]
+        submission = submission_service.get_submission(db, task, payload.submission_id)
+        if int(submission.user_id) != int(target):
+            raise ApiError(ERR_INVALID_PARAM, "成果版本不属于该成员")
+        latest = submission_service.latest_submission(db, int(task.id), int(target))
+        if latest is None or int(latest.id) != int(submission.id):
+            raise ApiError(ERR_CONFLICT, "该成果版本已不是最新版本，请刷新后重新验收")
 
     # 防御历史库 assignee_id == publisher_id 等脏数据：绝不自我验收 / 自我加分
     if any(int(target) == int(current_user.id) for target in targets):

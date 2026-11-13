@@ -4,7 +4,7 @@ T1 提供 7 个路由桩；T2 追加 ``applications``（报名审批，`C-APPLY@
 ``main.py`` 在 ``tasks.router`` 之后挂载，保证 ``/api/tasks/...`` 不冲突。
 """
 
-from app.routers import agent, applications, auth, checkin, credits, kb, notifications, tasks
+from app.routers import agent, applications, auth, checkin, credits, kb, notifications, resources, tasks
 
 __all__ = [
     "auth",
@@ -15,4 +15,5 @@ __all__ = [
     "notifications",
     "kb",
     "agent",
+    "resources",
 ]

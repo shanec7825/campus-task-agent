@@ -512,6 +512,8 @@ class VerifyIn(BaseModel):
     pass_: bool = Field(alias="pass")
     reason: str | None = None
     user_id: int | None = None
+    # 验收绑定的成果版本（`C-SUBMISSION@1`）：指定时必须等于该成员最新版本。
+    submission_id: int | None = None
 
 
 class ProgressIn(BaseModel):
@@ -847,6 +849,139 @@ class AiConversationDetailOut(BaseModel):
     messages: list[AiMessageOut] = Field(default_factory=list)
 
 
+# --------------------------------------------------------------------------- #
+# 资料库（契约 `C-RESOURCE@1`）
+# --------------------------------------------------------------------------- #
+
+
+class ResourceCreateIn(BaseModel):
+    """资料新增 / 新版本入参。
+
+    ``resource_key`` 缺省时新建一条资料（version=1）；提供已存在的 key 时，
+    服务层在该 key 下追加下一版本，旧版本保留。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    title: str = Field(min_length=1, max_length=120)
+    url: str = Field(min_length=1, max_length=1000)
+    summary: str | None = Field(default=None, max_length=2000)
+    resource_type: Literal["link", "document", "note"] = "link"
+    activity_id: int | None = None
+    task_id: int | None = None
+    org_id: int | None = None
+    resource_key: str | None = Field(default=None, max_length=80)
+
+
+class ResourceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    resource_key: str
+    activity_id: int | None = None
+    task_id: int | None = None
+    org_id: int | None = None
+    activity_title: str | None = None
+    title: str
+    summary: str | None = None
+    resource_type: str = "link"
+    url: str
+    version: int = 1
+    created_by: int
+    created_by_name: str = ""
+    created_at: str
+
+
+class ResourceListOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    items: list[ResourceOut] = Field(default_factory=list)
+    total: int = 0
+
+
+# --------------------------------------------------------------------------- #
+# 成果版本与预审（契约 `C-SUBMISSION@1` / `C-PRECHECK@1`）
+# --------------------------------------------------------------------------- #
+
+
+class SubmitIn(BaseModel):
+    """提交成果（可选）：旧的无 body 提交仍按空内容生成一条版本。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    content: str | None = Field(default=None, max_length=5000)
+    resource_url: str | None = Field(default=None, max_length=1000)
+
+
+class PrecheckItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    label: str
+    status: Literal["pass", "fail", "warn", "unknown"]
+    message: str
+    evidence: str | None = None
+    source: str | None = None
+
+
+class PrecheckSuggestion(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    message: str
+    evidence: str | None = None
+
+
+class PrecheckOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    submission_id: int
+    requirement_digest: str
+    checks: list[PrecheckItem] = Field(default_factory=list)
+    verdict: Literal["pass", "fail", "unknown"]
+    summary: str | None = None
+    ai_suggestions: list[PrecheckSuggestion] = Field(default_factory=list)
+    mock: bool = False
+    ai_error: str | None = None
+    created_at: str
+
+
+class PrecheckSummary(BaseModel):
+    """列表内展示的预审摘要；``stale`` 表示任务要求已变化。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    verdict: Literal["pass", "fail", "unknown"]
+    summary: str | None = None
+    mock: bool = False
+    ai_error: str | None = None
+    requirement_digest: str
+    stale: bool = False
+    created_at: str
+
+
+class SubmissionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    task_id: int
+    user_id: int
+    user_name: str = ""
+    version: int
+    content: str | None = None
+    resource_url: str | None = None
+    created_at: str
+    latest: bool = True
+    precheck: PrecheckSummary | None = None
+
+
+class SubmissionListOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    items: list[SubmissionOut] = Field(default_factory=list)
+
+
 __all__ = [
     "ReminderRule",
     "UserOut",
@@ -920,6 +1055,16 @@ __all__ = [
     "AiConversationSummary",
     "AiConversationListOut",
     "AiConversationDetailOut",
+    "ResourceCreateIn",
+    "ResourceOut",
+    "ResourceListOut",
+    "SubmitIn",
+    "PrecheckItem",
+    "PrecheckSuggestion",
+    "PrecheckOut",
+    "PrecheckSummary",
+    "SubmissionOut",
+    "SubmissionListOut",
 ]
 
 # --------------------------------------------------------------------------- #

@@ -6,7 +6,10 @@ import { request } from './client'
 import type {
   ApplyResult,
   DecomposeResult,
+  PrecheckResult,
   ProgressItem,
+  SubmissionListResult,
+  SubmitPayload,
   TaskCreatePayload,
   TaskDetail,
   TaskItem,
@@ -58,23 +61,44 @@ export function updateProgress(id: number, content: string): Promise<ProgressIte
   return request<ProgressItem>('POST', `/api/tasks/${id}/progress`, { content })
 }
 
-export function submitTask(id: number): Promise<TaskItem> {
-  return request<TaskItem>('POST', `/api/tasks/${id}/submit`)
+export function submitTask(id: number, payload?: SubmitPayload): Promise<TaskItem> {
+  return request<TaskItem>('POST', `/api/tasks/${id}/submit`, payload)
+}
+
+/** 成果版本列表（`C-SUBMISSION@1`）：管理者看全部，普通成员只看自己的 */
+export function getTaskSubmissions(id: number): Promise<SubmissionListResult> {
+  return request<SubmissionListResult>('GET', `/api/tasks/${id}/submissions`)
+}
+
+/** 预审单个成果版本（`C-PRECHECK@1`）：只写预审记录，不改变业务状态 */
+export function precheckSubmission(taskId: number, submissionId: number): Promise<PrecheckResult> {
+  return request<PrecheckResult>(
+    'POST',
+    `/api/tasks/${taskId}/submissions/${submissionId}/precheck`
+  )
 }
 
 /**
- * 验收 / 退回单个成员（`C-TASK-API@1`）。
+ * 验收 / 退回单个成员（`C-TASK-API@1` / `C-SUBMISSION@1`）。
  * 传入 `userId` 时只处理该成员；省略时由后端按已提交成员选择目标。
+ * 传入 `submissionId` 时验收会绑定该成果版本，旧版本被服务端拒绝（4090）。
  */
 export function verifyTask(
   id: number,
   pass: boolean,
   reason?: string,
-  userId?: number
+  userId?: number,
+  submissionId?: number
 ): Promise<VerifyResult> {
-  const payload: { pass: boolean; reason?: string; user_id?: number } = { pass }
+  const payload: {
+    pass: boolean
+    reason?: string
+    user_id?: number
+    submission_id?: number
+  } = { pass }
   if (reason !== undefined) payload.reason = reason
   if (userId !== undefined) payload.user_id = userId
+  if (submissionId !== undefined) payload.submission_id = submissionId
   return request<VerifyResult>('POST', `/api/tasks/${id}/verify`, payload)
 }
 

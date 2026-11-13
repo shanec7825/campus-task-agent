@@ -198,7 +198,9 @@ def init_db() -> None:
 
     ``Base.metadata.create_all`` 创建缺失的表（含 ``task_members``、``activities``、
     阶段 2 的 ``organizations`` / ``org_members`` / ``invitations`` / ``user_sessions`` /
-    ``password_resets``，以及阶段 19 的 ``ai_conversations`` / ``ai_messages``）；随后
+    ``password_resets``、阶段 19 的 ``ai_conversations`` / ``ai_messages``、AIW-03 的
+    ``task_dependencies``，以及 AIW-04 的 ``activity_resources`` / ``task_submissions`` /
+    ``submission_prechecks``）；随后
     ``_migrate`` 对旧库补齐 ``notifications.dedupe_key``、去重索引、具名唯一索引
     ``uq_task_members_task_user``、legacy ``approved`` 报名与逐人成员行、
     ``tasks.activity_id``，以及阶段 2 的 ``users`` 认证列、``tasks`` /

@@ -38,6 +38,7 @@
 | 编号 | 对象 | badcase / 触发原因 | 修改 | 效果 / 验证方式 |
 |---|---|---|---|---|
 | P-017 | 开发接手流程 · **先读当前交接与本地总计划，再执行选定阶段**（stage17，仅文档） | 真实触发：用户说明已回退到上次提交，要求整理计划与记录；现场 HEAD 为 `af43dc7` 且工作区干净，旧 `phase3-activity-workflow` 及其新增测试不存在，先前“收口未提交文件”的接手指令不再适用 | AGENTS 增加 HANDOFF → 记录规则 → 本地总计划 → 选定阶段设计的必读顺序；计划缺失时报告并暂停依赖实现；区分 AIW/phase、stage、P 和问题编号；历史记录保留，当前事实写交接 | 真实结果：文档收尾与 Git 边界检查 **19/19**、**22** 个本地链接有效，编号无重复；详细计划仍被忽略。报告见 `codearts_proof/reports/stage17_document_check.json`。这是开发流程 Prompt 调整，未修改业务 Prompt、未调用真实模型，不声称业务效果提升或所有 Agent 已实测遵守 |
+| P-018 | 业务 Prompt · **新增成果预审助手（AIW-04）** | 触发：路线图 AIW-04 要求「AI 预审 + 人工确认」；本轮新增 `PRECHECK_SYSTEM_PROMPT`，约束只依据任务要求 / 成果 / 可引用资料给建议，不得判定验收通过，不得编造 | 在 `backend/app/agents/prompts.py` 新增预审 Prompt 与 `render_precheck_prompt()`；服务端只接收 `summary` 与固定 key 的建议，`verdict` 仍由确定性规则决定，模型失败写 `ai_error` | 真实结果：`MAAS_MOCK=1` 下规则预审与降级路径覆盖于 `test_aiw04_resource_review.py`（15 passed）；**真实模型未试跑**，不声称模型建议质量或效果提升 |
 
 ## 二、待补录（运行期真实 badcase）
 
