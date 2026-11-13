@@ -93,7 +93,7 @@ onMounted(() => {
         <button
           type="button"
           class="dock-toggle"
-          aria-controls="expanded ? 'agent-dock-panel' : undefined"
+          :aria-controls="expanded ? 'agent-dock-panel' : undefined"
           :aria-expanded="expanded ? 'true' : 'false'"
           @click="expanded = !expanded"
         >

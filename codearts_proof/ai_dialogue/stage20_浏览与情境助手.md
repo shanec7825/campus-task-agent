@@ -1,6 +1,7 @@
 # stage20 浏览与情境助手（AIW-02）
 
-> 日期：2026-11-14。状态：实现完成、本地自动测试通过、三轮独立审查（第三轮 2 Important 已修复并回归，按上限未开第四轮）、已提交 `8b7f818`、已推送 `origin/main`、CI run 43466871644 四个 job success、未部署；浏览器端到端仅部分验证。
+> 日期：2026-11-14。状态：实现完成、本地自动测试通过、三轮独立审查（第三轮 2 Important 已修复并回归，按上限未开第四轮）、已提交 `8b7f818`、已推送 `origin/main`、CI run 43466871644 四个 job success、未部署。
+> 2026-11-14 补验收尾轮：完成浏览器返回位置、AgentDock 三形态、390×844 抽屉与深色主题补验；发现并修复 `AgentDock` 的 `aria-controls` 静态属性缺陷，前端完整门禁再次通过，独立 Review Agent 复核 0 Critical / 0 Important；真实模型、真机与悬浮预览间隙场景仍未验证。
 > 本文件只记录真实发生的事项；未执行的项目明确写「未验证」或「未执行」。
 
 ## 1. 需求来源与授权
@@ -15,6 +16,7 @@
 - 工作区：`git status --short` 为空，无既有未提交改动、无 stash；未发现其他会话写入者。
 - 上一阶段 AIW-01 已提交 `d132f15` 并推送，CI run 43459560555 四个 job success。
 - 本地计划新增 `aiw02-browse-context/{design,task}.md`（Git 忽略，不提交）。
+- 补验收尾轮（2026-11-14，同一 stage20）：开工 HEAD `2adc91c`（CI 回填文档提交），`git status --short` 为空，无 stash，无其他 worktree；未新增 stage 编号。
 
 ## 3. 决策与范围
 
@@ -61,6 +63,8 @@
 | S20-I10 | 修复后复跑后端 `run_all.sh` 失败：8040 健康检查超时 | 单独启动定位 `tasks.py:332 SyntaxError: expected 'except' or 'finally' block`；空行整理时误删 `except` 缩进；修复缩进后 `py_compile` EXIT=0，`run_all` **1412 PASS** | 已修复 |
 | S20-I11 | 第三轮审查 2 Important：加载期离开页面后仍可能对新页面 `scrollTo`；后端聚合门禁早于最后一次后端改动 | 增加 `disposed` 标志与键盘翻页主动滚动标记；修复语法后复跑 `run_all` 1412 PASS，最终 `test_aiw02` 6 passed | 已修复；未开第四轮（三轮上限） |
 | S20-I06 | 审查 Suggestion：登出时异步 restore 可能把新 promise 置空；HoverPeek 面板可能溢出；AgentDock 缺 aria-controls | 增加 restore finally token 守卫、面板 `max-height/overflow`、`aria-controls` | 已修复 |
+| S20-I12 | 补验轮浏览器实测：展开后 `aria-controls` 为字面字符串 `expanded ? 'agent-dock-panel' : undefined`，指向不存在的 id | 原实现把 `aria-controls` 写成静态属性而非 Vue 绑定；改为 `:aria-controls` 后复验：收起时属性为 `null`，展开时值为 `agent-dock-panel` 且目标面板存在、可见，再收起后属性移除 | 已修复；前端完整门禁通过，独立复核 0 Critical / 0 Important |
+| S20-I13 | 补验轮多次在同一消息中同时使用 `tool_call` 与直接工具名通道，导致同一浏览器脚本重复执行；一次脚本含错误 `waitForURL(/\/tasks\/d+$/)` 导致 MCP 超时 | 前者属工具通道纪律问题，后续改为单一 `tool_call`，但本轮仍重复发生，如实记录；后者为验证脚本固定等待条件写错，去掉该行后单次重试成功，非产品缺陷 | 已停止重复调用；超时脚本已修正并完成复验 |
 
 ## 6. 验证（真实命令与结果）
 
@@ -86,17 +90,28 @@
 - `/ai`：AI 默认入口、通知卡、历史 mock 会话与来源可见。
 - `/tasks`：摘要「共 1 个活动 · 1 个活动任务 · 0 个独立任务」；活动下任务「外语角志愿者招募」出现在任务区并显示「所属活动 · 外语角筹备」。
 - 悬浮预览：100ms 时面板 0 个；320ms 时 1 个（活动详情文本）；移开 80ms 后 0 个。
-- **未验证**：返回位置、AgentDock 三形态、手机抽屉、深色主题、真实模型、阶段截图（`mobile-drawer.png`/`desktop-hall.png` 未产出）。
+
+补验收尾轮（同一环境，新构建 `frontend/dist`，仍为 `MAAS_MOCK=1`）：
+
+- 返回位置：`1440×420` 视口下滚动并将 `cta_hall_view` 写入 `scrollTop=448`；进入任务详情后 `page.goBack()` 返回 `/tasks`，实测 `scrollY=448`，筛选仍为「范围：我的任务与活动」。Playwright 点击「查看详情」时会自动把按钮滚入视口，所以保存值是点击时位置 448，而非测试脚本先前设置的 240；两者在进入/返回时一致。
+- AgentDock：任务详情底部 `.agent-dock` 可见，上下文为「任务：外语角志愿者招募」；长条输入草稿后展开，`#agent-dock-panel` 可见、历史消息 2 条；点击「打开完整页」进入 `/ai`，完整页输入框保留同一草稿；`aria-expanded` 前后为 false/true。
+- 手机抽屉：`390×844` 下菜单按钮实测 `45.6×44`；底部四项导航（AI 助手、事务、消息、我的）保留；抽屉含 AI 助手、工作台、事务、消息、我的、发布事务、主题、用户与退出登录，当前页「事务」有 `aria-current=page`；抽屉横向 `scrollWidth=clientWidth=320`，无横向溢出；Esc 关闭后抽屉不可见。
+- 深色主题：抽屉内主题按钮点击后 `html.dark=true`、`data-theme=dark`、`--app-bg=#0f1115`、`aria-pressed=true`；再次点击恢复 `light`。
+- 截图（脱敏归档）：[桌面大厅](../screenshots/stage20/desktop-hall-final.png)、[桌面 AgentDock 展开](../screenshots/stage20/desktop-dock-expanded-final.png)、[手机抽屉](../screenshots/stage20/mobile-drawer-final.png)、[手机抽屉深色](../screenshots/stage20/mobile-drawer-dark-final.png)。
+- **仍未验证**：真实模型（全程 mock）、真机、悬浮预览的快速划过与卡片间隙场景（演示库仅 1 活动 1 任务，无卡片间隙）；未把上述未验证项写成通过。
 
 ## 7. 独立审查
 
 - 首轮独立 Review Agent（general，只读）：结论「需修复」，**0 Critical / 5 Important / 8 Suggestions**；Suggestion 中已处置 3 项（S20-I06）。
 - 第二轮独立 Review Agent（general，只读）：结论「仍需修复」，**0 Critical / 3 Important**（返回恢复条件、修复后门禁旧日志、报告只指向忽略目录）。三项已处置（S20-I07/I08/I09）。
 - 第三轮独立 Review Agent（general，只读）：结论「仍需修复」，**0 Critical / 2 Important**（加载期离开页面后仍可能新页面 `scrollTo`；后端聚合门禁早于最后后端改动）。两项已处置（S20-I10/I11）并完成最终回归；按项目「最多三轮」限制未再开第四轮，最后修复未经独立复核。
+- 补验轮独立复核（general，只读）：审查 `AgentDock.vue` 全量与本次一行 diff，并扫描 stage20 新增前端文件中的同类静态/绑定写法。结论 **0 Critical / 0 Important / 2 Suggestion**，无阻塞项，可提交。Suggestion：该属性暂无自动化渲染断言，只靠浏览器实测；`ActivityDetail.vue` 的「展开全部」与手机菜单按钮未关联 `aria-controls`，均为既有可接受省略。审查者未改任何文件。
 - 端到端未完成项见第 8 节；不把代码逻辑修复写成浏览器已验证。
 
 ## 8. 未完成与待回填
 
-- 浏览器端到端未完成项：返回保位置、AgentDock 长条/微展开/完整页、390×844 抽屉、深色主题、真实模型。
-- 提交/推送/CI：2026-11-14 提交 `8b7f818be49d0b78c1bdc6c18f7353a5df8084ac`（22 文件，+1942/−200），已推送 `origin/main`（`9ad625f..8b7f818`，推送前 `0 0` 无分叉）；CI run [43466871644](https://github.com/shanec7825/campus-task-agent/actions/runs/43466871644) 的 Frontend、Backend reliability（ubuntu/windows）、Backend integration 四个 job 均 **success**；未部署。本记录的 CI 回填由随后一次 docs 提交保存，不改变业务代码。
-- 截图：未产出；不以静态检查替代。
+- 浏览器端到端：返回位置、AgentDock 长条/微展开/完整页、390×844 抽屉、深色主题已在补验轮实际验证，证据见第 6 节。
+- 仍未验证：真实模型（全程 `MAAS_MOCK=1`）、真机、悬浮预览快速划过与卡片间隙；不写成通过。
+- 主体提交：2026-11-14 提交 `8b7f818be49d0b78c1bdc6c18f7353a5df8084ac`（22 文件，+1942/−200），已推送 `origin/main`（`9ad625f..8b7f818`，推送前 `0 0` 无分叉）；CI run [43466871644](https://github.com/shanec7825/campus-task-agent/actions/runs/43466871644) 的 Frontend、Backend reliability（ubuntu/windows）、Backend integration 四个 job 均 **success**。
+- 补验轮改动：`frontend/src/components/ai/AgentDock.vue` 一行 `:aria-controls` 修复 + 本记录、验证报告、LOG、HANDOFF、启动指令摘要与 4 张截图归档；提交 SHA 与对应 CI 结果在提交推送后回填，不提前宣称通过。
+- 截图：补验轮 4 张已归档 `codearts_proof/screenshots/stage20/`；首轮未产出的阶段截图不再补造。

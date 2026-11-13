@@ -40,18 +40,34 @@
 ## 4. 浏览器（模拟视口）
 
 - 环境：`outputs/phase2/serve_backend.py` 在 8000 端口托管最新 `frontend/dist`，隔离演示库 `outputs/phase2/demo.db`，`MAAS_MOCK=1`、`RUN_SCHEDULER=0`。
-- 已验证：`/ai` 默认入口、通知卡、历史 mock 会话与来源；`/tasks` 摘要显示「1 个活动 · 1 个活动任务 · 0 个独立任务」，活动下任务「外语角志愿者招募」出现在任务区并显示「所属活动 · 外语角筹备」；悬浮预览 100ms 时面板 0 个、320ms 时 1 个、移开 80ms 后 0 个。
-- 未验证：从详情返回的滚动位置、AgentDock 长条/微展开/完整页、390×844 手机抽屉、深色主题、真实模型。MCP 同消息重复调用后按约定停止，未产出阶段截图。
-- 记录：`outputs/aiw02/walkthrough.md`（本地忽略）。
+- 首轮已验证：`/ai` 默认入口、通知卡、历史 mock 会话与来源；`/tasks` 摘要显示「1 个活动 · 1 个活动任务 · 0 个独立任务」，活动下任务「外语角志愿者招募」出现在任务区并显示「所属活动 · 外语角筹备」；悬浮预览 100ms 时面板 0 个、320ms 时 1 个、移开 80ms 后 0 个。
+
+### 4.1 补验收尾轮（2026-11-14，同一环境、新构建）
+
+| 检查项 | 实测读数 |
+|---|---|
+| 返回位置 | 进入详情前 `cta_hall_view.scrollTop=448`；`page.goBack()` 返回 `/tasks` 后 `scrollY=448`，筛选仍为「范围：我的任务与活动」。Playwright 点击会先把按钮滚入视口，故保存值 448 是点击时位置，非脚本预设的 240 |
+| AgentDock 长条 | 任务详情 `.agent-dock` 可见，上下文「任务：外语角志愿者招募」；输入草稿可写入 |
+| AgentDock 微展开 | `#agent-dock-panel` 可见、历史消息 2 条；`aria-expanded` false→true |
+| 完整页共享草稿 | 点击「打开完整页」进入 `/ai`，输入框保留同一草稿；标题「AI 助手」 |
+| aria-controls 修复前 | 字面字符串 `expanded ? 'agent-dock-panel' : undefined` |
+| aria-controls 修复后 | 收起 `null`；展开 `agent-dock-panel` 且面板 count=1、可见；再收起 `null`、panel count=0 |
+| 手机抽屉 | 390×844；菜单按钮 `45.6×44`；底部四项导航保留；抽屉含完整文字导航、发布、主题、用户、退出；当前页 aria-current=page；横向 `scrollWidth=clientWidth=320`；Esc 关闭 |
+| 深色主题 | `html.dark=true`、`data-theme=dark`、`--app-bg=#0f1115`、`aria-pressed=true`；再次切换恢复 light |
+
+- 截图归档：`codearts_proof/screenshots/stage20/{desktop-hall-final,desktop-dock-expanded-final,mobile-drawer-final,mobile-drawer-dark-final}.png`。
+- 未验证：真实模型、真机、悬浮预览快速划过与卡片间隙（演示库仅 1 活动 1 任务）。
+- 记录：`outputs/aiw02/walkthrough.md`（本地忽略，补验原始读数）。
 
 ## 5. 提交与 CI
 
-- 代码提交 `8b7f818be49d0b78c1bdc6c18f7353a5df8084ac`，已推送 `origin/main`（`9ad625f..8b7f818`，推送前 `0 0` 无分叉）。
+- 主体代码提交 `8b7f818be49d0b78c1bdc6c18f7353a5df8084ac`，已推送 `origin/main`（`9ad625f..8b7f818`，推送前 `0 0` 无分叉）。
 - CI run `43466871644`：Frontend、Backend reliability（ubuntu/windows）、Backend integration 四个 job 均 **success**。
+- 补验轮：`AgentDock.vue` 一行修复；提交 SHA 与对应 CI 结果待提交推送后回填。
 - 未部署；docs 回填提交不改变业务代码。
 
 ## 6. 结论口径
 
 - 自动测试：后端相关套件与前端门禁通过；属于本地真实执行结果。
-- 浏览器：仅部分验证；不以静态检查或代码阅读替代。
-- 真机、真实模型、部署与 CI：未验证/未执行；CI 结果在提交推送后另行回填。
+- 浏览器：首轮部分验证；补验轮已覆盖返回位置、AgentDock 三形态、390×844 抽屉、深色主题并产出截图。真实模型、真机与预览间隙仍未验证。
+- 真机、真实模型、部署：未验证/未执行；CI 结果在提交推送后另行回填。

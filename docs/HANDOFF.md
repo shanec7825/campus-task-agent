@@ -1,14 +1,15 @@
 # 当前开发交接
 
-> 更新日期：2026-11-14（Asia/Shanghai，stage20 / AIW-02 已提交、推送且 CI 通过）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
+> 更新日期：2026-11-14（Asia/Shanghai，stage20 / AIW-02 补验收尾完成；补验提交 SHA 与对应 CI 待回填）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
 
 ## 1. 当前基线与本轮授权
 
 - 分支：`main`。
-- 开工基线：`9ad625f725d8667f4f86cab4201708d224415a95`（stage19 文档回填）；开工时工作区干净。
-- 本轮代码提交：`8b7f818be49d0b78c1bdc6c18f7353a5df8084ac`（`feat(browse): 增加活动范围、悬浮预览与情境助手`），已推送 `origin/main`；CI run 43466871644 四个 job success。本交接的 CI 回填随附一次 docs 提交。
-- 本轮授权范围：AIW-02「浏览与情境助手」；不新增路由/表/依赖，不做受控业务动作、AI 额度、语音原生、依赖图谱、成果上传与自动验收。
-- 本轮使用编号：留痕 **stage20**；未新增 P 编号（业务 Prompt 正文未改）。
+- 主体开工基线：`9ad625f725d8667f4f86cab4201708d224415a95`（stage19 文档回填）。
+- 主体代码提交：`8b7f818be49d0b78c1bdc6c18f7353a5df8084ac`（`feat(browse): 增加活动范围、悬浮预览与情境助手`），已推送 `origin/main`；CI run 43466871644 四个 job success。
+- 补验收尾轮开工基线：`2adc91c`（stage20 的 CI 回填文档提交），工作区干净、无 stash、无其他 worktree。
+- 本轮授权范围：AIW-02「浏览与情境助手」收尾；不新增路由/表/依赖，不做受控业务动作、AI 额度、语音原生、依赖图谱、成果上传与自动验收。
+- 本轮使用编号：留痕 **stage20**（接续更新，未新增 stage）；未新增 P 编号（业务 Prompt 正文未改）。
 
 ## 2. 本轮实际变更与状态
 
@@ -20,7 +21,7 @@
 | `tests/backend/test_aiw02_activity_scope.py` | 6 用例：all/mine、负责人、approved、pending 不命中、无关成员、协作者、跨组织、未登录 | 已接入 CI backend-reliability；修改范围时必须重跑 |
 | `.github/workflows/ci.yml` | backend-reliability 增加 AIW-02 pytest step | 保留只读权限与既有 job |
 | `frontend/src/stores/aiChat.ts` | 三种 Agent 形态共享会话与草稿；登出 epoch 拦截迟到响应 | 保留发送中不刷新、刷新失败不清空消息、失败回填输入 |
-| `frontend/src/components/ai/AgentDock.vue` | 活动/任务详情底部；长条 + 微展开 + 完整页入口 | 当前活动/任务只作界面标签，不进入模型上下文 |
+| `frontend/src/components/ai/AgentDock.vue` | 补验轮修复 `aria-controls`：由静态字面量改为 `:aria-controls` 绑定；收起移除、展开指向 `agent-dock-panel` | 不要再改回静态属性；长条/微展开/完整页共用会话 |
 | `frontend/src/components/common/HoverPeek.vue` | 200ms、精确指针、Esc、焦点、触摸设备禁用、面板限高 | 快速划过与间隙场景仍需浏览器复验 |
 | `frontend/src/views/TaskHall.vue` | 任务区含活动下第一层任务与独立任务；活动 `scope`；筛选/滚动恢复；requestId 防竞态 | 子任务不铺满；活动与任务范围必须一致 |
 | `frontend/src/layouts/AppLayout.vue` | 手机菜单按钮与左侧抽屉；退出清空 AI 会话与 `cta_hall_view` | 底部四项导航保留；44×44 |
@@ -28,12 +29,13 @@
 
 ## 3. 验证、审查与提交状态
 
-- 后端（隔离临时库）：`test_aiw02_activity_scope.py` **6 个测试函数 / 8 类场景，6 passed（最终代码）**；活动层级 **13**、活动流程 **8**、认证权限 **47**、可靠性 **11** passed；`tests/backend/run_all.sh` **EXIT=0、1412 条 PASS**（`backend-runall-final.log`；首次复跑因 `tasks.py` 语法错误失败，已定位修复）。
-- 前端：`npm run typecheck` **EXIT=0**、`npm run build` **EXIT=0**；最终代码 `tests/frontend/run_all.sh` **EXIT=0**（构建 4/4、契约 25/25、语音 21/21，`frontend-runall-final.log`）。
-- 独立审查：首轮 **0 Critical / 5 Important / 8 Suggestions**；第二轮 **0 Critical / 3 Important**；第三轮 **0 Critical / 2 Important**（加载期离开可能滚动新页面、聚合门禁早于最后后端改动），已处置并完成最终回归；按最多三轮未开第四轮，最后修复未经独立复核。**端到端浏览器验收未完成**（返回位置、AgentDock、手机抽屉、深色主题、真实模型）；不把未验证写成通过。
-- 浏览器（Playwright MCP，8000 同源 dist + phase2 demo.db，`MAAS_MOCK=1`）：`/ai` 默认入口、通知卡、历史 mock 会话与来源；`/tasks` 活动下任务与「所属活动」可见；悬浮预览 100ms=0 / 320ms=1 / 离开=0。MCP 重复调用后停止，未产出阶段截图。
-- 归档证据：[stage20 验证记录](../codearts_proof/reports/stage20_验证记录.md)、[case4 排错实例](../codearts_proof/debug/case4_活动范围递归CTE同名冲突.md)。
-- **提交/推送/CI**：代码提交 `8b7f818` 已推送 `origin/main`（`9ad625f..8b7f818`，推送前无分叉）；CI run [43466871644](https://github.com/shanec7825/campus-task-agent/actions/runs/43466871644) 四个 job 均 success。未部署。本交接与 LOG 的 CI 回填由随后一次 docs 提交保存，不改变业务代码。
+- 后端（隔离临时库）：`test_aiw02_activity_scope.py` **6 个测试函数 / 8 类场景，6 passed（最终代码）**；活动层级 **13**、活动流程 **8**、认证权限 **47**、可靠性 **11** passed；`tests/backend/run_all.sh` **EXIT=0、1412 条 PASS**。
+- 前端（补验轮新构建）：`PYTHON_BIN="$(command -v python)" bash tests/frontend/run_all.sh` **EXIT=0**；typecheck **PASS**、build 成功、契约 **25 passed / 0 failed**、语音 **21 PASS / 0 FAIL**（`outputs/aiw02/frontend-runall-aria-fix.log`）。
+- 浏览器补验（Playwright MCP，8000 同源 dist + phase2 demo.db，`MAAS_MOCK=1`）：返回位置 `scrollY=448` 与 `cta_hall_view` 一致且筛选保持；AgentDock 长条/微展开/完整页共享草稿；390×844 抽屉完整文字导航、当前页 `aria-current`、横向无溢出、Esc 关闭；深色主题 `html.dark=true`、`--app-bg=#0f1115`；`aria-controls` 修复后收起 `null`、展开 `agent-dock-panel`。
+- 未验证：真实模型（全程 mock）、真机、悬浮预览快速划过与卡片间隙（演示库仅 1 活动 1 任务）。
+- 独立审查：主体三轮（首轮 0/5/8、第二轮 0/3、第三轮 0/2，均已处置，按上限未开第四轮）；补验轮独立复核 **0 Critical / 0 Important / 2 Suggestion**（缺自动化 aria 断言、两处既有 aria-controls 省略），无阻塞项。
+- 归档证据：[stage20 过程与验证](../codearts_proof/ai_dialogue/stage20_浏览与情境助手.md)、[stage20 验证记录](../codearts_proof/reports/stage20_验证记录.md)、[case4 排错实例](../codearts_proof/debug/case4_活动范围递归CTE同名冲突.md)、[stage20 截图](../codearts_proof/screenshots/stage20/)。
+- **提交/推送/CI**：主体 `8b7f818` 已推送，CI run 43466871644 四个 job success；补验轮的一行修复与记录/截图提交及对应 CI 结果待回填。未部署。
 
 ## 4. 计划阅读入口
 
@@ -44,13 +46,12 @@
 5. [stage20 过程与验证](../codearts_proof/ai_dialogue/stage20_浏览与情境助手.md)、[stage20 验证记录](../codearts_proof/reports/stage20_验证记录.md)、[浏览器走查](../outputs/aiw02/walkthrough.md)（本地忽略）。
 6. 上一阶段 [stage19 过程](../codearts_proof/ai_dialogue/stage19_统一入口与只读问答.md)。
 
-本地计划缺失时，先告知用户并请求提供文件或明确新的设计依据；不要从历史 HTML、旧 phase2 计划或文件名推导完整需求。
+本地计划缺失时，先告知用户并请求提供文件或明确的新设计依据；不要从历史 HTML、旧 phase2 计划或文件名推导完整需求。
 
 ## 5. 下一步
 
-- AIW-02 的代码、自动测试与 CI 已完成；遗留浏览器端到端验证：返回位置、AgentDock 三形态、390×844 抽屉、深色主题、真实模型。
-- 下一次定时运行优先补验上述浏览器项（单一 MCP 通道、单调用纪律）；补验不改变已提交代码时只更新记录与报告。
-- AIW-02 收口后，下一阶段为 **AIW-03：真实任务全景**（多前置依赖、时间区间、活动与任务共用图谱、发布页共享内容区块）。开始前重新扫描 stage 编号（当前最大 20）并读取本地总计划。
+- AIW-02 主体代码、自动测试、独立审查与 CI 已完成；补验轮修复已交独立复核，提交与 CI 回填后进行最终收口判断。
+- 下一次定时运行先核对补验提交的 CI；通过后 AIW-02 标记完成，下一阶段为 **AIW-03：真实任务全景**（多前置依赖、时间区间、活动与任务共用图谱、发布页共享内容区块）。开始前重新扫描 stage 编号（当前最大 20）并读取本地总计划。
 - 不提交 `outputs/`、`.playwright-mcp/`、`.codeartsdoer/`、数据库与依赖。
 
 ## 6. 新 Agent 的最短启动指令
