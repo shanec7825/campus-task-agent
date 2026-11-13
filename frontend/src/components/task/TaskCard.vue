@@ -115,8 +115,10 @@ const props = withDefaults(
     currentUserId?: number | null
     /** 报名请求进行中（按钮 loading） */
     applying?: boolean
+    /** 所属活动标题；独立任务不传 */
+    activityTitle?: string
   }>(),
-  { currentUserId: null, applying: false }
+  { currentUserId: null, applying: false, activityTitle: '' }
 )
 
 const emit = defineEmits<{
@@ -207,6 +209,8 @@ const secondaryText = computed<string>(() => {
     <article class="task-card-content">
       <h3 class="card-title" :title="task.title">{{ task.title }}</h3>
 
+      <p v-if="activityTitle" class="card-activity">所属活动 · {{ activityTitle }}</p>
+
       <p class="card-deadline">
         <span>截止 {{ deadlineText }}</span>
         <span v-if="deadlineNear" class="deadline-near">临近</span>
@@ -274,6 +278,14 @@ const secondaryText = computed<string>(() => {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  word-break: break-word;
+}
+
+.card-activity {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-aux, 13px);
+  line-height: 1.5;
   word-break: break-word;
 }
 

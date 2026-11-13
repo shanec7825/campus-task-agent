@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import ThemeToggle from '../components/common/ThemeToggle.vue'
 import { useSSE } from '../composables/useSSE'
 import { PAGE_TITLES } from '../router'
+import { useAiChatStore } from '../stores/aiChat'
 import { useNotificationsStore } from '../stores/notifications'
 import { useUserStore } from '../stores/user'
 import type { OrgMembership } from '../types/models'
@@ -33,6 +34,7 @@ const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const notificationsStore = useNotificationsStore()
+const aiChat = useAiChatStore()
 const sse = useSSE()
 
 const unread = computed<number>(() => notificationsStore.unread)
@@ -40,6 +42,7 @@ const displayName = computed<string>(() => userStore.user?.display_name || userS
 const isLoggedIn = computed<boolean>(() => userStore.isLoggedIn)
 const canAdmin = computed<boolean>(() => userStore.isAdmin || userStore.isPublisher)
 const collapsed = ref<boolean>(readCollapsed())
+const mobileDrawerOpen = ref<boolean>(false)
 
 const currentOrg = computed<OrgMembership | null>(() =>
   userStore.orgs.length > 0 ? userStore.orgs[0] : null
@@ -115,6 +118,21 @@ function openPublish(): void {
   void router.push({ name: 'publish' })
 }
 
+function navigateFromDrawer(item: NavItem): void {
+  mobileDrawerOpen.value = false
+  navigate(item)
+}
+
+function adminFromDrawer(): void {
+  mobileDrawerOpen.value = false
+  goAdmin()
+}
+
+function publishFromDrawer(): void {
+  mobileDrawerOpen.value = false
+  openPublish()
+}
+
 onMounted(async () => {
   // 会话已由路由守卫通过 Cookie 恢复（userStore.restore()）
   if (!userStore.isLoggedIn) return
@@ -132,8 +150,15 @@ onBeforeUnmount(() => {
 })
 
 async function handleLogout(): Promise<void> {
+  mobileDrawerOpen.value = false
   sse.disconnect()
   notificationsStore.reset()
+  aiChat.reset()
+  try {
+    window.sessionStorage.removeItem('cta_hall_view')
+  } catch {
+    // 隐私模式下无法清理时不影响退出
+  }
   // 等待服务端撤销会话后再清空本地状态（失败时 store 内部也会清空）
   await userStore.logout()
   void router.replace({ name: 'login' })
@@ -272,6 +297,15 @@ async function handleLogout(): Promise<void> {
     </header>
 
     <header class="app-mobile-bar" data-testid="app-mobile-header">
+      <button
+        type="button"
+        class="mobile-menu-button"
+        data-testid="mobile-menu-button"
+        aria-label="打开导航菜单"
+        @click="mobileDrawerOpen = true"
+      >
+        菜单
+      </button>
       <span class="mobile-title">{{ pageTitle }}</span>
       <p class="org-context org-context-mobile">
         <span class="org-name">{{ orgName }}</span>
@@ -307,6 +341,54 @@ async function handleLogout(): Promise<void> {
         {{ item.label }}
       </a>
     </nav>
+
+    <el-drawer
+      v-model="mobileDrawerOpen"
+      direction="ltr"
+      size="min(320px, 88vw)"
+      title="导航"
+      class="mobile-nav-drawer"
+    >
+      <div class="drawer-body">
+        <nav class="drawer-nav" aria-label="完整导航">
+          <a
+            v-for="item in mainNav"
+            :key="item.name"
+            :href="item.path"
+            class="drawer-link"
+            :class="{ 'is-active': isActive(item.name) }"
+            :aria-current="isActive(item.name) ? 'page' : undefined"
+            @click.prevent="navigateFromDrawer(item)"
+          >
+            <span>{{ item.label }}</span>
+            <span v-if="isActive(item.name)" class="drawer-current">当前</span>
+          </a>
+          <a
+            v-if="canAdmin"
+            href="/admin"
+            class="drawer-link"
+            :class="{ 'is-active': isActive('admin') }"
+            :aria-current="isActive('admin') ? 'page' : undefined"
+            @click.prevent="adminFromDrawer"
+          >
+            <span>管理</span>
+            <span v-if="isActive('admin')" class="drawer-current">当前</span>
+          </a>
+        </nav>
+
+        <div class="drawer-actions">
+          <el-button type="primary" @click="publishFromDrawer">发布事务</el-button>
+        </div>
+
+        <div class="drawer-foot">
+          <ThemeToggle />
+          <p class="drawer-user">{{ displayName }}</p>
+          <button type="button" class="text-button logout-button" @click="handleLogout">
+            退出登录
+          </button>
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -337,11 +419,39 @@ async function handleLogout(): Promise<void> {
   border-bottom: 1px solid var(--app-border);
 }
 
+.mobile-menu-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--app-touch);
+  min-height: var(--app-touch);
+  padding: 0 var(--app-space-2);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-raised);
+  color: var(--app-text);
+  font-family: inherit;
+  font-size: var(--app-font-aux-lg);
+  cursor: pointer;
+}
+
+.mobile-menu-button:hover,
+.mobile-menu-button:focus-visible {
+  border-color: var(--app-border-strong);
+  color: var(--app-primary);
+}
+
 .mobile-title {
+  flex: 1;
+  min-width: 0;
   margin: 0;
+  overflow: hidden;
   font-size: var(--app-font-section-title);
   font-weight: 600;
   color: var(--app-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .org-context {
@@ -419,6 +529,68 @@ async function handleLogout(): Promise<void> {
 .bottom-nav-item.is-active {
   color: var(--app-primary);
   font-weight: 600;
+}
+
+.drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-4);
+  min-height: 100%;
+}
+
+.drawer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-1);
+}
+
+.drawer-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--app-touch);
+  padding: 0 var(--app-space-3);
+  border-radius: var(--app-radius-sm);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-body);
+  text-decoration: none;
+}
+
+.drawer-link:hover {
+  background: var(--app-surface-sunken);
+  color: var(--app-text);
+}
+
+.drawer-link.is-active {
+  background: var(--app-primary-soft);
+  color: var(--app-primary);
+  font-weight: 600;
+}
+
+.drawer-current {
+  color: var(--app-primary);
+  font-size: var(--app-font-aux);
+}
+
+.drawer-actions :deep(.el-button) {
+  width: 100%;
+  min-height: var(--app-touch);
+}
+
+.drawer-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-2);
+  margin-top: auto;
+  padding-top: var(--app-space-3);
+  border-top: 1px solid var(--app-border);
+}
+
+.drawer-user {
+  margin: 0;
+  color: var(--app-text);
+  font-size: var(--app-font-body);
+  word-break: break-word;
 }
 
 /* ---- 平板（769–1024px）：顶部横向导航，无侧栏 ---- */

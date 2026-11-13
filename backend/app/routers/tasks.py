@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any, Iterable, Literal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import or_
+
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -333,23 +333,6 @@ def _index_task_safe(db: Session, task: Task) -> None:
             logger.warning("知识库入库失败后 rollback 异常 task_id=%s", task_id, exc_info=True)
 
 
-def _my_participating_task_ids(db: Session, user_id: int) -> list[int]:
-    """当前用户作为 **approved 成员** 参与的任务 id（整页一次 IN 查询，禁止 N+1）。
-
-    ``scope=mine`` 不能只看 ``tasks.assignee_id``：该列只是「首位 approved」的兼容字段，
-    第 2 名及以后的 approved 成员在单负责人语义下会被漏掉（真实缺陷）。
-    """
-    rows = (
-        db.query(TaskApplication.task_id)
-        .filter(
-            TaskApplication.user_id == int(user_id),
-            TaskApplication.status == application_service.APPROVED,
-        )
-        .all()
-    )
-    return [int(row[0]) for row in rows]
-
-
 # --------------------------------------------------------------------------- #
 # #1 列表
 # --------------------------------------------------------------------------- #
@@ -381,15 +364,8 @@ def list_tasks(
         query = query.filter(Task.activity_id == activity_id)
 
     if scope == "mine":
-        conditions = [
-            Task.publisher_id == current_user.id,
-            # legacy 回退：P1 数据没有报名行，只靠 assignee_id
-            Task.assignee_id == current_user.id,
-        ]
-        participating_ids = _my_participating_task_ids(db, current_user.id)
-        if participating_ids:
-            conditions.append(Task.id.in_(participating_ids))
-        query = query.filter(or_(*conditions))
+        # 与活动范围共用同一条件；不能只看 assignee_id（首位 approved 兼容字段）
+        query = query.filter(authz.my_task_condition(db, current_user))
 
     if not include_sub:
         query = query.filter(Task.parent_id.is_(None))

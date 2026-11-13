@@ -10,10 +10,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import ColumnElement, exists, or_, select
+from sqlalchemy import ColumnElement, and_, exists, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -28,24 +28,54 @@ router = APIRouter(
 )
 
 
-def _visible_activity_condition(db: Session, user: User) -> ColumnElement[bool]:
+def _visible_activity_condition(
+    db: Session,
+    user: User,
+    visible_tasks: ColumnElement[bool] | None = None,
+) -> ColumnElement[bool]:
     """活动可见性的 SQL 条件（`C-AUTHZ@1` 规则，禁止取全表后在 Python 过滤）。
 
     可见 = 我是负责人 | 我是所属组织 ``admin`` | 该活动下存在我可见的任务。
+
+    ``visible_tasks`` 可由调用方传入同一个 ``authz.visible_task_filter`` 结果；
+    同一查询内重复创建递归 CTE 会触发 SQLAlchemy 同名 CTE 冲突。
     """
     conditions = [Activity.owner_id == int(user.id)]
     admin_org_ids = authz.org_ids_for(db, user, ("admin",))
     if admin_org_ids:
         conditions.append(Activity.org_id.in_(admin_org_ids))
+    task_visible = visible_tasks if visible_tasks is not None else authz.visible_task_filter(db, user)
     conditions.append(
         exists(
             select(Task.id).where(
                 Task.activity_id == Activity.id,
-                authz.visible_task_filter(db, user),
+                task_visible,
             )
         )
     )
     return or_(*conditions)
+
+
+def _mine_activity_condition(
+    db: Session,
+    user: User,
+    visible_tasks: ColumnElement[bool],
+) -> ColumnElement[bool]:
+
+    """「我的活动」SQL 条件（契约 `C-ACT-SCOPE@1`）。
+
+    我是负责人，或活动下存在「我的任务」（与 `GET /api/tasks?scope=mine` 共用
+    `authz.my_task_condition`）。任务条件必须再叠加可见性，避免把不可见任务
+    当作活动归属依据。
+    """
+    mine_task = exists(
+        select(Task.id).where(
+            Task.activity_id == Activity.id,
+            visible_tasks,
+            authz.my_task_condition(db, user),
+        )
+    )
+    return or_(Activity.owner_id == int(user.id), mine_task)
 
 
 def _owner_names(db: Session, owner_ids: set[int]) -> dict[int, str]:
@@ -101,13 +131,22 @@ def _visible_activity_tasks(
 
 @router.get("")
 def list_activities(
+    scope: Literal["all", "mine"] = "all",
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """活动列表：新的在前，每项带负责人昵称与整体进度。"""
+    """活动列表：新的在前，每项带负责人昵称与整体进度。
+
+    ``scope=mine`` 只返回我是负责人或活动下存在我参与/管理的任务的活动；
+    ``scope=all`` 保持既有可见范围。
+    """
+    visible_tasks = authz.visible_task_filter(db, current_user)
+    condition = _visible_activity_condition(db, current_user, visible_tasks)
+    if scope == "mine":
+        condition = and_(condition, _mine_activity_condition(db, current_user, visible_tasks))
     activities = (
         db.query(Activity)
-        .filter(_visible_activity_condition(db, current_user))
+        .filter(condition)
         .order_by(Activity.created_at.desc(), Activity.id.desc())
         .all()
     )

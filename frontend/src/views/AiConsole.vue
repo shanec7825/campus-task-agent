@@ -10,34 +10,30 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { storeToRefs } from 'pinia'
 
-import { chat, getConversation, listConversations } from '../api/agent'
 import { ApiError } from '../api/client'
 import EmptyState from '../components/common/EmptyState.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import LoadingState from '../components/common/LoadingState.vue'
+import { useAiChatStore } from '../stores/aiChat'
 import { useNotificationsStore } from '../stores/notifications'
-import type { AiChatMessage, NotificationItem } from '../types/models'
+import type { NotificationItem } from '../types/models'
 
 const SUGGESTIONS = ['我有哪些临近截止的事务？', '我有权限查看哪些活动？', '我接下来该先处理什么？']
 
 const router = useRouter()
 const notificationsStore = useNotificationsStore()
+const aiChat = useAiChatStore()
+const { messages, input, historyLoading, historyError, sending, mockMode, hasMessages } =
+  storeToRefs(aiChat)
 
-const messages = ref<AiChatMessage[]>([])
-const conversationId = ref<number | null>(null)
-const input = ref('')
-const historyLoading = ref(true)
-const historyError = ref('')
 const noticesLoading = ref(true)
 const noticesError = ref('')
-const sending = ref(false)
-const mockMode = ref(false)
 const messageListRef = ref<HTMLElement | null>(null)
 
 const unreadItems = computed<NotificationItem[]>(() => notificationsStore.unreadItems.slice(0, 3))
 const unreadCount = computed<number>(() => notificationsStore.unread)
-const hasMessages = computed<boolean>(() => messages.value.length > 0)
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -62,31 +58,10 @@ async function scrollToBottom(): Promise<void> {
   if (element) element.scrollTop = element.scrollHeight
 }
 
-async function loadHistory(): Promise<void> {
-  if (sending.value) return
-  historyLoading.value = true
-  historyError.value = ''
-  try {
-    const list = await listConversations(1)
-    const latest = list.items[0]
-    if (!latest) {
-      messages.value = []
-      conversationId.value = null
-      return
-    }
-    const detail = await getConversation(latest.id)
-    conversationId.value = detail.conversation.id
-    messages.value = detail.messages
-    const lastAssistant = [...detail.messages].reverse().find((item) => item.role === 'assistant')
-    mockMode.value = lastAssistant?.mock === true
-  } catch (err) {
-    const message = errorMessage(err)
-    if (hasMessages.value) ElMessage.error(`刷新对话失败：${message}`)
-    else historyError.value = message
-  } finally {
-    historyLoading.value = false
-  }
-  if (!historyError.value) await scrollToBottom()
+async function loadHistory(force = false): Promise<void> {
+  const refreshError = await aiChat.restore(force)
+  if (refreshError) ElMessage.error(`刷新对话失败：${refreshError}`)
+  await scrollToBottom()
 }
 
 async function loadNotices(): Promise<void> {
@@ -102,23 +77,11 @@ async function loadNotices(): Promise<void> {
 }
 
 async function sendMessage(text?: string): Promise<void> {
-  const content = (text ?? input.value).trim()
-  if (!content || sending.value || historyLoading.value) return
-
-  input.value = ''
-  sending.value = true
   try {
-    const result = await chat(content, conversationId.value ?? undefined)
-    conversationId.value = result.conversation_id
-    messages.value = [...messages.value, result.user_message, result.assistant_message]
-    mockMode.value = result.mock
-    historyError.value = ''
-    await scrollToBottom()
+    const sent = await aiChat.send(text)
+    if (sent) await scrollToBottom()
   } catch (err) {
-    if (!input.value) input.value = content
     ElMessage.error(errorMessage(err))
-  } finally {
-    sending.value = false
   }
 }
 
@@ -166,7 +129,7 @@ onMounted(async () => {
           class="header-button"
           :loading="historyLoading"
           :disabled="sending"
-          @click="loadHistory"
+          @click="loadHistory(true)"
         >
           刷新对话
         </el-button>
@@ -232,7 +195,7 @@ onMounted(async () => {
         :message="historyError"
         detail="对话记录加载失败，请稍后重试；通知卡不受影响。"
         retryable
-        @retry="loadHistory"
+        @retry="() => loadHistory(true)"
       />
       <EmptyState
         v-else-if="!hasMessages"

@@ -18,6 +18,7 @@ import { applyTask, myApplications, withdrawApply } from '../api/applications'
 import { ApiError } from '../api/client'
 import { checkin, myCheckins } from '../api/checkin'
 import { getTask, submitTask, updateProgress } from '../api/tasks'
+import AgentDock from '../components/ai/AgentDock.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import LoadingState from '../components/common/LoadingState.vue'
@@ -948,6 +949,8 @@ watch(
           </el-timeline-item>
         </el-timeline>
       </el-card>
+
+      <AgentDock :context-label="`任务：${task.title}`" />
     </template>
 
     <el-dialog

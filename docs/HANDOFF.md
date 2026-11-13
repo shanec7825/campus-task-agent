@@ -1,65 +1,58 @@
 # 当前开发交接
 
-> 更新日期：2026-11-13（Asia/Shanghai，stage19 已提交并推送）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
+> 更新日期：2026-11-14（Asia/Shanghai，stage20 / AIW-02 实现与本地验证完成，提交与 CI 待回填）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
 
 ## 1. 当前基线与本轮授权
 
 - 分支：`main`。
-- 开工基线：`f89481c`（stage18 文档回填，代码基线 `4c3c875`）；开工时工作区干净。
-- 当前代码提交：`d132f15`（`feat(ai): 增加 AI 默认入口与权限内只读问答`），已推送 `origin/main`；本交接的 CI 回填改动随附一次 docs 提交。
-- 本轮授权范围：AIW-01「统一入口与权限内只读问答」；不新增依赖/模型供应商，不做受控业务动作、额度账本、多会话面板、语音原生。
-- 本轮使用编号：留痕 **stage19**；未新增 P 编号（既有业务 Prompt 正文未改，新增只读问答 Prompt 记录在 stage19 §5.4）。
+- 开工基线：`9ad625f725d8667f4f86cab4201708d224415a95`（stage19 文档回填）；开工时工作区干净。
+- 本轮代码尚未提交；提交 SHA、推送与 CI 结果待回填。
+- 本轮授权范围：AIW-02「浏览与情境助手」；不新增路由/表/依赖，不做受控业务动作、AI 额度、语音原生、依赖图谱、成果上传与自动验收。
+- 本轮使用编号：留痕 **stage20**；未新增 P 编号（业务 Prompt 正文未改）。
 
 ## 2. 本轮实际变更与状态
 
 | 对象 | 当前核对结果 | 接手规则 |
 |---|---|---|
-| `backend/app/models.py` / `db.py` | 新增 `ai_conversations` / `ai_messages`，`create_all` 建表；旧库自动补建，不删列不删行 | 会话必须按 `user_id` 归属；不要复用 `parse_sessions` |
-| `backend/app/services/ai_service.py` | 上下文只取 `visible_task_filter`（最多 20 条）；引用由服务端映射 `ref`；模型调用前结束只读事务；问答只写会话表 | 任何新来源必须再次过可见性；不得信任模型给出的 ID/标题 |
-| `backend/app/routers/agent.py` | 新增 `POST /api/agent/chat`、`GET /api/agent/conversations`、`GET /api/agent/conversations/{id}`；跨账号 4040 | 写接口沿用 router 级 CSRF；不要加入客户端 user_id 参数 |
-| `backend/app/agents/prompts.py` | 新增 `QA_SYSTEM_PROMPT`（只读、只引用给定 ref、不承诺写操作） | 正文唯一来源；真实模型效果未验证 |
-| `frontend/src/views/AiConsole.vue` | `/ai` 默认入口；通知卡复用通知 store；刷新恢复最近会话；引用可点；mock 明确标注 | 通知失败不得阻塞问答；批量已读留在消息页 |
-| `frontend/src/router/index.ts` | `/`、登录后与安全回退默认 `/ai`；`/workbench` 保留 | 旧深链不得删除 |
-| `frontend/src/layouts/AppLayout.vue` | 桌面侧栏 208↔72px，`cta_sidebar_collapsed` 记忆；主导航加 AI；手机底部四项 AI/事务/消息/我的 | 管理入口仍只按 `isAdmin \|\| isPublisher` |
-| `tests/backend/test_ai_console.py` | 11 用例：持久化、可见范围、跨账号、CSRF、失败无残留（新建与续写）、空回答 5003、重复 ref、只读 | 修改会话/引用/授权时必须重跑；已接入 CI |
-| `tests/backend/verify_tables.py` | 期望表 16→18；`run_all` 注释同步 18 表 | 新增表需同步断言，只增不删 |
+| `backend/app/services/authz.py` | 新增 `my_task_condition` 与 `APPROVED_STATUS`；任务与活动范围共用 | 不要为活动另写一套「我的任务」判定 |
+| `backend/app/routers/tasks.py` | `scope=mine` 复用 `my_task_condition`；行为与原 publisher/assignee/approved 条件一致 | 不得只看 `assignee_id` |
+| `backend/app/routers/activities.py` | `GET /api/activities?scope=all|mine`；`mine` 叠加 `visible_task_filter` 与我的任务条件；同一查询复用同一 CTE | 新增条件必须先过可见性；不要在路由内取全表过滤 |
+| `tests/backend/test_aiw02_activity_scope.py` | 6 用例：all/mine、负责人、approved、pending 不命中、无关成员、协作者、跨组织、未登录 | 已接入 CI backend-reliability；修改范围时必须重跑 |
+| `.github/workflows/ci.yml` | backend-reliability 增加 AIW-02 pytest step | 保留只读权限与既有 job |
+| `frontend/src/stores/aiChat.ts` | 三种 Agent 形态共享会话与草稿；登出 epoch 拦截迟到响应 | 保留发送中不刷新、刷新失败不清空消息、失败回填输入 |
+| `frontend/src/components/ai/AgentDock.vue` | 活动/任务详情底部；长条 + 微展开 + 完整页入口 | 当前活动/任务只作界面标签，不进入模型上下文 |
+| `frontend/src/components/common/HoverPeek.vue` | 200ms、精确指针、Esc、焦点、触摸设备禁用、面板限高 | 快速划过与间隙场景仍需浏览器复验 |
+| `frontend/src/views/TaskHall.vue` | 任务区含活动下第一层任务与独立任务；活动 `scope`；筛选/滚动恢复；requestId 防竞态 | 子任务不铺满；活动与任务范围必须一致 |
+| `frontend/src/layouts/AppLayout.vue` | 手机菜单按钮与左侧抽屉；退出清空 AI 会话与 `cta_hall_view` | 底部四项导航保留；44×44 |
+| `frontend/src/views/AiConsole.vue` | 改用 `aiChat` store；通知卡与 mock 提示保留 | 刷新按钮 force=true |
 
-## 3. stage17 回退时的核对结果（历史，保留不改）
+## 3. 验证、审查与提交状态
 
-| 对象 | stage17 核对结果 | 接手规则 |
-|---|---|---|
-| 前次未提交的 7 个修改文件与 1 个测试文件 | 当时不在 Git 工作区差异中 | 不把其实现算入基线；stage18 的 `test_activity_workflow.py` 是本轮重新实现并新增的 |
-| `.codeartsdoer/plans/phase3-activity-workflow/` | 当时不存在 | 旧接手指令失效；现用 `aiw00-activity-flow` / `aiw01-unified-entry` 计划 |
-| 活动下发布关联、负责人建任务入口、任务级待确认提示 | stage17 时源码未保留旧增量 | stage18 已按 AIW-00 重新实现，见 stage18 记录 |
-| 活动负责人授权 | stage17 时新增可见范围条件不在工作区 | stage18 重新实现并以行为回归验证 |
+- 后端（隔离临时库）：`test_aiw02_activity_scope.py` **6 个测试函数 / 8 类场景，6 passed（最终代码）**；活动层级 **13**、活动流程 **8**、认证权限 **47**、可靠性 **11** passed；`tests/backend/run_all.sh` **EXIT=0、1412 条 PASS**（`backend-runall-final.log`；首次复跑因 `tasks.py` 语法错误失败，已定位修复）。
+- 前端：`npm run typecheck` **EXIT=0**、`npm run build` **EXIT=0**；最终代码 `tests/frontend/run_all.sh` **EXIT=0**（构建 4/4、契约 25/25、语音 21/21，`frontend-runall-final.log`）。
+- 独立审查：首轮 **0 Critical / 5 Important / 8 Suggestions**；第二轮 **0 Critical / 3 Important**；第三轮 **0 Critical / 2 Important**（加载期离开可能滚动新页面、聚合门禁早于最后后端改动），已处置并完成最终回归；按最多三轮未开第四轮，最后修复未经独立复核。**端到端浏览器验收未完成**（返回位置、AgentDock、手机抽屉、深色主题、真实模型）；不把未验证写成通过。
+- 浏览器（Playwright MCP，8000 同源 dist + phase2 demo.db，`MAAS_MOCK=1`）：`/ai` 默认入口、通知卡、历史 mock 会话与来源；`/tasks` 活动下任务与「所属活动」可见；悬浮预览 100ms=0 / 320ms=1 / 离开=0。MCP 重复调用后停止，未产出阶段截图。
+- 归档证据：[stage20 验证记录](../codearts_proof/reports/stage20_验证记录.md)、[case4 排错实例](../codearts_proof/debug/case4_活动范围递归CTE同名冲突.md)。
+- **提交/推送/CI**：未执行；不得提前写成完成。
 
 ## 4. 计划阅读入口
 
-1. [AGENTS.md](../AGENTS.md)：长期约束与开工必读要求。
-2. [开发记录规则](DEVELOPMENT_RECORDS.md)：编号、事实来源、问题记录与并行写入约束。
-3. [本地总计划](../.codeartsdoer/plans/ai-workbench/roadmap.md)：完整产品方案，属于本地忽略文件。
-4. 本轮计划 [design.md](../.codeartsdoer/plans/aiw01-unified-entry/design.md) 与 [task.md](../.codeartsdoer/plans/aiw01-unified-entry/task.md)：冻结 `C-AI-DATA@1` / `C-AI-CHAT@1` / `C-FE-AI@1`。
-5. [stage19 过程与验证](../codearts_proof/ai_dialogue/stage19_统一入口与只读问答.md)：真实命令、计数、问题与未验证范围。
-6. 上一阶段 [stage18 过程](../codearts_proof/ai_dialogue/stage18_活动下任务流程连通.md) 与 [验证记录](../codearts_proof/reports/stage18_验证记录.md)。
-7. [stage17 回退基线与交接整理](../codearts_proof/ai_dialogue/stage17_回退基线与开发交接整理.md)：回退基线整理与记录规则来源。
+1. [AGENTS.md](../AGENTS.md)：长期约束与开工必读。
+2. [开发记录规则](DEVELOPMENT_RECORDS.md)：编号、事实来源与写入约束。
+3. 本地总计划 [roadmap](../.codeartsdoer/plans/ai-workbench/roadmap.md)。
+4. 本轮计划 [design.md](../.codeartsdoer/plans/aiw02-browse-context/design.md) 与 [task.md](../.codeartsdoer/plans/aiw02-browse-context/task.md)：冻结 6 份契约。
+5. [stage20 过程与验证](../codearts_proof/ai_dialogue/stage20_浏览与情境助手.md)、[stage20 验证记录](../codearts_proof/reports/stage20_验证记录.md)、[浏览器走查](../outputs/aiw02/walkthrough.md)（本地忽略）。
+6. 上一阶段 [stage19 过程](../codearts_proof/ai_dialogue/stage19_统一入口与只读问答.md)。
 
-本地计划缺失时，先告知用户并请求提供文件或明确新的设计依据；不要从历史 HTML、旧 phase2 计划或文件名推导完整需求。无需为使链接可用而把忽略目录强制提交。
+本地计划缺失时，先告知用户并请求提供文件或明确新的设计依据；不要从历史 HTML、旧 phase2 计划或文件名推导完整需求。
 
-## 5. 验证、审查与提交状态
+## 5. 下一步
 
-- 后端（隔离临时库，未触碰 `backend/campus.db`）：`test_ai_console.py` **11 passed**；`test_reliability.py` **11 passed**；认证/活动/工作流合并 **68 passed**；`tests/backend/run_all.sh` **EXIT=0、1412 条 PASS**，`verify_tables` 30 项断言（18 表）。
-- 前端：`tests/frontend/run_all.sh` **EXIT=0**（构建 4/4、契约 25/25、语音 21/21）；`npm run typecheck` 与 `npm run build` 均通过。
-- 独立审查（最多三轮，已用满）：首轮 **0 Critical / 8 Important / 14 Suggestions**；第二轮 **0 Critical / 3 Important**（刷新失败静默、发送/刷新竞态、交接授权表述）；第三轮 **0 Critical / 0 Important**，仅要求回填 11 passed 与审查状态（本次已回填）。未关闭的 Suggestions（`limit` 边界、commit 异常注入、并发续写顺序）为非阻断。
-- 浏览器（Playwright MCP，1440×900，8000 同源 dist，`MAAS_MOCK=1`）：member01 登录后 `/ai`；通知卡；建议问题 mock 回答与来源；刷新后会话恢复；侧栏折叠 72px。**未验证**：管理员/协作者入口、390px 手机、深色主题、真实模型、阶段截图（MCP 重复调用风险后停止）。
-- **提交/推送/CI**：代码提交 `d132f157de7df53b66b195ccb4800dcbad3479f1` 已推送 `origin/main`（`f89481c..d132f15`，推送前 `0 1` 无分叉）；CI run [43459560555](https://github.com/shanec7825/campus-task-agent/actions/runs/43459560555) 的 backend-reliability（ubuntu/windows）、backend-integration、frontend 四个 job 均 **success**。未部署。本交接与 LOG 的 CI 回填由随后一次 docs 提交保存；该 docs 提交不改变业务代码。
+- 先完成 stage20 的审查复核、必要的端到端浏览器复验、提交/推送与对应 CI 回填；CI 通过后才标记 AIW-02 完成。
+- AIW-02 完成后，下一阶段为 **AIW-03：真实任务全景**（多前置依赖、时间区间、活动与任务共用图谱、发布页共享内容区块）。开始前重新扫描 stage 编号（当前最大 20）并读取本地总计划。
+- 不提交 `outputs/`、`.playwright-mcp/`、`.codeartsdoer/`、数据库与依赖。
 
-## 6. 下一步
-
-- AIW-01 已通过本地验证、三轮独立审查与对应 CI；阶段完成，不再在本会话展开下一阶段。
-- 下一阶段为 **AIW-02：浏览与情境助手**（活动/任务网格、我的范围、悬浮预览、三种 Agent 展开态、手机抽屉）。开始前重新扫描 stage 编号（当前最大 19）并读取本地总计划。
-- 不提交 `outputs/`、`.playwright-mcp/`、`.codeartsdoer/`、数据库与依赖；浏览器管理员入口、390px、深色主题、真实模型仍为待验证项。
-
-## 7. 新 Agent 的最短启动指令
+## 6. 新 Agent 的最短启动指令
 
 ```text
 先读取 AGENTS.md、docs/HANDOFF.md、docs/DEVELOPMENT_RECORDS.md

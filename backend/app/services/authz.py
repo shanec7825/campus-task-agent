@@ -19,6 +19,7 @@ from app.models import Activity, OrgMember, Task, TaskApplication, TaskMember, U
 
 ALL_ROLES: tuple[str, ...] = ("admin", "collaborator", "member")
 PUBLISH_ROLES: tuple[str, ...] = ("admin", "collaborator")
+APPROVED_STATUS: str = "approved"
 
 
 def org_role(db: Session, user: User, org_id: int | None) -> str | None:
@@ -85,6 +86,23 @@ def _self_visible_condition(task, user: User) -> ColumnElement[bool]:
         _org_role_exists(task.org_id, user.id, "admin"),
         member_open,
         activity_owner,
+    )
+
+
+def my_task_condition(db: Session, user: User) -> ColumnElement[bool]:
+    """「我的任务」SQL 条件（任务列表与活动范围共用，禁止各写一套）。
+
+    语义（多负责人模型）：我是发布者 **或** 我是任一 approved 成员 **或**
+    （legacy）``assignee_id`` 是我。调用方负责再叠加 ``visible_task_filter``。
+    """
+    approved_task_ids = select(TaskApplication.task_id).where(
+        TaskApplication.user_id == user.id,
+        TaskApplication.status == APPROVED_STATUS,
+    )
+    return or_(
+        Task.publisher_id == user.id,
+        Task.assignee_id == user.id,
+        Task.id.in_(approved_task_ids),
     )
 
 
@@ -210,6 +228,7 @@ __all__ = [
     "PUBLISH_ROLES",
     "org_role",
     "org_ids_for",
+    "my_task_condition",
     "visible_task_filter",
     "can_view_task",
     "require_task_view",

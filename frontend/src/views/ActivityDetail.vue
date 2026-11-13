@@ -12,6 +12,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { getActivity } from '../api/activities'
 import { ApiError } from '../api/client'
+import AgentDock from '../components/ai/AgentDock.vue'
 import ActivityTaskTree from '../components/task/ActivityTaskTree.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import LoadingState from '../components/common/LoadingState.vue'
@@ -186,6 +187,8 @@ watch(
           <el-button @click="goPublish">发布相关事务</el-button>
         </div>
       </section>
+
+      <AgentDock :context-label="`活动：${activity.title}`" />
     </template>
   </section>
 </template>

@@ -71,6 +71,7 @@
 | 1 | `case1_msys_python_venv.md` | git-bash 解释器选错导致 venv 缺 `Scripts/` | `python` 命中 MSYS2 mingw64 Python 3.14.4，`venv` 生成 `bin/`；改用官方 CPython 重建后 `.venv/Scripts/python.exe` 可用、依赖装齐 | 已解决 |
 | 2 | `case2_dotenv_not_loaded.md` | `.env` 不生效 | `python-dotenv` 在依赖中但应用未调用 `load_dotenv`；在 `app/db.py` 顶部以 `override=False` 加载后，"文件生效 / shell 优先 / 缺失静默"三态均实测通过 | 已解决 |
 | 3 | `case3_vite_localhost_proxy.md` | Vite 监听地址与代理端口 | 本机 `localhost` 优先解析为 IPv6 `::1`，Vite 5 不监听 `127.0.0.1`；代理硬编码 8000 使 8010+5174 组合下 `/api` 返回 500；人工验收固定 `localhost:5173`，非标端口只做两段式冒烟 | 已解决（流程约束） |
+| 4 | `case4_活动范围递归CTE同名冲突.md` | 活动 `scope=mine` 查询同名递归 CTE | 同一查询两次调用 `visible_task_filter` 产生两个同名 CTE，SQLAlchemy 报 `Multiple, unrelated CTEs`；改为只创建一次并复用，6 passed | 已解决 |
 
 > 说明：3 篇实例均对应本工程真实发生的问题；四节内容（现象 / 原因 / 让码道怎么修 / 结果）中的命令、输出与文件行号均可在仓库中复核。
 > 新增实例请复制本模板另存为 `caseN_<主题>.md` 并登记到上表；**未真实发生的问题不得写入**。
