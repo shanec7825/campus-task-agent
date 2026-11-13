@@ -1,12 +1,12 @@
 # 当前开发交接
 
-> 更新日期：2026-11-14（Asia/Shanghai，stage21 / AIW-03 收口轮：实现、本地门禁与三轮独立审查完成；提交、推送与对应 CI 待回填）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
+> 更新日期：2026-11-14（Asia/Shanghai，stage21 / AIW-03 收口完成：实现、本地门禁、三轮独立审查、提交推送与对应 CI 均已完成）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
 
 ## 1. 当前基线与本轮授权
 
 - 分支：`main`。
 - 本轮开工基线：`b6fea74d2b7525d44dd917b8236f6da17d37bd1d`（stage20 文档回填）。
-- 本轮改动：AIW-03「真实任务全景」全部未提交（详见第 2 节）；提交与推送尚未发生。
+- 本轮改动：AIW-03「真实任务全景」已提交 `a1bd455d007369663491275a8b53efecdbfef54e` 并推送 `origin/main`（详见第 2 节）。
 - 本轮授权范围：AIW-03 收口（实现、必要修复、测试、独立审查、留痕）；每阶段一次提交、正常推送 `origin/main` 并跟踪对应 SHA 的 CI；不授权部署、付费、删除文件或数据、破坏性 Git 操作。
 - 本轮使用编号：留痕 **stage21**（接续更新，未新增 stage）；业务 Prompt 正文未改。
 
@@ -36,7 +36,7 @@
 - 浏览器（Playwright MCP，8000 同源 dist + `outputs/aiw03/demo-aiw03.db`，`MAAS_MOCK=1`）：活动全图 6 任务 / 4 边 / 3 层、任务局部图与同活动全景、未排期区、手动发布归属提示均已实测；**AI Tab 归属、发布提交、真实模型、真机、390×844 移动视口未验证**。
 - 独立审查：首轮 **0 Critical / 9 Important**、第二轮 **0 Critical / 2 Important**、第三轮 **0 Critical / 3 Important**，均已在代码/测试/留痕中处置；按三轮上限未开第四轮，**第三轮修复未经独立复核**。
 - 归档证据：[stage21 过程](../codearts_proof/ai_dialogue/stage21_真实任务全景.md)、[stage21 启动指令](../codearts_proof/prompts/agent_team_启动指令/2026-11-14_stage21_真实任务全景_启动指令.md)、[LOG](../codearts_proof/LOG.md)。
-- **提交/推送/CI：未执行，待本次收口回填。** 未部署。
+- **提交/推送/CI：** `a1bd455` 已推送 `origin/main`；CI run [43490920161](https://github.com/shanec7825/campus-task-agent/actions/runs/43490920161) 四个 job 全部 success（Backend API/SSE integration、Backend reliability ubuntu/windows、Frontend build/voice/security）。该业务提交是阶段验收依据；随后的文档回填提交不改变业务代码。未部署。
 
 ## 4. 计划阅读入口
 
@@ -51,7 +51,7 @@
 
 ## 5. 下一步
 
-- AIW-03 本地实现、自动测试、三轮独立审查与留痕已完成；待本次提交、推送并核对对应 SHA 的 CI 后标记完成。
+- AIW-03 已完成：实现、自动测试、三轮独立审查、留痕、提交推送与对应 CI（`a1bd455` / run 43490920161）均通过；仅真实模型、真机、移动视口、AI Tab 归属与浏览器发布提交未验证。
 - 下一阶段为 **AIW-04：资料与成果审核**（往期资料、按权限检索、成果版本、AI 预审、同页人工验收）。下一次定时运行开始前重新扫描 stage 编号（当前最大 21）、读取本地总计划，并为 AIW-04 新建设计与任务文档；本轮不展开 AIW-04。
 - 不提交 `outputs/`、`.playwright-mcp/`、`.codeartsdoer/`、数据库与依赖。
 

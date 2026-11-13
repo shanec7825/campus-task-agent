@@ -1,6 +1,6 @@
 # stage21 真实任务全景（AIW-03）
 
-> 日期：2026-11-14。状态（截至本记录）：实现完成；收口轮门禁通过（新增 `test_task_graph.py` **13 passed**、受影响后端回归 **85 passed**、后端 `run_all` **EXIT=0 / 1419 PASS**、前端 `run_all` **EXIT=0**、`vue-tsc` **EXIT=0**、安全红线本地 **12 通过 / 1 失败（B5b 本地日志残留）**）；第二轮独立审查 **0 Critical / 2 Important** 已修复；第三轮复核结论见第 7 节；未提交、未推送、未部署。
+> 日期：2026-11-14。状态（截至本记录）：实现完成；收口轮门禁通过（新增 `test_task_graph.py` **13 passed**、受影响后端回归 **85 passed**、后端 `run_all` **EXIT=0 / 1419 PASS**、前端 `run_all` **EXIT=0**、`vue-tsc` **EXIT=0**、安全红线本地 **12 通过 / 1 失败（B5b 本地日志残留）**）；第二轮独立审查 **0 Critical / 2 Important**、第三轮 **0 Critical / 3 Important** 均已修复；已提交 `a1bd455` 并推送 `origin/main`，CI run 43490920161 四个 job success；未部署。
 > 本文件只记录真实发生的事项；未执行的项目明确写「未验证」或「待回填」。
 
 ## 1. 需求来源与授权
@@ -107,4 +107,5 @@
 - 浏览器 AI 模式、真实模型、真机、390×844 移动端视口、发布提交：**未验证**；本轮未重跑浏览器交互，沿用第 6 节已有实测范围。
 - 安全红线 B5b：本地因 `outputs/`、`work/` 被忽略日志残留而失败；CI 干净检出预期通过，但以对应 SHA 的 CI 结果为准。
 - 未处理 Suggestion：原生链接整页刷新、区间刻度、并发环检测窗口、`parent_id`/`org_id` 变更用例、多跳环用例、活动图递归收集子任务 id、4020 逐条查询、缺失/不可见前置语义区分等；不写成已修复。
-- Git 提交、推送、对应 SHA 的 CI 结果：**未执行**（待最终验证与复核后按授权进行）。
+- Git 提交：`a1bd455d007369663491275a8b53efecdbfef54e`（`feat(graph): 增加多前置依赖与共用任务全景`），已推送 `origin/main`。
+- 对应 SHA 的 CI：run [43490920161](https://github.com/shanec7825/campus-task-agent/actions/runs/43490920161) 四个 job 全部 success（Backend API/SSE integration、Backend reliability ubuntu/windows、Frontend build/voice/security）；未部署。
