@@ -113,5 +113,5 @@
 - 浏览器端到端：返回位置、AgentDock 长条/微展开/完整页、390×844 抽屉、深色主题已在补验轮实际验证，证据见第 6 节。
 - 仍未验证：真实模型（全程 `MAAS_MOCK=1`）、真机、悬浮预览快速划过与卡片间隙；不写成通过。
 - 主体提交：2026-11-14 提交 `8b7f818be49d0b78c1bdc6c18f7353a5df8084ac`（22 文件，+1942/−200），已推送 `origin/main`（`9ad625f..8b7f818`，推送前 `0 0` 无分叉）；CI run [43466871644](https://github.com/shanec7825/campus-task-agent/actions/runs/43466871644) 的 Frontend、Backend reliability（ubuntu/windows）、Backend integration 四个 job 均 **success**。
-- 补验轮改动：`frontend/src/components/ai/AgentDock.vue` 一行 `:aria-controls` 修复 + 本记录、验证报告、LOG、HANDOFF、启动指令摘要与 4 张截图归档；提交 SHA 与对应 CI 结果在提交推送后回填，不提前宣称通过。
+- 补验轮提交：`d327dcbc98c9135bc03f6179b56d306826f0625e`（`fix(ai): 修正情境助手 aria-controls 绑定并补验浏览器流程`，10 文件，+192/−29），已推送 `origin/main`（`2adc91c..d327dcb`）；CI run [43469876180](https://github.com/shanec7825/campus-task-agent/actions/runs/43469876180) 四个 job 均 **success**（Backend API and SSE integration、Backend reliability ubuntu-latest、Backend reliability windows-latest、Frontend build/voice/public source security checks）。未部署；本次 CI 回填的 docs 提交不改变业务代码，其自身 CI 不作为阶段验收依据。
 - 截图：补验轮 4 张已归档 `codearts_proof/screenshots/stage20/`；首轮未产出的阶段截图不再补造。

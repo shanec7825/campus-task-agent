@@ -63,8 +63,8 @@
 
 - 主体代码提交 `8b7f818be49d0b78c1bdc6c18f7353a5df8084ac`，已推送 `origin/main`（`9ad625f..8b7f818`，推送前 `0 0` 无分叉）。
 - CI run `43466871644`：Frontend、Backend reliability（ubuntu/windows）、Backend integration 四个 job 均 **success**。
-- 补验轮：`AgentDock.vue` 一行修复；提交 SHA 与对应 CI 结果待提交推送后回填。
-- 未部署；docs 回填提交不改变业务代码。
+- 补验轮：`AgentDock.vue` 一行修复 + 记录与 4 张截图；提交 `d327dcbc98c9135bc03f6179b56d306826f0625e` 已推送 `origin/main`（`2adc91c..d327dcb`），CI run [43469876180](https://github.com/shanec7825/campus-task-agent/actions/runs/43469876180) 四个 job 均 **success**。
+- 未部署；docs 回填提交不改变业务代码，其自身 CI 不作为阶段验收依据。
 
 ## 6. 结论口径
 

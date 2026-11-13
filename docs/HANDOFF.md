@@ -1,6 +1,6 @@
 # 当前开发交接
 
-> 更新日期：2026-11-14（Asia/Shanghai，stage20 / AIW-02 补验收尾完成；补验提交 SHA 与对应 CI 待回填）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
+> 更新日期：2026-11-14（Asia/Shanghai，stage20 / AIW-02 补验收尾完成，补验提交已推送且对应 CI 四个 job success）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
 
 ## 1. 当前基线与本轮授权
 
@@ -8,6 +8,7 @@
 - 主体开工基线：`9ad625f725d8667f4f86cab4201708d224415a95`（stage19 文档回填）。
 - 主体代码提交：`8b7f818be49d0b78c1bdc6c18f7353a5df8084ac`（`feat(browse): 增加活动范围、悬浮预览与情境助手`），已推送 `origin/main`；CI run 43466871644 四个 job success。
 - 补验收尾轮开工基线：`2adc91c`（stage20 的 CI 回填文档提交），工作区干净、无 stash、无其他 worktree。
+- 补验轮提交：`d327dcbc98c9135bc03f6179b56d306826f0625e`（`fix(ai): 修正情境助手 aria-controls 绑定并补验浏览器流程`），已推送 `origin/main`；CI run 43469876180 四个 job success。
 - 本轮授权范围：AIW-02「浏览与情境助手」收尾；不新增路由/表/依赖，不做受控业务动作、AI 额度、语音原生、依赖图谱、成果上传与自动验收。
 - 本轮使用编号：留痕 **stage20**（接续更新，未新增 stage）；未新增 P 编号（业务 Prompt 正文未改）。
 
@@ -35,7 +36,7 @@
 - 未验证：真实模型（全程 mock）、真机、悬浮预览快速划过与卡片间隙（演示库仅 1 活动 1 任务）。
 - 独立审查：主体三轮（首轮 0/5/8、第二轮 0/3、第三轮 0/2，均已处置，按上限未开第四轮）；补验轮独立复核 **0 Critical / 0 Important / 2 Suggestion**（缺自动化 aria 断言、两处既有 aria-controls 省略），无阻塞项。
 - 归档证据：[stage20 过程与验证](../codearts_proof/ai_dialogue/stage20_浏览与情境助手.md)、[stage20 验证记录](../codearts_proof/reports/stage20_验证记录.md)、[case4 排错实例](../codearts_proof/debug/case4_活动范围递归CTE同名冲突.md)、[stage20 截图](../codearts_proof/screenshots/stage20/)。
-- **提交/推送/CI**：主体 `8b7f818` 已推送，CI run 43466871644 四个 job success；补验轮的一行修复与记录/截图提交及对应 CI 结果待回填。未部署。
+- **提交/推送/CI**：主体 `8b7f818` 已推送，CI run 43466871644 四个 job success；补验轮 `d327dcb` 已推送，CI run [43469876180](https://github.com/shanec7825/campus-task-agent/actions/runs/43469876180) 四个 job 均 success（Backend API/SSE integration、Backend reliability ubuntu/windows、Frontend build/voice/security）。未部署。本 CI 回填的 docs 提交不改变业务代码，其自身 CI 不作为阶段验收依据。
 
 ## 4. 计划阅读入口
 
@@ -50,8 +51,8 @@
 
 ## 5. 下一步
 
-- AIW-02 主体代码、自动测试、独立审查与 CI 已完成；补验轮修复已交独立复核，提交与 CI 回填后进行最终收口判断。
-- 下一次定时运行先核对补验提交的 CI；通过后 AIW-02 标记完成，下一阶段为 **AIW-03：真实任务全景**（多前置依赖、时间区间、活动与任务共用图谱、发布页共享内容区块）。开始前重新扫描 stage 编号（当前最大 20）并读取本地总计划。
+- AIW-02 已完成：主体代码、自动测试、独立审查、补验轮修复与对应 CI（d327dcb / run 43469876180）均通过；仅真实模型、真机与悬浮预览间隙场景未验证。
+- 下一阶段为 **AIW-03：真实任务全景**（多前置依赖、时间区间、活动与任务共用图谱、发布页共享内容区块）。下一次定时运行开始前重新扫描 stage 编号（当前最大 20）、读取本地总计划，并为 AIW-03 新建设计与任务文档；本轮不展开 AIW-03。
 - 不提交 `outputs/`、`.playwright-mcp/`、`.codeartsdoer/`、数据库与依赖。
 
 ## 6. 新 Agent 的最短启动指令
