@@ -1,12 +1,12 @@
 # 当前开发交接
 
-> 更新日期：2026-11-13（Asia/Shanghai，stage19 本地完成）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
+> 更新日期：2026-11-13（Asia/Shanghai，stage19 已提交并推送）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
 
 ## 1. 当前基线与本轮授权
 
 - 分支：`main`。
 - 开工基线：`f89481c`（stage18 文档回填，代码基线 `4c3c875`）；开工时工作区干净。
-- 当前工作区：stage19（AIW-01）改动**尚未提交**，包含后端 AI 会话/问答、前端 `/ai` 与折叠侧栏、测试与留痕；详见 §2。
+- 当前代码提交：`d132f15`（`feat(ai): 增加 AI 默认入口与权限内只读问答`），已推送 `origin/main`；本交接的 CI 回填改动随附一次 docs 提交。
 - 本轮授权范围：AIW-01「统一入口与权限内只读问答」；不新增依赖/模型供应商，不做受控业务动作、额度账本、多会话面板、语音原生。
 - 本轮使用编号：留痕 **stage19**；未新增 P 编号（既有业务 Prompt 正文未改，新增只读问答 Prompt 记录在 stage19 §5.4）。
 
@@ -51,13 +51,13 @@
 - 前端：`tests/frontend/run_all.sh` **EXIT=0**（构建 4/4、契约 25/25、语音 21/21）；`npm run typecheck` 与 `npm run build` 均通过。
 - 独立审查（最多三轮，已用满）：首轮 **0 Critical / 8 Important / 14 Suggestions**；第二轮 **0 Critical / 3 Important**（刷新失败静默、发送/刷新竞态、交接授权表述）；第三轮 **0 Critical / 0 Important**，仅要求回填 11 passed 与审查状态（本次已回填）。未关闭的 Suggestions（`limit` 边界、commit 异常注入、并发续写顺序）为非阻断。
 - 浏览器（Playwright MCP，1440×900，8000 同源 dist，`MAAS_MOCK=1`）：member01 登录后 `/ai`；通知卡；建议问题 mock 回答与来源；刷新后会话恢复；侧栏折叠 72px。**未验证**：管理员/协作者入口、390px 手机、深色主题、真实模型、阶段截图（MCP 重复调用风险后停止）。
-- **提交/推送/CI**：尚未执行。按用户本轮指令第七节的明确授权，三轮复核完成后可做一次提交并正常推送，随后核对与提交 SHA 对应的 CI；未部署。第二轮审查者只收到“只读复核”提示，未看到用户原始授权，因此其“当前仅要求只读”的判断不适用于本交接结论。
+- **提交/推送/CI**：代码提交 `d132f157de7df53b66b195ccb4800dcbad3479f1` 已推送 `origin/main`（`f89481c..d132f15`，推送前 `0 1` 无分叉）；CI run [43459560555](https://github.com/shanec7825/campus-task-agent/actions/runs/43459560555) 的 backend-reliability（ubuntu/windows）、backend-integration、frontend 四个 job 均 **success**。未部署。本交接与 LOG 的 CI 回填由随后一次 docs 提交保存；该 docs 提交不改变业务代码。
 
 ## 6. 下一步
 
-- 完成三轮独立复核（0 Critical / 0 未关闭 Important）后提交、推送并核对 CI。提交前再次核对暂存清单，显式添加本阶段文件。
-- 顺带清理本地 `outputs/phase19/` 之外的临时进程；不提交 `outputs/`、`.playwright-mcp/`、`.codeartsdoer/`、数据库与依赖。
-- AIW-01 通过验收后，下一阶段为 **AIW-02：浏览与情境助手**（活动/任务网格、我的范围、悬浮预览、三种 Agent 展开态、手机抽屉）。开始前重新扫描 stage 编号（当前最大 19）。
+- AIW-01 已通过本地验证、三轮独立审查与对应 CI；阶段完成，不再在本会话展开下一阶段。
+- 下一阶段为 **AIW-02：浏览与情境助手**（活动/任务网格、我的范围、悬浮预览、三种 Agent 展开态、手机抽屉）。开始前重新扫描 stage 编号（当前最大 19）并读取本地总计划。
+- 不提交 `outputs/`、`.playwright-mcp/`、`.codeartsdoer/`、数据库与依赖；浏览器管理员入口、390px、深色主题、真实模型仍为待验证项。
 
 ## 7. 新 Agent 的最短启动指令
 
