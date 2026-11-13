@@ -1,6 +1,6 @@
 # stage23 主动协作与额度（AIW-05）
 
-> 日期：2026-11-14。状态（截至本记录）：实现完成；新增 `test_aiw05_proactive_quota.py` **12 passed**；前端构建 **4/4**、契约 **25/25**、语音 **21/21**、`vue-tsc` **EXIT=0**；后端 `run_all` **EXIT=0**（23 表、verify_tables 58 项）；独立审查三轮 **0 Critical / 10 → 2 → 1 Important**，第三轮最后修复按上限未再开第四轮；浏览器实测通知失效、AI 额度、后台改期影响卡；安全红线本地 **12 通过 / 1 失败（B5b）**；真实模型、真机、移动视口、零额度 UI 未验证；Git 提交/推送/CI 待回填。
+> 日期：2026-11-14。状态（截至本记录）：实现完成；新增 `test_aiw05_proactive_quota.py` **12 passed**；前端构建 **4/4**、契约 **25/25**、语音 **21/21**、`vue-tsc` **EXIT=0**；后端 `run_all` **EXIT=0**（23 表、verify_tables 58 项）；独立审查三轮 **0 Critical / 10 → 2 → 1 Important**，第三轮最后修复按上限未再开第四轮；浏览器实测通知失效、AI 额度、后台改期影响卡；安全红线本地 **12 通过 / 1 失败（B5b）**；真实模型、真机、移动视口、零额度 UI 未验证。**已提交并推送 `e35836d`，CI run 43513010046 四个 job 全部 success；未部署。**
 
 ## 1. 需求来源与授权
 
@@ -106,6 +106,6 @@
 
 - 真实模型、真机、移动视口、深色主题、零额度 UI 与 AgentDock 零额度提示：**未验证**。
 - 额度并发为软上限，不保证 SQLite 多请求下的硬上限；本轮已在代码注释、测试名与留痕中明确。
-- Git 提交/推送/CI：待提交后回填。
-- 安全红线 B5b 仅本地证据目录残留；以对应 SHA 的 CI 为准。
-- Suggestion 未处理项：跨天额度判定已按日期刷新；其余为文案/测试补充，已在本轮尽量处理。
+- Git 提交：`e35836d5d87cd0bb50a4ff850353e0417ad380ea`（`feat(collab): 增加提醒失效、变更影响与 AI 用量额度`），已推送 `origin/main`（`f09084d..e35836d`）。
+- 对应 SHA 的 CI：run [43513010046](https://github.com/shanec7825/campus-task-agent/actions/runs/43513010046) 四个 job 全部 success（Backend API/SSE integration、Backend reliability ubuntu/windows、Frontend build/voice/security）；未部署。
+- 提交后的文档回填（本文件、LOG、HANDOFF、task）作为同阶段收口补充提交；其结果在交接中回填，不改变业务提交 `e35836d` 的验收结论。

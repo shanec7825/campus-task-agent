@@ -1,12 +1,12 @@
 # 当前开发交接
 
-> 更新日期：2026-11-14（Asia/Shanghai，stage23 / AIW-05 收口：实现、最终门禁、三轮独立审查、浏览器关键流程已完成；提交与 CI 待回填）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
+> 更新日期：2026-11-14（Asia/Shanghai，stage23 / AIW-05 收口：实现、最终门禁、三轮独立审查、浏览器关键流程、提交与 CI 均已完成）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
 
 ## 1. 当前基线与本轮授权
 
 - 分支：`main`。
 - 本轮开工基线：`f09084d842bccc28846fa993a34da923a6af51e5`（stage22 文档回填）。
-- 本轮改动：AIW-05「主动协作与额度」，工作区尚未提交（提交后回填 SHA）。
+- 本轮改动：AIW-05「主动协作与额度」已提交 `e35836d5d87cd0bb50a4ff850353e0417ad380ea` 并推送 `origin/main`；对应 CI run 43513010046 四个 job 全部 success。
 - 本轮授权范围：AIW-05 收口（实现、必要修复、测试、独立审查、留痕）；每阶段一次提交、正常推送 `origin/main` 并跟踪对应 SHA 的 CI；不授权部署、付费、删除文件或数据、破坏性 Git 操作。
 - 本轮使用编号：留痕 **stage23**（新增）；未改业务 Prompt，无新 P 编号。
 - AIW-04 验收依据：业务提交 `a3632ce` → CI run 43505516305 四个 job success。
@@ -35,7 +35,7 @@
 - 真实模型、真机、移动视口、深色主题、零额度 UI、AgentDock 零额度提示：**未验证**。
 - 独立审查三轮：首轮 **0 Critical / 10 Important**；第二轮 **0 Critical / 2 Important**；第三轮 **0 Critical / 1 Important**。最后一项 AgentDock 额度预加载已修复，但按“最多三轮”上限 **未再开第四轮复核**；该事实已在 stage23 记录中明示。
 - 归档证据：[stage23 过程](../codearts_proof/ai_dialogue/stage23_主动协作与额度.md)、[stage23 启动指令](../codearts_proof/prompts/agent_team_启动指令/2026-11-14_stage23_主动协作与额度_启动指令.md)、[LOG](../codearts_proof/LOG.md)、[截图](screenshots/stage23/admin-change-impact.png)。
-- **提交/推送/CI：待提交后回填。** 未部署。安全红线 B5b 以对应 SHA 的 CI 为准。
+- **提交/推送/CI：** `e35836d` 已推送 `origin/main`；CI run [43513010046](https://github.com/shanec7825/campus-task-agent/actions/runs/43513010046) 四个 job 全部 success（Backend API/SSE integration、Backend reliability ubuntu/windows、Frontend build/voice/security）。该业务提交是阶段验收依据；随后仅做文档回填。未部署。
 
 ## 4. 计划阅读入口
 
@@ -50,8 +50,8 @@
 
 ## 5. 下一步
 
-- AIW-05 已完成实现、最终门禁、三轮独立审查、浏览器关键流程与留痕；提交/推送/CI 待本次收口回填。仅真实模型、真机、移动视口、零额度 UI 与 AgentDock 额度提示未验证。
-- 下一次定时运行先核对 AIW-05 对应 SHA 的 CI 与留痕是否齐全；CI 通过后才进入 **AIW-06：整体验收**（晚会全流程、退回重提、多角色多设备回归与参赛证据）。进入 AIW-06 前重新扫描 stage 编号（当前最大 23）、读取本地总计划并新建设计与任务文档；本轮不展开 AIW-06。
+- AIW-05 已完成实现、最终门禁、三轮独立审查、浏览器关键流程、留痕、提交推送与 CI。仅真实模型、真机、移动视口、零额度 UI 与 AgentDock 额度提示未验证。
+- 下一次定时运行先核对 AIW-05 对应 SHA 的 CI 与留痕是否齐全（当前 `e35836d` / run 43513010046 已 success）；确认后进入 **AIW-06：整体验收**（晚会全流程、退回重提、多角色多设备回归与参赛证据）。进入 AIW-06 前重新扫描 stage 编号（当前最大 23）、读取本地总计划并新建设计与任务文档；本轮不展开 AIW-06。
 - 不提交 `outputs/`、`.playwright-mcp/`、`.codeartsdoer/`、数据库、演示凭据与依赖。
 
 ## 6. 新 Agent 的最短启动指令
