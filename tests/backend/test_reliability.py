@@ -4,6 +4,12 @@
 覆盖契约（design.md §2.2）：`C-DATA-MEMBER@1`、`C-MIGRATION@1`、`C-MEMBER@1`、
 `C-TASK-API@1`、`C-NOTIFY@1`、`C-TIME-AGENT@1`。
 
+阶段 2 适配（`C-HASH@1` / `C-SESSION@1` / `C-AUTHZ@1` / `C-TASK-ORG@1`）：
+登录改为账号密码 + HttpOnly Cookie，写操作带 `X-CSRF-Token` 双提交；每个身份各自持有
+一份 Cookie/CSRF 请求头，不依赖 ``TestClient`` 共享的 cookie jar。任务统一挂到演示组织，
+组织的 admin 是 teacher01、学生为 member；越权用例以「与任务无关联的用户」为攻击者，
+按 `authz` 契约断言 4030 对应 HTTP 403（业务层 4030 仍为 HTTP 200）。
+
 隔离性：在导入 ``app`` 之前即把 ``DATABASE_PATH`` 指向 ``tempfile.mkdtemp`` 下的独立
 SQLite 文件，并关闭调度器（``RUN_SCHEDULER=0``）与真实模型（``MAAS_MOCK=1``）。
 因此本文件可单独运行：``pytest tests/backend/test_reliability.py``。
@@ -22,6 +28,7 @@ SQLite 文件，并关闭调度器（``RUN_SCHEDULER=0``）与真实模型（``M
 from __future__ import annotations
 
 import os
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -48,6 +55,48 @@ os.environ["RUN_SCHEDULER"] = "0"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+
+def _ipv6_socketpair(family=None, type=socket.SOCK_STREAM, proto=0):
+    """用 IPv6 ``::1`` 生成一对已连接的 socket（等价 ``socket.socketpair()``）。"""
+    family = socket.AF_INET6 if family is None else family
+    if type is None:
+        type = socket.SOCK_STREAM
+    listener = socket.socket(family, type, proto)
+    client = None
+    try:
+        listener.bind(("::1", 0))
+        listener.listen(1)
+        client = socket.socket(family, type, proto)
+        client.connect(listener.getsockname())
+        conn, _ = listener.accept()
+        return client, conn
+    except BaseException:
+        if client is not None:
+            client.close()
+        raise
+    finally:
+        listener.close()
+
+
+def _install_socketpair_shim() -> None:
+    """部分受限沙箱只拦截 IPv4 回环（WinError 10051），导致 asyncio 无法建事件循环。
+
+    仅在默认 ``socket.socketpair()`` 失败时改用 IPv6 回环；正常环境完全不生效，
+    也不改变被测代码行为。
+    """
+    try:
+        left, right = socket.socketpair()
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != 10051:
+            raise
+        socket.socketpair = _ipv6_socketpair  # type: ignore[assignment]
+    else:
+        left.close()
+        right.close()
+
+
+_install_socketpair_shim()
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.db import init_db  # noqa: E402
@@ -72,6 +121,22 @@ ERR_INVALID_PARAM = 4001
 ERR_FORBIDDEN = 4030
 ERR_CONFLICT = 4090
 
+#: 阶段 2 测试账号统一密码；临时库由本文件直写 ``scrypt`` 哈希（`C-HASH@1`）。
+PASSWORD = "TestPass123!"
+
+#: 临时库没有阶段 1 的演示账号，按原有展示名 / 角色准备可登录账号。
+SEED_USERS: dict[str, tuple[str, str]] = {
+    "teacher01": ("王老师", "publisher"),
+    "student01": ("李同学", "student"),
+    "student02": ("张同学", "student"),
+    "student03": ("陈同学", "student"),
+}
+
+#: 阶段 2 的组织可见性：无组织任务仅对发布者/负责人可见，本文件任务统一归入演示组织。
+DEMO_ORG_NAME = "演示校区志愿队"
+DEMO_ORG_SLUG = "demo-campus"
+DEMO_ORG_ID = 0
+
 
 # --------------------------------------------------------------------------- #
 # 上下文与 HTTP 工具
@@ -79,20 +144,36 @@ ERR_CONFLICT = 4090
 @dataclass
 class _Ctx:
     client: TestClient
-    teacher: str
-    s1: str
-    s2: str
-    s3: str
+    # 各身份的 Cookie/CSRF 请求头（互不共享，不依赖 TestClient 的 cookie jar）
+    teacher: dict[str, str]
+    s1: dict[str, str]
+    s2: dict[str, str]
+    s3: dict[str, str]
     ids: dict[str, int]
+    org_id: int
 
 
-def _request(client: TestClient, method: str, path: str, *, token: str | None = None, body: Any = None):
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    return client.request(method, path, json=body, headers=headers)
+def _request(
+    client: TestClient,
+    method: str,
+    path: str,
+    *,
+    headers: dict[str, str] | None = None,
+    body: Any = None,
+):
+    return client.request(method, path, json=body, headers=dict(headers or {}))
 
 
-def _payload(client: TestClient, method: str, path: str, *, token: str | None = None, body: Any = None, label: str = "") -> dict:
-    response = _request(client, method, path, token=token, body=body)
+def _payload(
+    client: TestClient,
+    method: str,
+    path: str,
+    *,
+    headers: dict[str, str] | None = None,
+    body: Any = None,
+    label: str = "",
+) -> dict:
+    response = _request(client, method, path, headers=headers, body=body)
     try:
         payload = response.json()
     except ValueError:  # 响应非 JSON（例如未捕获 500）
@@ -101,35 +182,142 @@ def _payload(client: TestClient, method: str, path: str, *, token: str | None = 
     return payload
 
 
-def _ok(client: TestClient, method: str, path: str, *, token: str | None = None, body: Any = None, label: str = "") -> dict:
-    payload = _payload(client, method, path, token=token, body=body, label=label)
+def _ok(
+    client: TestClient,
+    method: str,
+    path: str,
+    *,
+    headers: dict[str, str] | None = None,
+    body: Any = None,
+    label: str = "",
+) -> dict:
+    payload = _payload(client, method, path, headers=headers, body=body, label=label)
     assert payload.get("code") == 0, f"{label}：期望 code=0，实际 code={payload.get('code')}（msg={payload.get('msg')}）"
     data = payload.get("data")
     assert isinstance(data, dict), f"{label}：data 不是对象（{type(data).__name__}）"
     return data
 
 
-def _err(client: TestClient, method: str, path: str, *, code: int, token: str | None = None, body: Any = None, label: str = "", status: int = 200) -> dict:
-    response = _request(client, method, path, token=token, body=body)
+def _err(
+    client: TestClient,
+    method: str,
+    path: str,
+    *,
+    code: int,
+    headers: dict[str, str] | None = None,
+    body: Any = None,
+    label: str = "",
+    status: int = 200,
+) -> dict:
+    response = _request(client, method, path, headers=headers, body=body)
     payload = response.json()
     assert payload.get("code") == code, f"{label}：期望 code={code}，实际 code={payload.get('code')}（msg={payload.get('msg')}）"
     assert response.status_code == status, f"{label}：期望 HTTP {status}，实际 HTTP {response.status_code}"
     return payload
 
 
-def _login(client: TestClient, username: str) -> tuple[str, dict]:
-    data = _ok(client, "POST", "/api/auth/login", body={"username": username}, label=f"登录 {username}")
-    token = data.get("token")
-    assert isinstance(token, str) and token, f"{username} 未返回 token"
-    return token, data["user"]
+def _ensure_seed_users() -> int:
+    """直写临时库准备可登录账号与演示组织，返回组织 ID（`C-HASH@1` / `C-ORG@1`）。"""
+    from app.security import hash_password
+
+    password_hash = hash_password(PASSWORD)
+    conn = sqlite3.connect(str(_TEST_DB_PATH))
+    try:
+        for username, (display_name, role) in SEED_USERS.items():
+            row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO users "
+                    "(username, display_name, role, credits, password_hash, status, platform_admin) "
+                    "VALUES (?, ?, ?, 0, ?, 'active', 0)",
+                    (username, display_name, role, password_hash),
+                )
+            else:
+                conn.execute(
+                    "UPDATE users SET display_name = ?, role = ?, password_hash = ?, "
+                    "status = 'active' WHERE username = ?",
+                    (display_name, role, password_hash, username),
+                )
+
+        org_row = conn.execute(
+            "SELECT id FROM organizations WHERE slug = ?", (DEMO_ORG_SLUG,)
+        ).fetchone()
+        if org_row is None:
+            org_id = int(
+                conn.execute(
+                    "INSERT INTO organizations (name, slug, status, created_at) "
+                    "VALUES (?, ?, 'active', datetime('now','localtime'))",
+                    (DEMO_ORG_NAME, DEMO_ORG_SLUG),
+                ).lastrowid
+            )
+        else:
+            org_id = int(org_row[0])
+
+        for username in SEED_USERS:
+            user_row = conn.execute(
+                "SELECT id FROM users WHERE username = ?", (username,)
+            ).fetchone()
+            org_role = "admin" if username == "teacher01" else "member"
+            existing = conn.execute(
+                "SELECT id FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, int(user_row[0])),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO org_members (org_id, user_id, role, title, status, created_at) "
+                    "VALUES (?, ?, ?, NULL, 'active', datetime('now','localtime'))",
+                    (org_id, int(user_row[0]), org_role),
+                )
+            else:
+                conn.execute(
+                    "UPDATE org_members SET role = ?, status = 'active' WHERE id = ?",
+                    (org_role, int(existing[0])),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+    return org_id
+
+
+def _login(client: TestClient, username: str) -> tuple[dict[str, str], dict]:
+    """账号密码登录，返回可直接复用的 ``Cookie`` + ``X-CSRF-Token`` 请求头与 user。"""
+    response = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
+    try:
+        payload = response.json()
+    except ValueError:  # 响应非 JSON（例如未捕获 500）
+        raise AssertionError(f"登录 {username}：响应不是 JSON（HTTP {response.status_code}）") from None
+    assert payload.get("code") == 0, (
+        f"登录 {username}：期望 code=0，实际 HTTP {response.status_code} + code={payload.get('code')}"
+        f"（msg={payload.get('msg')}）"
+    )
+    data = payload.get("data")
+    assert isinstance(data, dict) and isinstance(data.get("user"), dict), (
+        f"登录 {username}：data.user 不是对象（{type((data or {}).get('user')).__name__}）"
+    )
+
+    cookies: dict[str, str] = {}
+    for raw in response.headers.get_list("set-cookie"):
+        name, _, value = raw.split(";", 1)[0].partition("=")
+        cookies[name.strip()] = value.strip()
+    assert {"cta_session", "cta_csrf"} <= set(cookies), (
+        f"登录 {username}：未下发 cta_session/cta_csrf（实际 {sorted(cookies)}）"
+    )
+    # 多身份各自持头：清空共享 jar，避免上一个身份的 Cookie 串到下一个身份
+    client.cookies.clear()
+    headers = {
+        "Cookie": f"cta_session={cookies['cta_session']}; cta_csrf={cookies['cta_csrf']}",
+        "X-CSRF-Token": cookies["cta_csrf"],
+    }
+    return headers, data["user"]
 
 
 @pytest.fixture(scope="module")
 def ctx() -> _Ctx:
+    global DEMO_ORG_ID
     with TestClient(app) as client:
-        logins: dict[str, tuple[str, dict]] = {
-            name: _login(client, name)
-            for name in ("teacher01", "student01", "student02", "student03")
+        DEMO_ORG_ID = _ensure_seed_users()
+        logins: dict[str, tuple[dict[str, str], dict]] = {
+            name: _login(client, name) for name in SEED_USERS
         }
         yield _Ctx(
             client=client,
@@ -137,7 +325,8 @@ def ctx() -> _Ctx:
             s1=logins["student01"][0],
             s2=logins["student02"][0],
             s3=logins["student03"][0],
-            ids={name: int(user["id"]) for name, (_token, user) in logins.items()},
+            ids={name: int(user["id"]) for name, (_headers, user) in logins.items()},
+            org_id=DEMO_ORG_ID,
         )
 
 
@@ -152,26 +341,33 @@ def _fmt(moment: datetime) -> str:
     return moment.strftime(DEADLINE_FORMAT)
 
 
-def _create_task(client: TestClient, token: str, title: str, **fields: Any) -> dict:
-    return _ok(client, "POST", "/api/tasks", token=token, body={"title": title, **fields}, label=f"发布「{title}」")
+def _create_task(client: TestClient, headers: dict[str, str], title: str, **fields: Any) -> dict:
+    # 阶段 2：任务必须挂到组织，成员才可见并可报名（`C-TASK-ORG@1`）
+    body = {"title": title, "org_id": DEMO_ORG_ID, **fields}
+    return _ok(client, "POST", "/api/tasks", headers=headers, body=body, label=f"发布「{title}」")
 
 
-def _apply_and_approve(client: TestClient, teacher: str, student: str, task_id: int) -> int:
-    applied = _ok(client, "POST", f"/api/tasks/{task_id}/apply", token=student, label=f"报名任务 {task_id}")
+def _apply_and_approve(
+    client: TestClient,
+    teacher_headers: dict[str, str],
+    student_headers: dict[str, str],
+    task_id: int,
+) -> int:
+    applied = _ok(client, "POST", f"/api/tasks/{task_id}/apply", headers=student_headers, label=f"报名任务 {task_id}")
     application_id = int(applied["application"]["id"])
     _ok(
         client,
         "POST",
         f"/api/applications/{application_id}/decide",
-        token=teacher,
+        headers=teacher_headers,
         body={"approve": True},
         label=f"审批通过任务 {task_id}",
     )
     return application_id
 
 
-def _task(client: TestClient, task_id: int, token: str) -> dict:
-    return _ok(client, "GET", f"/api/tasks/{task_id}", token=token, label=f"任务 {task_id} 详情")
+def _task(client: TestClient, task_id: int, headers: dict[str, str]) -> dict:
+    return _ok(client, "GET", f"/api/tasks/{task_id}", headers=headers, label=f"任务 {task_id} 详情")
 
 
 def _member(task: dict, user_id: int) -> dict | None:
@@ -187,41 +383,41 @@ def _member_status(task: dict, user_id: int, *, label: str = "") -> str:
     return str(member.get("status"))
 
 
-def _notifications(client: TestClient, token: str, task_id: int) -> list[dict]:
-    data = _ok(client, "GET", "/api/notifications?limit=200", token=token, label="通知列表")
+def _notifications(client: TestClient, headers: dict[str, str], task_id: int) -> list[dict]:
+    data = _ok(client, "GET", "/api/notifications?limit=200", headers=headers, label="通知列表")
     return [item for item in data.get("items") or [] if int(item.get("task_id") or 0) == int(task_id)]
 
 
-def _reminders(client: TestClient, token: str, task_id: int) -> list[dict]:
+def _reminders(client: TestClient, headers: dict[str, str], task_id: int) -> list[dict]:
     """只取执行催办：level 属三级且 title 属催办文案（排除业务 warning 通知）。"""
     return [
         item
-        for item in _notifications(client, token, task_id)
+        for item in _notifications(client, headers, task_id)
         if str(item.get("level")) in REMINDER_LEVELS
         and str(item.get("title")) in REMINDER_TITLES
     ]
 
 
 def _notification_counts(ctx: _Ctx, task_id: int) -> dict[str, int]:
-    tokens = {"teacher": ctx.teacher, "s1": ctx.s1, "s2": ctx.s2, "s3": ctx.s3}
-    return {name: len(_notifications(ctx.client, token, task_id)) for name, token in tokens.items()}
+    identity_headers = {"teacher": ctx.teacher, "s1": ctx.s1, "s2": ctx.s2, "s3": ctx.s3}
+    return {name: len(_notifications(ctx.client, headers, task_id)) for name, headers in identity_headers.items()}
 
 
-def _task_logs(client: TestClient, token: str, task_id: int) -> list[dict]:
-    data = _ok(client, "GET", "/api/credits/me", token=token, label="积分流水")
+def _task_logs(client: TestClient, headers: dict[str, str], task_id: int) -> list[dict]:
+    data = _ok(client, "GET", "/api/credits/me", headers=headers, label="积分流水")
     return [log for log in data.get("logs") or [] if int(log.get("task_id") or 0) == int(task_id)]
 
 
-def _penalties(client: TestClient, token: str, task_id: int) -> list[dict]:
-    return [log for log in _task_logs(client, token, task_id) if int(log.get("delta") or 0) < 0]
+def _penalties(client: TestClient, headers: dict[str, str], task_id: int) -> list[dict]:
+    return [log for log in _task_logs(client, headers, task_id) if int(log.get("delta") or 0) < 0]
 
 
-def _progress(ctx: _Ctx, token: str, task_id: int, content: str) -> dict:
-    return _ok(ctx.client, "POST", f"/api/tasks/{task_id}/progress", token=token, body={"content": content}, label=f"任务 {task_id} 进度")
+def _progress(ctx: _Ctx, headers: dict[str, str], task_id: int, content: str) -> dict:
+    return _ok(ctx.client, "POST", f"/api/tasks/{task_id}/progress", headers=headers, body={"content": content}, label=f"任务 {task_id} 进度")
 
 
-def _submit(ctx: _Ctx, token: str, task_id: int) -> dict:
-    return _ok(ctx.client, "POST", f"/api/tasks/{task_id}/submit", token=token, label=f"任务 {task_id} 提交")
+def _submit(ctx: _Ctx, headers: dict[str, str], task_id: int) -> dict:
+    return _ok(ctx.client, "POST", f"/api/tasks/{task_id}/submit", headers=headers, label=f"任务 {task_id} 提交")
 
 
 def _verify(ctx: _Ctx, task_id: int, *, passed: bool, user_id: int | None = None, reason: str | None = None) -> dict:
@@ -230,7 +426,7 @@ def _verify(ctx: _Ctx, task_id: int, *, passed: bool, user_id: int | None = None
         body["reason"] = reason
     if user_id is not None:
         body["user_id"] = int(user_id)
-    return _ok(ctx.client, "POST", f"/api/tasks/{task_id}/verify", token=ctx.teacher, body=body, label=f"任务 {task_id} 验收")
+    return _ok(ctx.client, "POST", f"/api/tasks/{task_id}/verify", headers=ctx.teacher, body=body, label=f"任务 {task_id} 验收")
 
 
 # --------------------------------------------------------------------------- #
@@ -241,7 +437,7 @@ def test_start_and_deadline_are_independent(ctx: _Ctx) -> None:
         ctx.client,
         "POST",
         "/api/agent/extract",
-        token=ctx.teacher,
+        headers=ctx.teacher,
         body={"text": "秋之韵招募，明天下午两点在教三集合，五点前提交材料"},
         label="extract 同时含开始与截止",
     )
@@ -257,7 +453,7 @@ def test_start_and_deadline_are_independent(ctx: _Ctx) -> None:
         ctx.client,
         "POST",
         "/api/agent/extract",
-        token=ctx.teacher,
+        headers=ctx.teacher,
         body={"text": "秋之韵招募，明天下午两点在教三集合"},
         label="extract 仅开始时间",
     )["draft"]
@@ -268,7 +464,7 @@ def test_start_and_deadline_are_independent(ctx: _Ctx) -> None:
         ctx.client,
         "POST",
         "/api/agent/extract",
-        token=ctx.teacher,
+        headers=ctx.teacher,
         body={"text": "秋之韵招募，五点前提交材料"},
         label="extract 仅截止时间",
     )["draft"]
@@ -290,8 +486,8 @@ def test_start_and_deadline_are_independent(ctx: _Ctx) -> None:
 def test_three_members_verify_reject_and_pending(ctx: _Ctx) -> None:
     task = _create_task(ctx.client, ctx.teacher, "R2 三成员逐人验收任务", quota=3, credit_reward=15)
     task_id = task["id"]
-    for token in (ctx.s1, ctx.s2, ctx.s3):
-        _apply_and_approve(ctx.client, ctx.teacher, token, task_id)
+    for identity_headers in (ctx.s1, ctx.s2, ctx.s3):
+        _apply_and_approve(ctx.client, ctx.teacher, identity_headers, task_id)
 
     _progress(ctx, ctx.s1, task_id, "A 进度")
     _progress(ctx, ctx.s2, task_id, "B 进度")
@@ -336,7 +532,7 @@ def test_three_members_verify_reject_and_pending(ctx: _Ctx) -> None:
     assert len(_task_logs(ctx.client, ctx.s1, task_id)) == a_logs_before + 1, "A 仅产生 1 条积分流水"
 
     # 重复验收：4090 且不新增流水
-    _err(ctx.client, "POST", f"/api/tasks/{task_id}/verify", code=ERR_CONFLICT, token=ctx.teacher, body={"pass": True, "user_id": ctx.ids["student01"]}, label="重复验收已通过成员 4090")
+    _err(ctx.client, "POST", f"/api/tasks/{task_id}/verify", code=ERR_CONFLICT, headers=ctx.teacher, body={"pass": True, "user_id": ctx.ids["student01"]}, label="重复验收已通过成员 4090")
     assert len(_task_logs(ctx.client, ctx.s1, task_id)) == a_logs_before + 1, "重复验收不新增积分流水"
 
     # B 退回：只改 B，任务回到 in_progress，A 的 verified 保留
@@ -348,14 +544,39 @@ def test_three_members_verify_reject_and_pending(ctx: _Ctx) -> None:
     assert _member_status(detail, ctx.ids["student01"]) == "verified", "B 退回不覆盖 A 的 verified"
     assert detail.get("status") == "in_progress", f"存在退回成员时任务聚合 in_progress（实际 {detail.get('status')}）"
 
-    # 目标非法：C 未提交 4090；非成员 4001；非发布者 4030
-    _err(ctx.client, "POST", f"/api/tasks/{task_id}/verify", code=ERR_CONFLICT, token=ctx.teacher, body={"pass": True, "user_id": ctx.ids["student03"]}, label="验收未提交成员 4090")
-    _err(ctx.client, "POST", f"/api/tasks/{task_id}/verify", code=ERR_INVALID_PARAM, token=ctx.teacher, body={"pass": True, "user_id": 999999}, label="验收非成员 4001")
-    _err(ctx.client, "POST", f"/api/tasks/{task_id}/verify", code=ERR_FORBIDDEN, token=ctx.s1, body={"pass": True}, label="非发布者验收 4030")
+    # 目标非法：C 未提交 4090；非成员 4001
+    _err(ctx.client, "POST", f"/api/tasks/{task_id}/verify", code=ERR_CONFLICT, headers=ctx.teacher, body={"pass": True, "user_id": ctx.ids["student03"]}, label="验收未提交成员 4090")
+    _err(ctx.client, "POST", f"/api/tasks/{task_id}/verify", code=ERR_INVALID_PARAM, headers=ctx.teacher, body={"pass": True, "user_id": 999999}, label="验收非成员 4001")
 
-    # 越权：非成员不能提交 / 记录进度
-    _err(ctx.client, "POST", f"/api/tasks/{task_id}/submit", code=ERR_FORBIDDEN, token=ctx.teacher, label="非成员提交 4030")
-    _err(ctx.client, "POST", f"/api/tasks/{task_id}/progress", code=ERR_FORBIDDEN, token=ctx.teacher, body={"content": "非成员进度"}, label="非成员进度 4030")
+    # 越权（`C-AUTHZ@1`）：与任务无关联的用户（非发布者 / 非负责人 / 非组织管理员）
+    # 不得验收或指派；authz 拒绝按契约返回 HTTP 403，而非业务层的 HTTP 200。
+    guard_task = _create_task(ctx.client, ctx.teacher, "R2 越权拦截守卫任务", quota=2)
+    guard_id = guard_task["id"]
+    _err(
+        ctx.client,
+        "POST",
+        f"/api/tasks/{guard_id}/verify",
+        code=ERR_FORBIDDEN,
+        headers=ctx.s3,
+        body={"pass": True, "user_id": ctx.ids["student01"]},
+        label="无关联用户验收 4030",
+        status=403,
+    )
+    _err(
+        ctx.client,
+        "POST",
+        f"/api/tasks/{guard_id}/assign",
+        code=ERR_FORBIDDEN,
+        headers=ctx.s3,
+        body={"user_id": ctx.ids["student01"]},
+        label="无关联用户指派 4030",
+        status=403,
+    )
+    assert _task(ctx.client, guard_id, ctx.teacher).get("assignee_id") is None, "越权指派不得落库"
+
+    # 越权：非成员不能提交 / 记录进度（业务层 4030，HTTP 200）
+    _err(ctx.client, "POST", f"/api/tasks/{task_id}/submit", code=ERR_FORBIDDEN, headers=ctx.teacher, label="非成员提交 4030")
+    _err(ctx.client, "POST", f"/api/tasks/{task_id}/progress", code=ERR_FORBIDDEN, headers=ctx.teacher, body={"content": "非成员进度"}, label="非成员进度 4030")
 
     # B 退回后可重新提交并验收通过（逐人语义）
     _submit(ctx, ctx.s2, task_id)
@@ -385,8 +606,8 @@ def test_reminder_skips_finished_members_and_is_idempotent(ctx: _Ctx) -> None:
         reminder_rule={"days_before": 3, "day_of": True, "on_overdue": True},
     )
     task_id = task["id"]
-    for token in (ctx.s1, ctx.s2, ctx.s3):
-        _apply_and_approve(ctx.client, ctx.teacher, token, task_id)
+    for identity_headers in (ctx.s1, ctx.s2, ctx.s3):
+        _apply_and_approve(ctx.client, ctx.teacher, identity_headers, task_id)
 
     # A 已完成（验收通过）、B 进行中、C 未开始
     _progress(ctx, ctx.s1, task_id, "A 进度")
@@ -452,14 +673,14 @@ def test_overdue_penalty_once_per_member(ctx: _Ctx) -> None:
         reminder_rule={"days_before": 2, "day_of": True, "on_overdue": True},
     )
     ghost_id = ghost["id"]
-    _ok(ctx.client, "POST", f"/api/tasks/{ghost_id}/apply", token=ctx.s1, label="撤回用例报名")
-    _ok(ctx.client, "POST", f"/api/tasks/{ghost_id}/apply/withdraw", token=ctx.s1, label="撤回报名")
-    rejected_app = _ok(ctx.client, "POST", f"/api/tasks/{ghost_id}/apply", token=ctx.s3, label="拒绝用例报名")
+    _ok(ctx.client, "POST", f"/api/tasks/{ghost_id}/apply", headers=ctx.s1, label="撤回用例报名")
+    _ok(ctx.client, "POST", f"/api/tasks/{ghost_id}/apply/withdraw", headers=ctx.s1, label="撤回报名")
+    rejected_app = _ok(ctx.client, "POST", f"/api/tasks/{ghost_id}/apply", headers=ctx.s3, label="拒绝用例报名")
     _ok(
         ctx.client,
         "POST",
         f"/api/applications/{rejected_app['application']['id']}/decide",
-        token=ctx.teacher,
+        headers=ctx.teacher,
         body={"approve": False, "reason": "时间冲突"},
         label="拒绝报名",
     )
@@ -476,9 +697,9 @@ def test_overdue_penalty_once_per_member(ctx: _Ctx) -> None:
     assert len(_reminders(ctx.client, ctx.s3, task_id)) == 1, f"未完成成员收到 1 条逾期催办（实际 {len(_reminders(ctx.client, ctx.s3, task_id))}）"
     assert len(_penalties(ctx.client, ctx.s3, task_id)) == 1, "未完成成员扣分一次"
 
-    for token in (ctx.s1, ctx.s3):
-        assert _reminders(ctx.client, token, ghost_id) == [], "撤回/拒绝的申请人不催办"
-        assert _penalties(ctx.client, token, ghost_id) == [], "撤回/拒绝的申请人不扣分"
+    for identity_headers in (ctx.s1, ctx.s3):
+        assert _reminders(ctx.client, identity_headers, ghost_id) == [], "撤回/拒绝的申请人不催办"
+        assert _penalties(ctx.client, identity_headers, ghost_id) == [], "撤回/拒绝的申请人不扣分"
 
     snapshot = _notification_counts(ctx, task_id)
     assert reminder_scheduler.scan_and_remind(now=now) == 0, "重复扫描不新增通知"
@@ -523,7 +744,7 @@ def test_deadline_extension_reminds_on_new_deadline(ctx: _Ctx) -> None:
 
     # 发布者改期到未来：状态由 overdue 拉回，提醒按新截止时间版本重新生成
     new_deadline = _fmt(now + timedelta(days=2))
-    updated = _ok(ctx.client, "PATCH", f"/api/tasks/{task_id}", token=ctx.teacher, body={"deadline": new_deadline}, label="修改截止时间")
+    updated = _ok(ctx.client, "PATCH", f"/api/tasks/{task_id}", headers=ctx.teacher, body={"deadline": new_deadline}, label="修改截止时间")
     assert updated.get("deadline") == new_deadline, "截止时间保存为新值"
     assert updated.get("status") == "in_progress", f"改期后按成员状态重算聚合（实际 {updated.get('status')}）"
 
@@ -577,14 +798,14 @@ def test_overdue_late_submission_verify_and_cancel(ctx: _Ctx) -> None:
     assert len(_task_logs(ctx.client, ctx.s1, task_id)) == logs_before + 1, "逾期补交验收加分一次"
 
     # 改期后另一名成员仍可继续
-    _ok(ctx.client, "PATCH", f"/api/tasks/{task_id}", token=ctx.teacher, body={"deadline": _fmt(now + timedelta(days=1))}, label="改期继续执行")
+    _ok(ctx.client, "PATCH", f"/api/tasks/{task_id}", headers=ctx.teacher, body={"deadline": _fmt(now + timedelta(days=1))}, label="改期继续执行")
     _progress(ctx, ctx.s2, task_id, "改期后进度")
 
     # 取消：逾期任务仍可取消，取消后不再受理成员操作
-    cancelled = _ok(ctx.client, "PATCH", f"/api/tasks/{task_id}", token=ctx.teacher, body={"status": "cancelled"}, label="取消任务")
+    cancelled = _ok(ctx.client, "PATCH", f"/api/tasks/{task_id}", headers=ctx.teacher, body={"status": "cancelled"}, label="取消任务")
     assert cancelled.get("status") == "cancelled", "发布者可取消任务"
-    _err(ctx.client, "POST", f"/api/tasks/{task_id}/submit", code=ERR_CONFLICT, token=ctx.s2, label="取消后提交 4090")
-    _err(ctx.client, "POST", f"/api/tasks/{task_id}/verify", code=ERR_CONFLICT, token=ctx.teacher, body={"pass": True, "user_id": ctx.ids["student01"]}, label="取消后验收 4090")
+    _err(ctx.client, "POST", f"/api/tasks/{task_id}/submit", code=ERR_CONFLICT, headers=ctx.s2, label="取消后提交 4090")
+    _err(ctx.client, "POST", f"/api/tasks/{task_id}/verify", code=ERR_CONFLICT, headers=ctx.teacher, body={"pass": True, "user_id": ctx.ids["student01"]}, label="取消后验收 4090")
 
     snapshot = _notification_counts(ctx, task_id)
     reminder_scheduler.scan_and_remind(now=now)
@@ -780,14 +1001,14 @@ def test_terminal_approval_self_assign_and_zero_reward_guards(ctx: _Ctx) -> None
     # (1) 任务取消后，pending 报名不得再被审批通过（终态守卫）
     cancelled_task = _create_task(ctx.client, ctx.teacher, "审查回归 终态审批任务", quota=2, credit_reward=10)
     cancelled_id = cancelled_task["id"]
-    applied = _ok(ctx.client, "POST", f"/api/tasks/{cancelled_id}/apply", token=ctx.s3, label="终态审批用例报名")
-    _ok(ctx.client, "PATCH", f"/api/tasks/{cancelled_id}", token=ctx.teacher, body={"status": "cancelled"}, label="取消任务（含 pending 报名）")
+    applied = _ok(ctx.client, "POST", f"/api/tasks/{cancelled_id}/apply", headers=ctx.s3, label="终态审批用例报名")
+    _ok(ctx.client, "PATCH", f"/api/tasks/{cancelled_id}", headers=ctx.teacher, body={"status": "cancelled"}, label="取消任务（含 pending 报名）")
     _err(
         ctx.client,
         "POST",
         f"/api/applications/{applied['application']['id']}/decide",
         code=ERR_CONFLICT,
-        token=ctx.teacher,
+        headers=ctx.teacher,
         body={"approve": True},
         label="取消后审批通过 pending 报名 4090",
     )
@@ -797,7 +1018,7 @@ def test_terminal_approval_self_assign_and_zero_reward_guards(ctx: _Ctx) -> None
         f"审批失败后该学生不得成为成员（实际 members={cancelled_detail.get('members')}）"
     )
     assert _task(ctx.client, cancelled_id, ctx.s3).get("my_member_status") is None, "非成员 my_member_status 为空"
-    applications = _ok(ctx.client, "GET", f"/api/tasks/{cancelled_id}/applications", token=ctx.teacher, label="终态审批用例报名列表")
+    applications = _ok(ctx.client, "GET", f"/api/tasks/{cancelled_id}/applications", headers=ctx.teacher, label="终态审批用例报名列表")
     assert [item.get("status") for item in applications.get("items") or []] == ["pending"], (
         f"报名仍为 pending（实际 {[item.get('status') for item in applications.get('items') or []]}）"
     )
@@ -808,8 +1029,13 @@ def test_terminal_approval_self_assign_and_zero_reward_guards(ctx: _Ctx) -> None
         "POST",
         "/api/tasks",
         code=ERR_FORBIDDEN,
-        token=ctx.teacher,
-        body={"title": "审查回归 自我指派创建任务", "claim_type": "assign", "assignee_id": teacher_id},
+        headers=ctx.teacher,
+        body={
+            "title": "审查回归 自我指派创建任务",
+            "claim_type": "assign",
+            "assignee_id": teacher_id,
+            "org_id": DEMO_ORG_ID,
+        },
         label="创建任务指派自己 4030",
     )
     assign_task = _create_task(ctx.client, ctx.teacher, "审查回归 自我指派任务", quota=2)
@@ -819,7 +1045,7 @@ def test_terminal_approval_self_assign_and_zero_reward_guards(ctx: _Ctx) -> None
         "POST",
         f"/api/tasks/{assign_id}/assign",
         code=ERR_FORBIDDEN,
-        token=ctx.teacher,
+        headers=ctx.teacher,
         body={"user_id": teacher_id},
         label="指派接口指派自己 4030",
     )
@@ -828,7 +1054,7 @@ def test_terminal_approval_self_assign_and_zero_reward_guards(ctx: _Ctx) -> None
         "PATCH",
         f"/api/tasks/{assign_id}",
         code=ERR_FORBIDDEN,
-        token=ctx.teacher,
+        headers=ctx.teacher,
         body={"assignee_id": teacher_id},
         label="PATCH assignee_id 指派自己 4030",
     )
@@ -863,13 +1089,13 @@ def test_verified_task_rejects_pending_approval(ctx: _Ctx) -> None:
     """任务进入终态 verified 后，pending 报名不得再被审批为 approved。"""
     task = _create_task(ctx.client, ctx.teacher, "复审回归 verified 终态审批任务", quota=2, credit_reward=10)
     task_id = task["id"]
-    member_app = _ok(ctx.client, "POST", f"/api/tasks/{task_id}/apply", token=ctx.s1, label="verified 终态用例：成员报名")
-    pending_app = _ok(ctx.client, "POST", f"/api/tasks/{task_id}/apply", token=ctx.s3, label="verified 终态用例：待审批报名")
+    member_app = _ok(ctx.client, "POST", f"/api/tasks/{task_id}/apply", headers=ctx.s1, label="verified 终态用例：成员报名")
+    pending_app = _ok(ctx.client, "POST", f"/api/tasks/{task_id}/apply", headers=ctx.s3, label="verified 终态用例：待审批报名")
     _ok(
         ctx.client,
         "POST",
         f"/api/applications/{member_app['application']['id']}/decide",
-        token=ctx.teacher,
+        headers=ctx.teacher,
         body={"approve": True},
         label="verified 终态用例：通过成员报名",
     )
@@ -885,7 +1111,7 @@ def test_verified_task_rejects_pending_approval(ctx: _Ctx) -> None:
         "POST",
         f"/api/applications/{pending_app['application']['id']}/decide",
         code=ERR_CONFLICT,
-        token=ctx.teacher,
+        headers=ctx.teacher,
         body={"approve": True},
         label="verified 任务审批 pending 报名 4090",
     )
@@ -894,7 +1120,7 @@ def test_verified_task_rejects_pending_approval(ctx: _Ctx) -> None:
     member_ids = [int(item.get("user_id") or 0) for item in detail.get("members") or []]
     assert ctx.ids["student03"] not in member_ids, f"pending 报名不得变成成员（实际 members={member_ids}）"
 
-    applications = _ok(ctx.client, "GET", f"/api/tasks/{task_id}/applications", token=ctx.teacher, label="verified 终态用例报名列表")
+    applications = _ok(ctx.client, "GET", f"/api/tasks/{task_id}/applications", headers=ctx.teacher, label="verified 终态用例报名列表")
     pending_row = next(
         (item for item in applications.get("items") or [] if int(item.get("user_id") or 0) == ctx.ids["student03"]),
         None,
@@ -938,7 +1164,7 @@ def test_historical_self_verification_is_rejected(ctx: _Ctx) -> None:
         "POST",
         f"/api/tasks/{task_id}/verify",
         code=ERR_FORBIDDEN,
-        token=ctx.teacher,
+        headers=ctx.teacher,
         body={"pass": True, "user_id": teacher_id},
         label="历史自验收 4030",
     )
@@ -966,7 +1192,7 @@ def test_cleared_deadline_stops_deadline_reminders(ctx: _Ctx) -> None:
     task_id = task["id"]
     _apply_and_approve(ctx.client, ctx.teacher, ctx.s1, task_id)
 
-    cleared = _ok(ctx.client, "PATCH", f"/api/tasks/{task_id}", token=ctx.teacher, body={"deadline": None}, label="清空截止时间")
+    cleared = _ok(ctx.client, "PATCH", f"/api/tasks/{task_id}", headers=ctx.teacher, body={"deadline": None}, label="清空截止时间")
     assert cleared.get("deadline") is None, f"PATCH deadline=null 后截止时间为空（实际 {cleared.get('deadline')!r}）"
     assert _task(ctx.client, task_id, ctx.teacher).get("deadline") is None, "清空后任务详情 deadline 为 null"
 
