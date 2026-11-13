@@ -163,15 +163,26 @@ def chat(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """权限内只读问答；``conversation_id`` 缺省时新建会话。"""
+    """权限内只读问答；``conversation_id`` 缺省时新建会话，``request_id`` 用于重试幂等。"""
     return ok(
         ai_service.chat(
             db,
             current_user,
             conversation_id=payload.conversation_id,
             message=payload.message,
+            request_id=payload.request_id,
         ).model_dump()
     )
+
+
+@router.get("/usage")
+def get_usage(
+    limit: int = Query(20, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """当前用户今日 AI 问答额度与最近用量（`C-AI-USAGE@1`）。"""
+    return ok(ai_service.get_usage(db, current_user, limit=limit).model_dump())
 
 
 @router.get("/conversations")

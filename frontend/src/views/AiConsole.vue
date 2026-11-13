@@ -25,7 +25,7 @@ const SUGGESTIONS = ['我有哪些临近截止的事务？', '我有权限查看
 const router = useRouter()
 const notificationsStore = useNotificationsStore()
 const aiChat = useAiChatStore()
-const { messages, input, historyLoading, historyError, sending, mockMode, hasMessages } =
+const { messages, input, historyLoading, historyError, sending, mockMode, hasMessages, usage, usageLoading, usageError } =
   storeToRefs(aiChat)
 
 const noticesLoading = ref(true)
@@ -34,6 +34,7 @@ const messageListRef = ref<HTMLElement | null>(null)
 
 const unreadItems = computed<NotificationItem[]>(() => notificationsStore.unreadItems.slice(0, 3))
 const unreadCount = computed<number>(() => notificationsStore.unread)
+const quotaExhausted = computed<boolean>(() => usage.value !== null && usage.value.remaining <= 0)
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -77,6 +78,10 @@ async function loadNotices(): Promise<void> {
 }
 
 async function sendMessage(text?: string): Promise<void> {
+  if (quotaExhausted.value) {
+    ElMessage.warning('今日 AI 问答额度已用完；任务、通知与审批等协作功能仍可正常使用')
+    return
+  }
   try {
     const sent = await aiChat.send(text)
     if (sent) await scrollToBottom()
@@ -110,7 +115,7 @@ function openMessages(): void {
 }
 
 onMounted(async () => {
-  await Promise.allSettled([loadHistory(), loadNotices()])
+  await Promise.allSettled([loadHistory(), loadNotices(), aiChat.loadUsage()])
 })
 </script>
 
@@ -233,12 +238,30 @@ onMounted(async () => {
           v-for="question in SUGGESTIONS"
           :key="question"
           class="suggestion-button"
-          :disabled="sending"
+          :disabled="sending || quotaExhausted"
           @click="sendMessage(question)"
         >
           {{ question }}
         </el-button>
       </div>
+
+      <div class="quota-bar">
+        <span v-if="usage" class="quota-text">
+          今日 AI 问答 {{ usage.used }} / {{ usage.limit }} 次，剩余 {{ usage.remaining }} 次
+        </span>
+        <span v-else-if="usageLoading" class="quota-text">正在读取 AI 额度…</span>
+        <span v-else-if="usageError" class="quota-text quota-error">AI 额度读取失败：{{ usageError }}</span>
+        <span class="quota-hint">额度只限制 AI 问答，任务、通知与审批不受影响</span>
+      </div>
+      <el-alert
+        v-if="quotaExhausted"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="今日 AI 问答额度已用完"
+        description="任务、通知、报名、审批与验收等协作功能仍可正常使用。"
+        class="quota-alert"
+      />
 
       <div class="composer">
         <el-input
@@ -249,7 +272,7 @@ onMounted(async () => {
           maxlength="2000"
           show-word-limit
           resize="none"
-          :disabled="sending"
+          :disabled="sending || quotaExhausted"
           placeholder="输入问题，例如：我有哪些临近截止的事务？"
           aria-label="向 AI 助手提问"
           @keydown.enter.exact.prevent="sendMessage()"
@@ -258,7 +281,7 @@ onMounted(async () => {
           class="send-button"
           type="primary"
           :loading="sending"
-          :disabled="sending || historyLoading || input.trim().length === 0"
+          :disabled="sending || historyLoading || quotaExhausted || input.trim().length === 0"
           @click="sendMessage()"
         >
           发送
@@ -462,6 +485,29 @@ onMounted(async () => {
 .suggestion-button {
   min-height: var(--app-touch);
   white-space: normal;
+}
+
+.quota-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-2);
+  margin-top: var(--app-space-3);
+  font-size: var(--app-font-aux-lg);
+  color: var(--app-text-secondary);
+}
+
+.quota-hint {
+  color: var(--app-text-muted);
+}
+
+.quota-error {
+  color: var(--el-color-danger);
+}
+
+.quota-alert {
+  margin-top: var(--app-space-2);
 }
 
 .composer {

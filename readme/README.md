@@ -195,6 +195,15 @@ npm run preview       # 本地预览构建产物
 >
 > 验证入口与实际结果：`PYTHON_BIN=python bash tests/frontend/run_all.sh` → `EXIT=0`，构建门禁 **4 passed / 0 failed**、静态契约 **25 passed / 0 failed**、语音切片 **21 PASS / 0 FAIL**。浏览器走查（8000 同源 dist）实测 `/tasks` 320=305/320、390=375/390、1440=1425/1440，390 `/admin` 桌面表 `display:none`、移动卡 `display:block`；四组截图与 `walkthrough.md` 位于 `outputs/ui-redesign/`（本地忽略）。真机软键盘、横竖屏、安全区与真实麦克风权限未验证。
 
+### 5.6 主动协作与 AI 用量（AIW-05）
+
+| 改动 | 说明 |
+|---|---|
+| **旧提醒失效与变更通知** | 改期或取消后，同一任务中不属于新截止时间版本的催办通知标记为 `stale`，历史保留但不计未读；发布者与当前 approved 成员收到变更通知，包含旧值→新值、提醒按新时间重算与受影响后续任务数 |
+| **受控改期确认卡** | 发布者后台的改期对话框在确认前调用只读影响预览，展示当前截止→拟调整截止、提醒是否重置、受影响成员与后续任务、通知接收人；确认后才调用既有 `PATCH /api/tasks/{id}`，由后端再次校验权限并执行 |
+| **AI 用量账本与额度** | 新增 `ai_usage_ledger`，每次成功回答写一条 `settled` 记录；客户端 `request_id` 提供幂等，重试返回首次结果，不新增消息或账本。每日次数上限由 `AI_DAILY_QUOTA` 控制（默认 50，0 表示当天不生成）；个人中心与 AI 页展示今日用量。额度用完只停问答，任务、通知、报名、审批与验收照常可用 |
+| **边界** | 本轮不做收费、支付、套餐或供应商结算；额度单位与最终收费规则未确认。AI 仍不直接写业务表，改期仍由有权限的人确认后调用既有服务 |
+
 ---
 
 ## 6. `.env` 配置说明
@@ -216,6 +225,7 @@ cp .env.example .env          # Windows cmd: copy .env.example .env
 | `RUN_SCHEDULER` | `1` | `0` ⇒ 不启动 APScheduler 催办调度器（自动化验收用） |
 | `SSE_HEARTBEAT_SECONDS` | `15` | SSE 心跳间隔（秒），用于保活连接 |
 | `REMINDER_INTERVAL_SECONDS` | `60` | 催办扫描间隔（秒） |
+| `AI_DAILY_QUOTA` | `50` | 每人每日 AI 问答次数上限；`0` 表示当天不生成，任务、通知、审批与验收不受影响 |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | 允许跨域的前端来源，逗号分隔 |
 
 > 取值说明：「默认值」列取自规划契约 `C-BOOT@1`（`MAAS_MODEL` 默认值经 Leader 终验后裁定为 `DeepSeek-V4.1-Flash-1017`，与 `backend/.env.example` 一致）；`backend/.env.example` 中是可直接复制的**占位值**（如 `MAAS_BASE_URL=https://your-maas-endpoint.example.com/v1`、`MAAS_API_KEY=your-maas-api-key`），`MAAS_MOCK` 在示例文件中预置为 `1` 以便离线演示。

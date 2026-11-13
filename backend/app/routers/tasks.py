@@ -20,12 +20,13 @@ from typing import Any, Iterable, Literal
 
 from fastapi import APIRouter, Depends, Query
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps import get_current_user, require_csrf
 from app.errors import ApiError, ok
-from app.models import Activity, ProgressLog, Task, TaskApplication, User
+from app.models import Activity, ProgressLog, Task, TaskApplication, TaskDependency, User
 from app.schemas import (
     AssignIn,
     Draft,
@@ -33,6 +34,9 @@ from app.schemas import (
     ProgressOut,
     SubmitIn,
     TaskBrief,
+    TaskChangeDownstream,
+    TaskChangeImpactOut,
+    TaskChangeMember,
     TaskCreate,
     TaskDetailOut,
     TaskOut,
@@ -634,6 +638,71 @@ def get_task(
 
 
 # --------------------------------------------------------------------------- #
+# #3.5 改期影响预览（契约 `C-TASK-CHANGE-API@1`）
+# --------------------------------------------------------------------------- #
+def _change_downstream_tasks(db: Session, task_id: int, viewer: User) -> list[Task]:
+    """取依赖当前任务且对查看者可见的后续任务。"""
+    return list(
+        db.execute(
+            select(Task)
+            .join(TaskDependency, TaskDependency.task_id == Task.id)
+            .where(
+                TaskDependency.depends_on_id == int(task_id),
+                authz.visible_task_filter(db, viewer),
+            )
+            .order_by(Task.id.asc())
+        ).scalars()
+    )
+
+
+def _change_recipients(db: Session, task: Task) -> list[int]:
+    """变更通知接收人：发布者 + 当前 approved 成员（去重、升序）。"""
+    members = member_service.effective_members(db, task)
+    return sorted({int(task.publisher_id), *[int(member.user_id) for member in members]})
+
+
+def _change_impact_payload(
+    db: Session, task: Task, proposed_deadline: str | None, viewer: User
+) -> dict[str, Any]:
+    downstream = _change_downstream_tasks(db, int(task.id), viewer)
+    members = member_service.effective_members(db, task)
+    return TaskChangeImpactOut(
+        task_id=int(task.id),
+        title=task.title,
+        current_deadline=task.deadline,
+        proposed_deadline=proposed_deadline,
+        # 以归一化时间比较，避免同一时刻不同写法被误判为改期。
+        reminders_reset=(
+            notify_service.deadline_version(proposed_deadline)
+            != notify_service.deadline_version(task.deadline)
+        ),
+        affected_members=[
+            TaskChangeMember(id=int(member.user_id), name=member.user_name) for member in members
+        ],
+        downstream_tasks=[TaskChangeDownstream.model_validate(item) for item in downstream],
+        notified_user_ids=_change_recipients(db, task),
+    ).model_dump()
+
+
+@router.get("/{task_id}/change-impact")
+def get_task_change_impact(
+    task_id: int,
+    deadline: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """只读预览改期影响；``deadline`` 缺省/空串表示清除截止时间。"""
+    task = _get_task_or_404(db, task_id)
+    authz.require_task_view(db, current_user, task)
+    authz.require_task_manage(db, current_user, task)
+
+    proposed = (deadline or "").strip() or None
+    if proposed is not None and notify_service.deadline_version(proposed) is None:
+        raise ApiError(ERR_INVALID_PARAM, "截止时间格式无效")
+    return ok(_change_impact_payload(db, task, proposed, current_user))
+
+
+# --------------------------------------------------------------------------- #
 # #4 修改
 # --------------------------------------------------------------------------- #
 @router.patch("/{task_id}")
@@ -648,7 +717,15 @@ def patch_task(
     authz.require_task_view(db, current_user, task)
     authz.require_task_manage(db, current_user, task)
 
+    # 变更副作用需要旧值（`C-TASK-CHANGE@1`）；在任何字段写入前记录。
+    old_deadline = task.deadline
+    old_status = task.status
+
     provided = payload.model_fields_set
+
+    # 空串按“清除截止”处理，与影响预览的缺省语义一致（审查第二轮 S2）。
+    if "deadline" in provided and isinstance(payload.deadline, str) and not payload.deadline.strip():
+        payload.deadline = None
 
     # 活动归属与层级校验：仅显式提供 parent_id / activity_id 时执行（唯一实现）
     if "parent_id" in provided or "activity_id" in provided:
@@ -771,9 +848,84 @@ def patch_task(
     if "deadline" in provided or "status" in provided:
         member_service.sync_task_status(db, task)
 
+    # 截止时间必须能解析；否则调度器会永久跳过该任务，变更通知也会失真（审查 I2）。
+    if "deadline" in provided and payload.deadline is not None:
+        if notify_service.deadline_version(payload.deadline) is None:
+            raise ApiError(ERR_INVALID_PARAM, "截止时间格式无效")
+
+    # 变更影响（`C-TASK-CHANGE@1`）：只对真实变化写提醒失效与通知，重复 PATCH 不重复发送。
+    old_deadline_version = notify_service.deadline_version(old_deadline)
+    new_deadline_version = notify_service.deadline_version(task.deadline)
+    raw_deadline_changed = (
+        "deadline" in provided and (task.deadline or None) != (old_deadline or None)
+    )
+    # 历史脏值（旧 deadline 无法解析）被清空时，两个版本都是 None，但原始值确实变化，
+    # 仍需失效旧提醒并通知（审查第二轮 S3）。
+    deadline_changed = "deadline" in provided and (
+        old_deadline_version != new_deadline_version
+        or (
+            raw_deadline_changed
+            and (old_deadline_version is None or new_deadline_version is None)
+        )
+    )
+    cancelled_now = (
+        "status" in provided
+        and payload.status == "cancelled"
+        and old_status != "cancelled"
+    )
+    change_payload: dict[str, Any] | None = None
+    if deadline_changed or cancelled_now:
+        downstream = _change_downstream_tasks(db, int(task.id), current_user)
+        recipients = _change_recipients(db, task)
+        if cancelled_now:
+            stale_count = notify_service.stale_task_reminders(
+                db, task_id=int(task.id), current_version=None
+            )
+            kind = "cancelled"
+            notifications_created = notify_service.notify_task_changed(
+                db,
+                task=task,
+                kind=kind,
+                old_deadline=old_deadline,
+                new_deadline=task.deadline,
+                downstream_count=len(downstream),
+                recipients=recipients,
+            )
+        else:
+            stale_count = notify_service.stale_task_reminders(
+                db,
+                task_id=int(task.id),
+                current_version=new_deadline_version,
+            )
+            kind = "deadline"
+            notifications_created = notify_service.notify_task_changed(
+                db,
+                task=task,
+                kind=kind,
+                old_deadline=old_deadline,
+                new_deadline=task.deadline,
+                downstream_count=len(downstream),
+                recipients=recipients,
+            )
+        change_payload = {
+            "kind": kind,
+            "old_deadline": old_deadline,
+            "new_deadline": task.deadline,
+            "reminders_stale": int(stale_count),
+            "notifications_created": int(notifications_created),
+            "downstream_tasks": [
+                {"id": int(item.id), "title": item.title} for item in downstream
+            ],
+            "notified_user_ids": recipients,
+        }
+
     db.commit()
+    notify_service.publish_committed(db)
     db.refresh(task)
-    return ok(_single_task_payload(db, task, current_user.id))
+    data = _single_task_payload(db, task, current_user.id)
+    if change_payload is not None:
+        data["change"] = change_payload
+    return ok(data)
 
 
 # --------------------------------------------------------------------------- #

@@ -6,14 +6,25 @@
  */
 import { defineStore } from 'pinia'
 
-import { chat, getConversation, listConversations } from '../api/agent'
+import { chat, getConversation, getUsage, listConversations } from '../api/agent'
 import { ApiError } from '../api/client'
-import type { AiChatMessage } from '../types/models'
+import type { AiChatMessage, AiUsage } from '../types/models'
 
 /** 同一时刻只允许一个恢复请求，避免完整页与长条同时挂载时重复拉取 */
 let restorePromise: Promise<string | null> | null = null
 /** 会话代号：退出登录后递增，拦截上一个账号尚未返回的异步结果 */
 let epoch = 0
+
+/** 生成请求幂等键；不支持 crypto.randomUUID 时退化为时间戳 + 随机串 */
+function newRequestId(): string {
+  const randomUuid = globalThis.crypto?.randomUUID
+  if (typeof randomUuid === 'function') return randomUuid.call(globalThis.crypto).replace(/-/g, '')
+  return `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+function todayText(): string {
+  return new Date().toLocaleDateString('sv-SE')
+}
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -32,13 +43,24 @@ export const useAiChatStore = defineStore('aiChat', {
     historyError: '',
     sending: false,
     mockMode: false,
+    /** 今日 AI 问答额度（`C-AI-USAGE@1`） */
+    usage: null as AiUsage | null,
+    usageLoading: false,
+    usageError: '',
+    /** 上一次失败请求：同内容重试复用同一 request_id，避免响应丢失后重复计费 */
+    lastFailedRequest: null as {
+      content: string
+      requestId: string
+      conversationId: number | null
+    } | null,
     /** 是否已成功恢复过一次最近会话（空会话也算） */
     bootstrapped: false
   }),
 
   getters: {
     hasMessages: (state): boolean => state.messages.length > 0,
-    recentMessages: (state): AiChatMessage[] => state.messages.slice(-4)
+    recentMessages: (state): AiChatMessage[] => state.messages.slice(-4),
+    quotaExhausted: (state): boolean => state.usage !== null && state.usage.remaining <= 0
   },
 
   actions: {
@@ -100,24 +122,63 @@ export const useAiChatStore = defineStore('aiChat', {
     async send(text?: string): Promise<boolean> {
       const content = (text ?? this.input).trim()
       if (!content || this.sending || this.historyLoading) return false
+      // 独立页面（未打开 AI 完整页）或跨天时先取一次额度，避免用过期缓存误判。
+      if (this.usage === null || this.usage.date !== todayText()) {
+        await this.loadUsage()
+      }
+      if (this.quotaExhausted) return false
 
       this.input = ''
       this.sending = true
       const token = epoch
+      const previous = this.lastFailedRequest
+      const reuse =
+        previous !== null &&
+        previous.content === content &&
+        previous.conversationId === this.conversationId
+      const requestId = reuse ? previous.requestId : newRequestId()
+      const conversationId = reuse ? previous.conversationId : this.conversationId
       try {
-        const result = await chat(content, this.conversationId ?? undefined)
+        const result = await chat(
+          content,
+          conversationId ?? undefined,
+          requestId
+        )
         if (token !== epoch) return false
         this.conversationId = result.conversation_id
         this.messages = [...this.messages, result.user_message, result.assistant_message]
         this.mockMode = result.mock
         this.historyError = ''
         this.bootstrapped = true
+        this.lastFailedRequest = null
+        await this.loadUsage()
         return true
       } catch (err) {
-        if (token === epoch && !this.input) this.input = content
+        if (token === epoch) {
+          this.lastFailedRequest = { content, requestId, conversationId }
+          if (!this.input) this.input = content
+          if (err instanceof ApiError && err.code === 4290) {
+            if (this.usage) this.usage = { ...this.usage, remaining: 0 }
+            await this.loadUsage()
+          }
+        }
         throw err
       } finally {
         if (token === epoch) this.sending = false
+      }
+    },
+
+    /** 读取本人今日 AI 问答额度；失败只记录提示，不阻塞问答与协作功能 */
+    async loadUsage(): Promise<void> {
+      this.usageLoading = true
+      this.usageError = ''
+      try {
+        this.usage = await getUsage()
+        this.usageError = ''
+      } catch (err) {
+        this.usageError = errorMessage(err)
+      } finally {
+        this.usageLoading = false
       }
     },
 
@@ -132,6 +193,10 @@ export const useAiChatStore = defineStore('aiChat', {
       this.historyLoading = false
       this.sending = false
       this.mockMode = false
+      this.usage = null
+      this.usageLoading = false
+      this.usageError = ''
+      this.lastFailedRequest = null
       this.bootstrapped = false
     }
   }

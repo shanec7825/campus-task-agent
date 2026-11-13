@@ -66,16 +66,20 @@ def list_notifications(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """通知列表：``unread`` 为全部未读数，``items`` 按时间倒序取 ``limit`` 条。"""
+    """通知列表：``unread`` 只统计有效未读（不含已失效提醒），``items`` 按时间倒序取 ``limit`` 条。"""
     unread = (
         db.query(Notification)
-        .filter(Notification.user_id == current_user.id, Notification.is_read == 0)
+        .filter(
+            Notification.user_id == current_user.id,
+            Notification.is_read == 0,
+            Notification.stale == 0,
+        )
         .count()
     )
 
     query = db.query(Notification).filter(Notification.user_id == current_user.id)
     if unread_only:
-        query = query.filter(Notification.is_read == 0)
+        query = query.filter(Notification.is_read == 0, Notification.stale == 0)
     rows = query.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(limit).all()
 
     # 关联任务不可见时只保留标题与 task_id，不回吐任务正文（`C-OTHER-AUTH@1`）
@@ -115,6 +119,7 @@ def read_notifications(
             Notification.id.in_(ids),
             Notification.user_id == current_user.id,
             Notification.is_read == 0,
+            Notification.stale == 0,
         )
         .update({Notification.is_read: 1}, synchronize_session=False)
     )

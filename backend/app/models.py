@@ -1,10 +1,10 @@
-"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1` / `C-TASK-GRAPH@1` / `C-RESOURCE@1` / `C-SUBMISSION@1` / `C-PRECHECK@1`）。
+"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1` / `C-TASK-GRAPH@1` / `C-RESOURCE@1` / `C-SUBMISSION@1` / `C-PRECHECK@1` / `C-AI-USAGE@1`）。
 
-22 张表：users / tasks / checkins / credit_logs / notifications /
+23 张表：users / tasks / checkins / credit_logs / notifications /
 kb_entries / parse_sessions / progress_logs / task_applications / task_members /
 activities / organizations / org_members / invitations / user_sessions /
 password_resets / ai_conversations / ai_messages / task_dependencies /
-activity_resources / task_submissions / submission_prechecks。
+activity_resources / task_submissions / submission_prechecks / ai_usage_ledger。
 
 说明：Demo 期不建数据库级外键约束，仅做应用层校验（PLAN 2.2.1 A：
 「Demo 期不建数据库级外键，应用层校验」）；JSON 列落库为 SQLite TEXT，
@@ -149,6 +149,8 @@ class Notification(Base):
     is_read: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     # 去重键（契约 `C-DATA-MEMBER@1`）：同一收件人 + 任务 + 键值只保留一条通知。
     dedupe_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 失效标记（契约 `C-REMINDER-STALE@1`）：改期/取消后旧提醒置 1，历史保留但不计未读。
+    stale: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     created_at: Mapped[str] = mapped_column(
         Text, nullable=False, default=_now_local, server_default=_NOW_SQL
     )
@@ -483,6 +485,37 @@ class SubmissionPrecheck(Base):
     )
 
 
+class AiUsageLedger(Base):
+    """AI 问答用量账本（契约 `C-AI-USAGE@1`）。
+
+    - 每次成功生成回答写一条 ``settled`` 记录，与消息同一事务提交；失败不写、不扣额度。
+    - ``UNIQUE(user_id, request_id)`` 提供请求幂等；``request_id`` 为空时容许重复行。
+    - 额度按 ``created_at`` 的本地日期统计，本表不保存额度上限（由环境变量提供）。
+    """
+
+    __tablename__ = "ai_usage_ledger"
+    __table_args__ = (
+        UniqueConstraint("user_id", "request_id", name="uq_ai_usage_user_request"),
+        Index("ix_ai_usage_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    conversation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assistant_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    operation: Mapped[str] = mapped_column(
+        Text, nullable=False, default="chat", server_default=text("'chat'")
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="settled", server_default=text("'settled'")
+    )
+    units: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
 class PasswordReset(Base):
     """一次性密码重置凭据（契约 `C-DATA-AUTH@1`）：``used_at`` 非空即已消费。"""
 
@@ -523,4 +556,5 @@ __all__ = [
     "ActivityResource",
     "TaskSubmission",
     "SubmissionPrecheck",
+    "AiUsageLedger",
 ]

@@ -218,6 +218,15 @@ def scan_and_remind(now: datetime | None = None) -> int:
 # --------------------------------------------------------------------------- #
 def _handle_task(db: Session, task: Task, now: datetime) -> int:
     """按成员状态分级处理单个任务，返回新增通知条数。"""
+    # 每轮先按当前截止时间版本清理旧提醒（`C-REMINDER-STALE@1`）：
+    # 改期后旧提醒立即失效；截止时间清空/无法解析时全部失效，历史记录保留。
+    deadline = _parse_deadline(task.deadline)
+    notify_service.stale_task_reminders(
+        db,
+        task_id=int(task.id),
+        current_version=_deadline_version(deadline) if deadline is not None else None,
+    )
+
     members = member_service.effective_members(db, task)
     if not members:
         # 无任何 approved 成员（含 legacy 负责人缺失）：回落为任务级发布者提醒
@@ -231,7 +240,6 @@ def _handle_task(db: Session, task: Task, now: datetime) -> int:
         )
         return created
 
-    deadline = _parse_deadline(task.deadline)
     if deadline is None:
         logger.warning(
             "催办扫描：task_id=%s member=- level=- result=skip，"

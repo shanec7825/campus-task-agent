@@ -6,6 +6,7 @@ import type {
   AiChatResult,
   AiConversationDetail,
   AiConversationList,
+  AiUsage,
   Draft,
   ExtractResult,
   ReviewResult,
@@ -54,11 +55,17 @@ export function streamParse(
     is_final: isFinal
   })
 }
-/** 权限内只读问答；`conversationId` 缺省时由后端新建会话 */
-export function chat(message: string, conversationId?: number): Promise<AiChatResult> {
+/** 权限内只读问答；`conversationId` 缺省时由后端新建会话，`requestId` 用于重试幂等 */
+export function chat(message: string, conversationId?: number, requestId?: string): Promise<AiChatResult> {
   const body: Record<string, unknown> = { message }
   if (conversationId !== undefined) body.conversation_id = conversationId
+  if (requestId !== undefined) body.request_id = requestId
   return request<AiChatResult>('POST', '/api/agent/chat', body)
+}
+
+/** 当前用户今日 AI 问答额度与最近用量 */
+export function getUsage(limit = 20): Promise<AiUsage> {
+  return request<AiUsage>('GET', '/api/agent/usage', undefined, { limit })
 }
 
 /** 当前用户最近的会话 */

@@ -390,6 +390,8 @@ export interface NotificationItem {
   title: string
   content: string
   is_read: number
+  /** 改期/取消后失效的旧提醒（`C-REMINDER-STALE@1`）：历史保留，不计未读 */
+  stale: number
   created_at: string
 }
 
@@ -563,6 +565,8 @@ export interface AiChatResult {
   user_message: AiChatMessage
   assistant_message: AiChatMessage
   mock: boolean
+  /** 同一 request_id 的重放结果，不再新增消息或用量 */
+  replayed: boolean
 }
 
 /** 会话摘要（`AiConversationSummary`） */
@@ -583,6 +587,54 @@ export interface AiConversationList {
 export interface AiConversationDetail {
   conversation: AiConversationSummary
   messages: AiChatMessage[]
+}
+
+/** AI 用量记录（`AiUsageItem`） */
+export interface AiUsageItem {
+  id: number
+  conversation_id: number | null
+  request_id: string | null
+  operation: string
+  status: string
+  units: number
+  created_at: string
+}
+
+/** 当日 AI 问答额度（`AiUsageOut`） */
+export interface AiUsage {
+  date: string
+  used: number
+  limit: number
+  remaining: number
+  items: AiUsageItem[]
+}
+
+/** 改期影响预览（`TaskChangeImpactOut`） */
+export interface TaskChangeMember {
+  id: number
+  name: string
+}
+
+export interface TaskChangeImpact {
+  task_id: number
+  title: string
+  current_deadline: string | null
+  proposed_deadline: string | null
+  reminders_reset: boolean
+  affected_members: TaskChangeMember[]
+  downstream_tasks: Array<{ id: number; title: string; status: string }>
+  notified_user_ids: number[]
+}
+
+/** PATCH 任务后的变更结果（`C-TASK-CHANGE@1`） */
+export interface TaskChangeSummary {
+  kind: 'deadline' | 'cancelled'
+  old_deadline: string | null
+  new_deadline: string | null
+  reminders_stale: number
+  notifications_created: number
+  downstream_tasks: Array<{ id: number; title: string }>
+  notified_user_ids: number[]
 }
 // --------------------------------------------------------------------------- //
 // 资料与成果审核（`C-RESOURCE@1` / `C-SUBMISSION@1` / `C-PRECHECK@1`）

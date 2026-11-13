@@ -2,16 +2,16 @@
 """建表与数据形态校验（契约 `C-DATA@2` / `C-DATA-AUTH@1`，阶段 2 口径）。
 
 断言范围：
-1. **22 张表**全部存在（阶段 1 的 11 张 + 阶段 2 的 organizations / org_members /
+1. **23 张表**全部存在（阶段 1 的 11 张 + 阶段 2 的 organizations / org_members /
    invitations / user_sessions / password_resets + 阶段 19 的 ai_conversations / ai_messages
    + AIW-03 的 task_dependencies + AIW-04 的 activity_resources / task_submissions /
-   submission_prechecks）；
+   submission_prechecks + AIW-05 的 ai_usage_ledger）；
 2. ``task_applications`` 列齐全且存在 ``uq_task_applications_task_user``
    （PRAGMA 元数据 + 真实重复插入双证，后者事务内回滚）；
 3. ``checkins`` 存在 ``UNIQUE(task_id, user_id)`` —— 双证同上；
 4. ``tasks.extras`` / ``tasks.reminder_rule`` 读回为 dict —— JSON 接口 + SQLite 原始列双证；
 5. ``progress_logs`` 表及其列存在；
-6. ``/api/health`` 的 ``tables`` 为 22 项且与期望集合完全一致；
+6. ``/api/health`` 的 ``tables`` 为 23 项且与期望集合完全一致；
 7. 阶段 2 认证列的落库形态（``users.status`` 默认 ``active``、``platform_admin`` 默认 0、
    ``tasks.org_id`` / ``activities.org_id`` 可空）与 ``task_members`` 具名唯一索引。
 
@@ -37,8 +37,8 @@ import urllib.request
 BASE_URL = os.getenv("T10_BASE_URL", "http://127.0.0.1:8021").rstrip("/")
 DB_PATH = (os.getenv("T10_DB_PATH") or "").strip()
 
-#: 期望的 22 张表（阶段 1 的 11 张 + 阶段 2 认证与组织的 5 张 + 阶段 19 的 AI 会话 2 张
-#: + AIW-03 的任务依赖边 1 张 + AIW-04 的资料与成果 3 张）
+#: 期望的 23 张表（阶段 1 的 11 张 + 阶段 2 认证与组织的 5 张 + 阶段 19 的 AI 会话 2 张
+#: + AIW-03 的任务依赖边 1 张 + AIW-04 的资料与成果 3 张 + AIW-05 的 AI 用量账本 1 张）
 EXPECTED_TABLES: frozenset[str] = frozenset(
     {
         "users",
@@ -63,6 +63,7 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
         "activity_resources",
         "task_submissions",
         "submission_prechecks",
+        "ai_usage_ledger",
     }
 )
 
@@ -78,7 +79,7 @@ TASK_APPLICATION_UNIQUE_NAME = "uq_task_applications_task_user"
 PROGRESS_LOG_COLUMNS: frozenset[str] = frozenset({"id", "task_id", "user_id", "content", "created_at"})
 
 #: 建表校验任务（deadline 留空，避免被催办扫描命中）
-TABLE_CHECK_TITLE = "T8 建表校验任务（22 表）"
+TABLE_CHECK_TITLE = "T8 建表校验任务（23 表）"
 TABLE_CHECK_EXTRAS = {"装备": "矿泉水", "联系人": "张三"}
 TABLE_CHECK_RULE = {"days_before": 3, "day_of": False, "on_overdue": False}
 
@@ -203,11 +204,11 @@ def main() -> int:
 
     conn = sqlite3.connect(DB_PATH, isolation_level=None)
     try:
-        # ---- 1) 22 张表 ----------------------------------------------------
+        # ---- 1) 23 张表 ----------------------------------------------------
         names = table_names(conn)
         missing = sorted(EXPECTED_TABLES - names)
-        expect(not missing, f"22 张表全部存在（缺失：{missing or '无'}；实际 {sorted(names)}）")
-        expect(len(EXPECTED_TABLES) == 22, f"期望表集合固定为 22 张（实际定义 {len(EXPECTED_TABLES)} 张）")
+        expect(not missing, f"23 张表全部存在（缺失：{missing or '无'}；实际 {sorted(names)}）")
+        expect(len(EXPECTED_TABLES) == 23, f"期望表集合固定为 23 张（实际定义 {len(EXPECTED_TABLES)} 张）")
 
         # ---- 2) checkins 唯一约束 ----------------------------------------
         unique_sets = unique_column_sets(conn, "checkins")
@@ -427,6 +428,49 @@ def main() -> int:
             f"（实际 {sorted(index_names(conn, 'submission_prechecks'))}）",
         )
 
+        expect("ai_usage_ledger" in names, "ai_usage_ledger 表存在（AIW-05 第 23 张表）")
+        usage_columns = column_names(conn, "ai_usage_ledger")
+        expect(
+            {
+                "id",
+                "user_id",
+                "conversation_id",
+                "assistant_message_id",
+                "request_id",
+                "operation",
+                "status",
+                "units",
+                "created_at",
+            }
+            <= usage_columns,
+            f"ai_usage_ledger 列齐全（实际 {sorted(usage_columns)}）",
+        )
+        usage_unique_sets = unique_column_sets(conn, "ai_usage_ledger")
+        expect(
+            ("user_id", "request_id") in usage_unique_sets
+            or ("request_id", "user_id") in usage_unique_sets,
+            "ai_usage_ledger 存在 UNIQUE(user_id, request_id)"
+            f"（实际唯一组合：{sorted(usage_unique_sets)}）",
+        )
+        expect(
+            "ix_ai_usage_user_created" in index_names(conn, "ai_usage_ledger"),
+            "ai_usage_ledger 存在 user_id/created_at 索引"
+            f"（实际 {sorted(index_names(conn, 'ai_usage_ledger'))}）",
+        )
+        notification_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
+        expect(
+            "stale" in notification_columns,
+            "notifications 含 stale 列（C-REMINDER-STALE@1）",
+        )
+        stale_column = notification_columns.get("stale")
+        expect(
+            stale_column is not None
+            and int(stale_column[3]) == 1
+            and str(stale_column[4]) == "0",
+            "notifications.stale 为 NOT NULL DEFAULT 0"
+            f"（实际 notnull={stale_column[3] if stale_column else None}, default={stale_column[4] if stale_column else None}）",
+        )
+
         # ---- 5) tasks 关键列 ---------------------------------------------
         task_columns = column_names(conn, "tasks")
         expect(
@@ -435,14 +479,14 @@ def main() -> int:
             f"（实际 {len(task_columns)} 列）",
         )
 
-        # ---- 6) 健康检查（22 表 + mock）------------------------------------
+        # ---- 6) 健康检查（23 表 + mock）------------------------------------
         health = api_ok("GET", "/api/health", label="健康检查")
         health_tables = sorted(health.get("tables") or [])
         expect(
             health_tables == sorted(EXPECTED_TABLES),
-            f"health.tables 与 22 张表完全一致（实际 {health.get('tables')}）",
+            f"health.tables 与 23 张表完全一致（实际 {health.get('tables')}）",
         )
-        expect(len(health_tables) == 22, f"health.tables 数量为 22（实际 {len(health_tables)}）")
+        expect(len(health_tables) == 23, f"health.tables 数量为 23（实际 {len(health_tables)}）")
         expect(health.get("mock") is True, f"health.mock 为 true（实际 {health.get('mock')}）")
 
         # ---- 7) tasks.extras / reminder_rule 落库形态 ---------------------
@@ -517,7 +561,7 @@ def main() -> int:
     finally:
         conn.close()
 
-    print(f"---- verify_tables.py 全部通过：{_passed} 项断言（22 表 + 阶段 2 认证与组织列 + AI 会话表 + 依赖边表 + 资料与成果表）----")
+    print(f"---- verify_tables.py 全部通过：{_passed} 项断言（23 表 + 阶段 2 认证与组织列 + AI 会话表 + 依赖边表 + 资料与成果表 + AI 用量账本）----")
     return 0
 
 

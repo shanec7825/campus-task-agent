@@ -13,7 +13,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { decideApplication, listApplications } from '../api/applications'
 import { ApiError } from '../api/client'
-import { assignTask, listTasks, patchTask, verifyTask } from '../api/tasks'
+import { assignTask, getTaskChangeImpact, listTasks, patchTask, verifyTask } from '../api/tasks'
 import AssignDialog, { type AssignCandidate } from '../components/admin/AssignDialog.vue'
 import ReminderRuleForm, { DEFAULT_REMINDER_RULE } from '../components/admin/ReminderRuleForm.vue'
 import EmptyState from '../components/common/EmptyState.vue'
@@ -22,7 +22,7 @@ import LoadingState from '../components/common/LoadingState.vue'
 import StatusTag from '../components/task/StatusTag.vue'
 import { applicationStatusMeta, formatDeadline, memberStatusMeta } from '../components/task/TaskCard.vue'
 import { useUserStore } from '../stores/user'
-import type { ApplicationItem, ReminderRule, TaskItem, TaskMember } from '../types/models'
+import type { ApplicationItem, ReminderRule, TaskChangeImpact, TaskItem, TaskMember } from '../types/models'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -48,6 +48,18 @@ const deadlineVisible = ref(false)
 const deadlineTarget = ref<TaskItem | null>(null)
 const deadlineValue = ref<string | null>(null)
 const deadlineLoading = ref(false)
+/** 改期影响预览（`C-TASK-CHANGE-API@1`）：只读，确认后才走既有 PATCH */
+const changeImpact = ref<TaskChangeImpact | null>(null)
+const changeImpactLoading = ref(false)
+const changeImpactError = ref('')
+/** 只接受最后一次预览请求的响应，避免快速改期时旧响应覆盖新值 */
+let changeImpactSeq = 0
+const impactMemberNames = computed<string>(() =>
+  (changeImpact.value?.affected_members ?? []).map((member) => member.name).join('、')
+)
+const impactDownstreamTitles = computed<string>(() =>
+  (changeImpact.value?.downstream_tasks ?? []).map((task) => task.title).join('、')
+)
 /** 取消任务进行中的任务 id（防重复点击） */
 const cancelLoadingId = ref<number | null>(null)
 
@@ -228,7 +240,45 @@ async function submitVerify(): Promise<void> {
 function openDeadline(task: TaskItem): void {
   deadlineTarget.value = task
   deadlineValue.value = task.deadline ?? null
+  changeImpact.value = null
+  changeImpactError.value = ''
   deadlineVisible.value = true
+  void loadChangeImpact(task.id, deadlineValue.value)
+}
+
+/** 读取改期影响预览；失败只提示，不阻塞人工确认与既有 PATCH */
+async function loadChangeImpact(taskId: number, deadline: string | null): Promise<void> {
+  const seq = ++changeImpactSeq
+  changeImpactLoading.value = true
+  changeImpactError.value = ''
+  try {
+    const result = await getTaskChangeImpact(taskId, deadline)
+    if (seq !== changeImpactSeq) return
+    changeImpact.value = result
+  } catch (err) {
+    if (seq !== changeImpactSeq) return
+    changeImpact.value = null
+    changeImpactError.value = errorMessage(err)
+  } finally {
+    if (seq === changeImpactSeq) changeImpactLoading.value = false
+  }
+}
+
+function onDeadlineChange(value: string | null): void {
+  if (deadlineTarget.value) {
+    void loadChangeImpact(deadlineTarget.value.id, value)
+  }
+}
+
+/** 关闭或保存后让在途预览响应失效。 */
+function invalidateImpact(): void {
+  changeImpactSeq += 1
+  changeImpactLoading.value = false
+}
+
+function closeDeadline(): void {
+  invalidateImpact()
+  deadlineVisible.value = false
 }
 
 async function saveDeadline(): Promise<void> {
@@ -238,13 +288,21 @@ async function saveDeadline(): Promise<void> {
   const deadline = deadlineValue.value ? deadlineValue.value : null
   deadlineLoading.value = true
   try {
-    await patchTask(target.id, { deadline })
+    const result = await patchTask(target.id, { deadline })
+    const change = result.change
+    const notified = change?.notifications_created ?? 0
     ElMessage.success(
       deadline
-        ? '截止时间已更新，后续提醒按新时间执行'
-        : '截止时间已清除，将不再触发基于截止时间的催办'
+        ? notified > 0
+          ? `截止时间已更新，已通知 ${notified} 位相关成员`
+          : '截止时间已更新，后续提醒按新时间执行'
+        : notified > 0
+          ? `截止时间已清除，已通知 ${notified} 位相关成员`
+          : '截止时间已清除，将不再触发基于截止时间的催办'
     )
     deadlineVisible.value = false
+    invalidateImpact()
+    changeImpact.value = null
     await load()
   } catch (err) {
     ElMessage.error(errorMessage(err))
@@ -742,7 +800,7 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="deadlineVisible" title="修改截止时间" width="460px" :close-on-click-modal="false">
+    <el-dialog v-model="deadlineVisible" title="修改截止时间" width="460px" :close-on-click-modal="false" @closed="invalidateImpact">
       <p class="verify-task">{{ deadlineTarget?.title }}</p>
       <el-form label-position="top">
         <el-form-item label="截止时间（留空表示清除 / 不设置截止）">
@@ -752,14 +810,45 @@ onMounted(async () => {
             value-format="YYYY-MM-DD HH:mm:ss"
             placeholder="选择截止时间，留空表示清除"
             class="deadline-picker"
+            @change="onDeadlineChange"
           />
         </el-form-item>
       </el-form>
+
+      <div v-if="changeImpactLoading" class="change-impact change-impact--loading">
+        正在计算改期影响…
+      </div>
+      <div v-else-if="changeImpactError" class="change-impact change-impact--error">
+        <p class="change-impact-line">影响预览读取失败：{{ changeImpactError }}</p>
+        <p class="change-impact-line">仍可保存；后端会在执行时再次校验权限并记录变更。</p>
+      </div>
+      <div v-else-if="changeImpact" class="change-impact">
+        <p class="change-impact-flow">
+          <span class="change-impact-label">当前截止</span>
+          <span>{{ changeImpact.current_deadline || '未设置' }}</span>
+          <span aria-hidden="true">→</span>
+          <span class="change-impact-label">拟调整</span>
+          <span>{{ changeImpact.proposed_deadline || '清除截止' }}</span>
+        </p>
+        <p class="change-impact-line">
+          提醒：{{ changeImpact.reminders_reset ? '旧提醒将失效，按新时间重新计算' : '截止时间未变化，不会重复通知' }}
+        </p>
+        <p class="change-impact-line">
+          受影响成员：{{ changeImpact.affected_members.length }} 人
+          <template v-if="impactMemberNames">（{{ impactMemberNames }}）</template>
+        </p>
+        <p class="change-impact-line">
+          后续任务：{{ changeImpact.downstream_tasks.length }} 个
+          <template v-if="impactDownstreamTitles">（{{ impactDownstreamTitles }}）</template>
+        </p>
+        <p class="change-impact-line">通知接收人：{{ changeImpact.notified_user_ids.length }} 人</p>
+      </div>
+
       <el-alert
         type="info"
         :closable="false"
         show-icon
-        title="改期后后续提醒按新时间执行；逾期扣分不会退回，成员仍可在新截止时间前后提交。"
+        title="确认保存后才会执行改期；旧提醒会失效，相关成员将收到变更通知，逾期扣分不会退回。"
       />
       <el-alert
         type="warning"
@@ -768,7 +857,7 @@ onMounted(async () => {
         title="留空保存将清除截止时间，之后不再触发基于截止时间的催办与逾期扣分。"
       />
       <template #footer>
-        <el-button :disabled="deadlineLoading" @click="deadlineVisible = false">取消</el-button>
+        <el-button :disabled="deadlineLoading" @click="closeDeadline">取消</el-button>
         <el-button type="primary" :loading="deadlineLoading" @click="saveDeadline">保存</el-button>
       </template>
     </el-dialog>
@@ -990,6 +1079,42 @@ onMounted(async () => {
 
 .deadline-picker {
   width: 100%;
+}
+
+.change-impact {
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: var(--el-border-radius-base);
+  background: var(--el-fill-color-light);
+}
+
+.change-impact--loading,
+.change-impact--error {
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+}
+
+.change-impact-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+
+.change-impact-label {
+  color: var(--el-text-color-secondary);
+}
+
+.change-impact-line {
+  margin: 2px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular);
+  word-break: break-word;
 }
 
 .verify-hint {

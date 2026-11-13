@@ -244,6 +244,40 @@ class TaskBrief(BaseModel):
     depends_on_ids: list[int] = Field(default_factory=list)
 
 
+class TaskChangeMember(BaseModel):
+    """改期/取消影响到的成员（契约 `C-TASK-CHANGE-API@1`）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+
+
+class TaskChangeDownstream(BaseModel):
+    """影响预览中的后续任务：只暴露契约字段，避免带出无权元数据。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    status: str
+
+
+class TaskChangeImpactOut(BaseModel):
+    """改期影响预览：只读，不写库、不发通知。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: int
+    title: str
+    current_deadline: str | None = None
+    proposed_deadline: str | None = None
+    reminders_reset: bool = False
+    affected_members: list[TaskChangeMember] = Field(default_factory=list)
+    downstream_tasks: list[TaskChangeDownstream] = Field(default_factory=list)
+    notified_user_ids: list[int] = Field(default_factory=list)
+
+
 class TaskGraphNode(BaseModel):
     """共用图谱节点（`C-ACTIVITY-GRAPH@1`）：时间字段缺失保持 ``None``，不补值。"""
 
@@ -584,6 +618,7 @@ class NotificationOut(BaseModel):
     title: str
     content: str
     is_read: int
+    stale: int = 0
     created_at: str
 
 
@@ -793,6 +828,8 @@ class AiChatIn(BaseModel):
 
     conversation_id: int | None = None
     message: str = Field(max_length=2000)
+    # 客户端请求幂等键（`C-AI-USAGE@1`）：同一用户同一键只生成一次回答与账本。
+    request_id: str | None = Field(default=None, max_length=64)
 
 
 class AiCitation(BaseModel):
@@ -824,6 +861,34 @@ class AiChatOut(BaseModel):
     user_message: AiMessageOut
     assistant_message: AiMessageOut
     mock: bool = False
+    # 同一 request_id 重放时返回首次结果，不再新增消息或账本。
+    replayed: bool = False
+
+
+class AiUsageItem(BaseModel):
+    """本人最近一条 AI 用量记录。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    conversation_id: int | None = None
+    request_id: str | None = None
+    operation: str
+    status: str
+    units: int
+    created_at: str
+
+
+class AiUsageOut(BaseModel):
+    """当日 AI 问答额度（`C-AI-USAGE@1`）：只统计本人 ``settled`` 记录。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    date: str
+    used: int
+    limit: int
+    remaining: int
+    items: list[AiUsageItem] = Field(default_factory=list)
 
 
 class AiConversationSummary(BaseModel):

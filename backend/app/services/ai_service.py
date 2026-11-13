@@ -15,17 +15,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import case, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.agents import llm_client, prompts
 from app.errors import ApiError
-from app.models import Activity, AiConversation, AiMessage, Task, User
+from app.models import Activity, AiConversation, AiMessage, AiUsageLedger, Task, User
 from app.schemas import (
     AiChatOut,
     AiCitation,
@@ -33,6 +36,8 @@ from app.schemas import (
     AiConversationListOut,
     AiConversationSummary,
     AiMessageOut,
+    AiUsageItem,
+    AiUsageOut,
 )
 from app.services import authz
 
@@ -48,6 +53,87 @@ ROLE_ASSISTANT = "assistant"
 
 ERR_NOT_FOUND = 4040
 ERR_INVALID_INPUT = 4001
+ERR_CONFLICT = 4090
+ERR_QUOTA_EXCEEDED = 4290
+
+#: 每日问答次数上限默认值（`C-AI-USAGE@1`）；0 表示当天不可生成，但协作功能不受影响。
+DEFAULT_DAILY_QUOTA = 50
+#: 请求幂等键格式：1–64 位字母、数字、下划线或连字符。
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _quota_limit() -> int:
+    raw = os.getenv("AI_DAILY_QUOTA", str(DEFAULT_DAILY_QUOTA)).strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("AI_DAILY_QUOTA=%r 非法，回退默认 %s", raw, DEFAULT_DAILY_QUOTA)
+        return DEFAULT_DAILY_QUOTA
+    return max(0, value)
+
+
+def _today_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _used_today(db: Session, user_id: int) -> int:
+    total = db.execute(
+        select(func.coalesce(func.sum(AiUsageLedger.units), 0)).where(
+            AiUsageLedger.user_id == int(user_id),
+            AiUsageLedger.status == "settled",
+            func.substr(AiUsageLedger.created_at, 1, 10) == _today_text(),
+        )
+    ).scalar_one()
+    return int(total or 0)
+
+
+def _usage_item(ledger: AiUsageLedger) -> AiUsageItem:
+    return AiUsageItem.model_validate(ledger)
+
+
+def _replay(db: Session, user: User, request_id: str) -> AiChatOut | None:
+    """按 ``(user_id, request_id)`` 重放首次成功回答；未找到返回 None。"""
+    ledger = db.execute(
+        select(AiUsageLedger).where(
+            AiUsageLedger.user_id == int(user.id),
+            AiUsageLedger.request_id == request_id,
+        )
+    ).scalars().first()
+    if ledger is None:
+        return None
+    if (
+        ledger.status != "settled"
+        or ledger.conversation_id is None
+        or ledger.assistant_message_id is None
+    ):
+        raise ApiError(ERR_CONFLICT, "该请求正在处理中，请稍后重试")
+    conversation = db.get(AiConversation, int(ledger.conversation_id))
+    assistant = db.get(AiMessage, int(ledger.assistant_message_id))
+    if (
+        conversation is None
+        or assistant is None
+        or int(conversation.user_id) != int(user.id)
+    ):
+        raise ApiError(ERR_CONFLICT, "该请求已处理，但原回答不可用，请重新提问")
+    user_message = db.execute(
+        select(AiMessage)
+        .where(
+            AiMessage.conversation_id == int(conversation.id),
+            AiMessage.role == ROLE_USER,
+            AiMessage.id < int(assistant.id),
+        )
+        .order_by(AiMessage.id.desc())
+        .limit(1)
+    ).scalars().first()
+    if user_message is None:
+        raise ApiError(ERR_CONFLICT, "该请求已处理，但原回答不可用，请重新提问")
+    return AiChatOut(
+        conversation_id=int(conversation.id),
+        user_message=_message_out(user_message),
+        assistant_message=_message_out(assistant),
+        mock=bool(assistant.mock),
+        replayed=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -239,20 +325,47 @@ def _summary(db: Session, conversation: AiConversation) -> AiConversationSummary
     )
 
 
-def chat(db: Session, user: User, *, conversation_id: int | None, message: str) -> AiChatOut:
+def chat(
+    db: Session,
+    user: User,
+    *,
+    conversation_id: int | None,
+    message: str,
+    request_id: str | None = None,
+) -> AiChatOut:
     """执行一次只读问答并持久化用户与助手消息。
 
-    顺序：归属校验 → 读取可见上下文 → 结束只读事务 → 生成回答 → 写会话与消息。
-    模型调用期间不持有数据库事务；模型失败时直接返回错误，不写任何一行。
+    顺序：请求幂等检查 → 归属校验 → 额度检查 → 读取可见上下文 → 结束只读事务 →
+    生成回答 → 写会话、消息与用量账本。模型调用期间不持有数据库事务；模型失败时
+    直接返回错误，不写任何一行、不扣额度。
     """
     text = message.strip()
     if not text:
         raise ApiError(ERR_INVALID_INPUT, "消息不能为空")
 
+    normalized_request_id: str | None = None
+    if request_id is not None:
+        normalized_request_id = request_id.strip()
+        if not normalized_request_id or not REQUEST_ID_PATTERN.fullmatch(normalized_request_id):
+            raise ApiError(ERR_INVALID_INPUT, "request_id 格式无效")
+        replayed = _replay(db, user, normalized_request_id)
+        db.rollback()
+        if replayed is not None:
+            return replayed
+
     if conversation_id is not None:
         _get_conversation(db, user, conversation_id)
         # 只读校验后结束事务，避免模型调用期间持有 SQLite 读锁。
         db.rollback()
+
+    limit = _quota_limit()
+    used = _used_today(db, int(user.id))
+    db.rollback()
+    if used >= limit:
+        raise ApiError(
+            ERR_QUOTA_EXCEEDED,
+            "今日 AI 问答额度已用完；任务、通知与审批等协作功能仍可正常使用",
+        )
 
     items = _visible_context(db, user)
     db.rollback()
@@ -288,10 +401,44 @@ def chat(db: Session, user: User, *, conversation_id: int | None, message: str) 
         created_at=_now_text(),
     )
     db.add(user_message)
+    db.flush()
     db.add(assistant_message)
+    db.flush()
+
+    # 模型调用期间可能有并发请求已提交；写账本前在同一事务内二次校验（审查 I5）。
+    # SQLite 单写者下可缩小竞态窗口；这是次数软上限，不是分布式配额。
+    if _used_today(db, int(user.id)) >= limit:
+        db.rollback()
+        raise ApiError(
+            ERR_QUOTA_EXCEEDED,
+            "今日 AI 问答额度已用完；任务、通知与审批等协作功能仍可正常使用",
+        )
+
+    db.add(
+        AiUsageLedger(
+            user_id=int(user.id),
+            conversation_id=int(conversation.id),
+            assistant_message_id=int(assistant_message.id),
+            request_id=normalized_request_id,
+            operation="chat",
+            status="settled",
+            units=1,
+            created_at=_now_text(),
+        )
+    )
     conversation.updated_at = _now_text()
     try:
         db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if normalized_request_id is not None:
+            replayed = _replay(db, user, normalized_request_id)
+            db.rollback()
+            if replayed is not None:
+                return replayed
+            logger.warning("并发请求唯一约束冲突且未找到可重放结果: %s", exc)
+            raise ApiError(ERR_CONFLICT, "请求冲突，请稍后重试") from exc
+        raise
     except Exception:
         db.rollback()
         raise
@@ -303,6 +450,27 @@ def chat(db: Session, user: User, *, conversation_id: int | None, message: str) 
         user_message=_message_out(user_message),
         assistant_message=_message_out(assistant_message),
         mock=mock,
+        replayed=False,
+    )
+
+
+def get_usage(db: Session, user: User, limit: int = 20) -> AiUsageOut:
+    """返回本人今日问答额度与最近用量记录（`C-AI-USAGE@1`）。"""
+    used = _used_today(db, int(user.id))
+    quota = _quota_limit()
+    bounded = max(1, min(int(limit), 50))
+    rows = db.execute(
+        select(AiUsageLedger)
+        .where(AiUsageLedger.user_id == int(user.id))
+        .order_by(AiUsageLedger.id.desc())
+        .limit(bounded)
+    ).scalars().all()
+    return AiUsageOut(
+        date=_today_text(),
+        used=used,
+        limit=quota,
+        remaining=max(0, quota - used),
+        items=[_usage_item(row) for row in rows],
     )
 
 
@@ -343,4 +511,4 @@ def get_conversation(db: Session, user: User, conversation_id: int) -> AiConvers
     )
 
 
-__all__ = ["chat", "get_conversation", "list_conversations"]
+__all__ = ["chat", "get_conversation", "get_usage", "list_conversations"]

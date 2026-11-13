@@ -37,6 +37,10 @@ function shortTime(value: string | null): string {
 }
 
 async function send(): Promise<void> {
+  if (aiChat.quotaExhausted) {
+    ElMessage.warning('今日 AI 问答额度已用完；任务、通知与审批等协作功能仍可正常使用')
+    return
+  }
   try {
     const sent = await aiChat.send()
     if (sent) expanded.value = true
@@ -56,6 +60,7 @@ function openFull(): void {
 onMounted(() => {
   // 失败不阻塞当前页面；已有消息时保留内容
   void aiChat.restore()
+  if (!aiChat.usage) void aiChat.loadUsage()
 })
 </script>
 
@@ -76,7 +81,7 @@ onMounted(() => {
           :autosize="{ minRows: 1, maxRows: 3 }"
           maxlength="2000"
           resize="none"
-          :disabled="aiChat.sending"
+          :disabled="aiChat.sending || aiChat.quotaExhausted"
           placeholder="问 AI：这项事务接下来做什么？"
           aria-label="向情境助手提问"
           @keydown.enter.exact.prevent="send"
@@ -85,7 +90,7 @@ onMounted(() => {
           class="dock-send"
           type="primary"
           :loading="aiChat.sending"
-          :disabled="aiChat.sending || aiChat.historyLoading || aiChat.input.trim().length === 0"
+          :disabled="aiChat.sending || aiChat.historyLoading || aiChat.quotaExhausted || aiChat.input.trim().length === 0"
           @click="send"
         >
           发送

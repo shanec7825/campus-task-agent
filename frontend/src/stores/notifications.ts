@@ -20,8 +20,9 @@ export const useNotificationsStore = defineStore('notifications', {
   }),
 
   getters: {
-    /** 未读通知（展示用，保持后端顺序） */
-    unreadItems: (state): NotificationItem[] => state.items.filter((item) => item.is_read === 0)
+    /** 未读通知（展示用，保持后端顺序；已失效提醒不计入未读） */
+    unreadItems: (state): NotificationItem[] =>
+      state.items.filter((item) => item.is_read === 0 && item.stale === 0)
   },
 
   actions: {
@@ -43,7 +44,7 @@ export const useNotificationsStore = defineStore('notifications', {
       const result = await readNotifications(ids)
       const idSet = new Set(ids)
       for (const item of this.items) {
-        if (idSet.has(item.id)) item.is_read = 1
+        if (idSet.has(item.id) && item.stale === 0) item.is_read = 1
       }
       this.unread = Math.max(0, this.unread - result.updated)
     },
@@ -59,7 +60,7 @@ export const useNotificationsStore = defineStore('notifications', {
         return false
       }
       this.items.unshift(item)
-      if (item.is_read === 0) this.unread += 1
+      if (item.is_read === 0 && item.stale === 0) this.unread += 1
       return true
     },
 

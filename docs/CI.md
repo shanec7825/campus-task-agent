@@ -5,7 +5,7 @@ GitHub Actions 在 push、pull request 和手动触发时执行 `.github/workflo
 
 | 检查 | 环境 | 内容 |
 |---|---|---|
-| Backend reliability | Ubuntu / Windows，Python 3.12 | 逐人成员状态、开始/截止时间、改期、补交、积分幂等、迁移与权限回归；并执行认证、邀请、组织权限、活动层级、活动工作流（负责人可见性、无组织活动发布授权）、AI 只读问答（会话持久化、可见范围引用、跨账号隔离）、任务依赖图（多前置、环与跨范围拒绝、活动/任务图谱一致性）与资料/成果审核（权限内资料检索、成果版本、规则预审、旧稿不可批准新稿）行为套件 |
+| Backend reliability | Ubuntu / Windows，Python 3.12 | 逐人成员状态、开始/截止时间、改期、补交、积分幂等、迁移与权限回归；并执行认证、邀请、组织权限、活动层级、活动工作流（负责人可见性、无组织活动发布授权）、AI 只读问答（会话持久化、可见范围引用、跨账号隔离）、任务依赖图（多前置、环与跨范围拒绝、活动/任务图谱一致性）、资料/成果审核（权限内资料检索、成果版本、规则预审、旧稿不可批准新稿）与主动协作/额度（旧提醒失效、变更通知、请求幂等、零额度不影响协作）行为套件 |
 | Backend API and SSE integration | Ubuntu，Python 3.12 | 临时数据库启动后端，执行建表、报名、REST、mock AI、增量解析和 SSE/催办套件 |
 | Frontend build, voice and public source security checks | Ubuntu，Node.js 22 | 类型检查、生产构建、静态契约与语音切片算法，构建完成后执行既有凭证字面量与交付红线检查 |
 
@@ -23,6 +23,7 @@ python -m pytest tests/backend/test_ai_console.py -q
 python -m pytest tests/backend/test_aiw02_activity_scope.py -q
 python -m pytest tests/backend/test_task_graph.py -q
 python -m pytest tests/backend/test_aiw04_resource_review.py -q
+python -m pytest tests/backend/test_aiw05_proactive_quota.py -q
 bash tests/backend/run_all.sh
 npm ci --prefix frontend
 bash tests/frontend/run_all.sh

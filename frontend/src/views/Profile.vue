@@ -16,6 +16,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import { myApplications } from '../api/applications'
+import { getUsage } from '../api/agent'
 import { ApiError } from '../api/client'
 import { myCheckins } from '../api/checkin'
 import { myCredits } from '../api/credits'
@@ -28,6 +29,7 @@ import { applicationStatusMeta, formatDeadline, memberStatusMeta } from '../comp
 import { useNotificationsStore } from '../stores/notifications'
 import { useUserStore } from '../stores/user'
 import type {
+  AiUsage,
   ApplicationWithTask,
   CheckinItem,
   CreditsMe,
@@ -59,6 +61,11 @@ const applicationsError = ref('')
 
 const noticesLoading = ref(false)
 const noticesError = ref('')
+
+/** AI 用量（`C-AI-USAGE@1`）：额度只限制问答，不影响其他协作功能 */
+const aiUsage = ref<AiUsage | null>(null)
+const aiUsageLoading = ref(false)
+const aiUsageError = ref('')
 
 const currentUserId = computed<number | null>(() => userStore.user?.id ?? null)
 const displayName = computed<string>(() => userStore.displayName || '未登录用户')
@@ -103,7 +110,7 @@ function myMemberMeta(task: TaskItem) {
 const noticeItems = computed<NotificationItem[]>(() => notificationsStore.items)
 const unreadCount = computed<number>(() => notificationsStore.unread)
 const unreadIds = computed<number[]>(() =>
-  noticeItems.value.filter((item) => item.is_read === 0).map((item) => item.id)
+  noticeItems.value.filter((item) => item.is_read === 0 && item.stale === 0).map((item) => item.id)
 )
 
 /** 通知级别文案（通知 level 与任务状态是两套枚举，故在本页内映射） */
@@ -207,13 +214,27 @@ async function loadNotices(): Promise<void> {
   }
 }
 
+async function loadAiUsage(): Promise<void> {
+  aiUsageLoading.value = true
+  aiUsageError.value = ''
+  try {
+    aiUsage.value = await getUsage(5)
+  } catch (err) {
+    aiUsage.value = null
+    aiUsageError.value = errorMessage(err)
+  } finally {
+    aiUsageLoading.value = false
+  }
+}
+
 function refreshAll(): void {
   void Promise.allSettled([
     loadTasks(),
     loadCredits(),
     loadCheckins(),
     loadApplications(),
-    loadNotices()
+    loadNotices(),
+    loadAiUsage()
   ])
 }
 
@@ -266,7 +287,8 @@ onMounted(async () => {
     loadCredits(),
     loadCheckins(),
     loadApplications(),
-    loadNotices()
+    loadNotices(),
+    loadAiUsage()
   ])
   await nextTick()
   scrollToAnchor()
@@ -483,6 +505,40 @@ watch(
       </template>
     </section>
 
+    <section id="ai-usage" class="app-section-card section">
+      <header class="section-head">
+        <span class="card-title">AI 用量</span>
+        <span v-if="aiUsage" class="header-hint">
+          今日 {{ aiUsage.used }} / {{ aiUsage.limit }} 次
+        </span>
+      </header>
+
+      <LoadingState v-if="aiUsageLoading" :rows="2" />
+      <ErrorState
+        v-else-if="aiUsageError"
+        :message="aiUsageError"
+        detail="AI 用量加载失败；通知、任务与审批等功能不受影响。"
+        retryable
+        @retry="loadAiUsage"
+      />
+      <template v-else-if="aiUsage">
+        <p class="ai-usage-summary">
+          今日剩余 {{ aiUsage.remaining }} 次。额度只限制 AI 问答，任务、通知、报名、审批与验收照常可用。
+        </p>
+        <EmptyState
+          v-if="aiUsage.items.length === 0"
+          title="暂无 AI 用量记录"
+          description="向 AI 助手提问后会在这里记录用量。"
+        />
+        <ul v-else class="ai-usage-list">
+          <li v-for="item in aiUsage.items.slice(0, 5)" :key="item.id" class="ai-usage-item">
+            <span class="ai-usage-time">{{ shortTime(item.created_at) }}</span>
+            <span class="ai-usage-meta">{{ item.operation }} · {{ item.units }} 次</span>
+          </li>
+        </ul>
+      </template>
+    </section>
+
     <section id="checkins" class="app-section-card section">
       <header class="section-head">
         <span class="card-title">签到记录</span>
@@ -627,14 +683,15 @@ watch(
             v-for="item in noticeItems"
             :key="item.id"
             class="notice-item"
-            :class="{ unread: item.is_read === 0 }"
+            :class="{ unread: item.is_read === 0, stale: item.stale === 1 }"
           >
             <div class="notice-head">
               <el-tag :type="levelMeta(item.level).type" size="small" effect="light">
                 {{ levelMeta(item.level).text }}
               </el-tag>
               <span class="notice-title">{{ item.title }}</span>
-              <span v-if="item.is_read === 0" class="unread-flag">未读</span>
+              <el-tag v-if="item.stale === 1" type="info" size="small" effect="plain">已失效</el-tag>
+              <span v-if="item.is_read === 0 && item.stale === 0" class="unread-flag">未读</span>
               <span class="notice-time">{{ shortTime(item.created_at) }}</span>
             </div>
             <p class="notice-content">{{ item.content }}</p>
@@ -648,7 +705,12 @@ watch(
               >
                 查看任务 #{{ item.task_id }}
               </el-button>
-              <el-button v-if="item.is_read === 0" size="small" text @click="markRead(item.id)">
+              <el-button
+                v-if="item.is_read === 0 && item.stale === 0"
+                size="small"
+                text
+                @click="markRead(item.id)"
+              >
                 标记已读
               </el-button>
             </div>
@@ -989,6 +1051,43 @@ watch(
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 4px;
+}
+
+.notice-item.stale {
+  border-style: dashed;
+}
+
+.notice-item.stale .notice-title {
+  color: var(--app-text-muted);
+}
+
+.ai-usage-summary {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--app-text-secondary);
+  line-height: 1.7;
+}
+
+.ai-usage-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-usage-item {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: 14px;
+  color: var(--app-text-secondary);
+}
+
+.ai-usage-time {
+  color: var(--app-text-muted);
 }
 
 @media (max-width: 768px) {

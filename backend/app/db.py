@@ -66,6 +66,9 @@ def _table_exists(conn, table: str) -> bool:
 
 
 _ADD_NOTIFICATIONS_DEDUPE_KEY = "ALTER TABLE notifications ADD COLUMN dedupe_key TEXT"
+_ADD_NOTIFICATIONS_STALE = (
+    "ALTER TABLE notifications ADD COLUMN stale INTEGER NOT NULL DEFAULT 0"
+)
 
 _CREATE_DEDUPE_INDEX = (
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_notifications_dedupe_key "
@@ -154,6 +157,8 @@ def _migrate(conn) -> None:
     """幂等增量迁移（契约 `C-MIGRATION@1`）：只加列 / 加索引 / 补行，不删列不删行。"""
     if _table_exists(conn, "notifications") and "dedupe_key" not in _column_names(conn, "notifications"):
         conn.exec_driver_sql(_ADD_NOTIFICATIONS_DEDUPE_KEY)
+    if _table_exists(conn, "notifications") and "stale" not in _column_names(conn, "notifications"):
+        conn.exec_driver_sql(_ADD_NOTIFICATIONS_STALE)
     if _table_exists(conn, "notifications"):
         conn.exec_driver_sql(_CREATE_DEDUPE_INDEX)
 
@@ -200,8 +205,8 @@ def init_db() -> None:
     阶段 2 的 ``organizations`` / ``org_members`` / ``invitations`` / ``user_sessions`` /
     ``password_resets``、阶段 19 的 ``ai_conversations`` / ``ai_messages``、AIW-03 的
     ``task_dependencies``，以及 AIW-04 的 ``activity_resources`` / ``task_submissions`` /
-    ``submission_prechecks``）；随后
-    ``_migrate`` 对旧库补齐 ``notifications.dedupe_key``、去重索引、具名唯一索引
+    ``submission_prechecks``、AIW-05 的 ``ai_usage_ledger``）；随后
+    ``_migrate`` 对旧库补齐 ``notifications.dedupe_key``、``notifications.stale``、去重索引、具名唯一索引
     ``uq_task_members_task_user``、legacy ``approved`` 报名与逐人成员行、
     ``tasks.activity_id``，以及阶段 2 的 ``users`` 认证列、``tasks`` /
     ``activities`` 的 ``org_id`` 与组织相关索引，并把无密码旧账号标记为

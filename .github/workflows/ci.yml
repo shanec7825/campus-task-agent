@@ -25,6 +25,7 @@ jobs:
       MAAS_MOCK: '1'
       MAAS_API_KEY: ''
       RUN_SCHEDULER: '0'
+      AI_DAILY_QUOTA: '50'
       PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@v6
@@ -47,6 +48,8 @@ jobs:
         run: python -m pytest tests/backend/test_task_graph.py -q
       - name: Run AIW-04 resource and submission review suite
         run: python -m pytest tests/backend/test_aiw04_resource_review.py -q
+      - name: Run AIW-05 proactive collaboration and AI quota suite
+        run: python -m pytest tests/backend/test_aiw05_proactive_quota.py -q
 
   backend-integration:
     name: Backend API and SSE integration

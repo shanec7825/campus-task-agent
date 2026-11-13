@@ -11,6 +11,8 @@ import type {
   SubmissionListResult,
   SubmitPayload,
   TaskCreatePayload,
+  TaskChangeImpact,
+  TaskChangeSummary,
   TaskDetail,
   TaskItem,
   TaskListResult,
@@ -35,11 +37,17 @@ export function getTask(id: number): Promise<TaskDetail> {
   return request<TaskDetail>('GET', `/api/tasks/${id}`)
 }
 
+/** 改期影响预览（`C-TASK-CHANGE-API@1`）：只读，不写库、不发通知 */
+export function getTaskChangeImpact(id: number, deadline?: string | null): Promise<TaskChangeImpact> {
+  const query = deadline ? { deadline } : undefined
+  return request<TaskChangeImpact>('GET', `/api/tasks/${id}/change-impact`, undefined, query)
+}
+
 export function patchTask(
   id: number,
   p: Partial<TaskCreatePayload> & { status?: string }
-): Promise<TaskItem> {
-  return request<TaskItem>('PATCH', `/api/tasks/${id}`, p)
+): Promise<TaskItem & { change?: TaskChangeSummary }> {
+  return request<TaskItem & { change?: TaskChangeSummary }>('PATCH', `/api/tasks/${id}`, p)
 }
 
 /**
