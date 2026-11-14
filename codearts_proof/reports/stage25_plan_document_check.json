@@ -1,0 +1,247 @@
+{
+  "date": "2026-11-14",
+  "baseline": "0d4580998f91782c19c4f5200b60fea4f748715c",
+  "command": "python -X utf8 - (one-off document check; no project test code added)",
+  "cwd": "D:\\Users\\Lenovo\\Downloads\\campus-task-agent-delivery\\campus-task-agent",
+  "business_tests_run": false,
+  "independent_code_review": false,
+  "checks": [
+    {
+      "check": "all_planned_documents_exist",
+      "ok": true,
+      "detail": 26
+    },
+    {
+      "check": "local_markdown_links_resolve",
+      "ok": true,
+      "detail": {
+        "checked": 73,
+        "broken": []
+      }
+    },
+    {
+      "check": "R_ids_unique_and_complete",
+      "ok": true,
+      "detail": [
+        "R-01",
+        "R-02",
+        "R-03",
+        "R-04",
+        "R-05",
+        "R-06",
+        "R-07",
+        "R-08",
+        "R-09",
+        "R-10",
+        "R-11",
+        "R-12",
+        "R-13",
+        "R-14",
+        "R-15",
+        "R-16",
+        "R-17",
+        "R-18",
+        "R-19",
+        "R-20",
+        "R-21",
+        "R-22"
+      ]
+    },
+    {
+      "check": "D_ids_unique_and_complete",
+      "ok": true,
+      "detail": [
+        "D-01",
+        "D-02",
+        "D-03",
+        "D-04",
+        "D-05",
+        "D-06",
+        "D-07"
+      ]
+    },
+    {
+      "check": "AC_ids_unique_and_complete",
+      "ok": true,
+      "detail": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09",
+        "AC-10",
+        "AC-11",
+        "AC-12",
+        "AC-13",
+        "AC-14",
+        "AC-15",
+        "AC-16",
+        "AC-17"
+      ]
+    },
+    {
+      "check": "AIW-07_design_task_mapped",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-07_all_tasks_unstarted",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-08_design_task_mapped",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-08_all_tasks_unstarted",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-09_design_task_mapped",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-09_all_tasks_unstarted",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-10_design_task_mapped",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-10_all_tasks_unstarted",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-11_design_task_mapped",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-11_all_tasks_unstarted",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-12_design_task_mapped",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-12_all_tasks_unstarted",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-13_design_task_mapped",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "AIW-13_all_tasks_unstarted",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "ignored_ai-workbench\\roadmap.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "ignored_aiw07-validation-closure\\design.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "ignored_aiw08-navigation-roles\\design.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "ignored_aiw09-context-voice\\design.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "ignored_aiw10-documents-review\\design.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "ignored_aiw11-collaboration-actions\\design.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "ignored_aiw12-assets-quota\\design.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "ignored_aiw13-product-acceptance\\design.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "original_roadmap_snapshot_preserved",
+      "ok": true,
+      "detail": {
+        "sha256": "68c6f85c366e729c23aee61be6f92d4c68b45e66fa320bd7bc3460babfe14f57"
+      }
+    },
+    {
+      "check": "historical_file_unchanged_codearts_proof/ai_dialogue/stage24_整体验收.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "historical_file_unchanged_codearts_proof/reports/stage24_整体验收.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "historical_file_unchanged_codearts_proof/prompts/prompt迭代记录.md",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "no_business_code_changes",
+      "ok": true,
+      "detail": [
+        "codearts_proof/LOG.md",
+        "docs/HANDOFF.md"
+      ]
+    },
+    {
+      "check": "log_stage25_once",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "check": "diff_whitespace",
+      "ok": true,
+      "detail": null
+    }
+  ],
+  "passed": 34,
+  "failed": 0,
+  "closing_verification": {
+    "command": "python -X utf8 - (closing local link check) + git diff --check",
+    "local_links_checked": 68,
+    "broken_links": 0,
+    "business_code_changes": false,
+    "business_tests_run": false,
+    "note": "结果链接补入后再次检查；本次与首次文档集合不同，不合并累计链接计数。"
+  }
+}
