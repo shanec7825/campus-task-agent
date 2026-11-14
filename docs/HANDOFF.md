@@ -25,7 +25,7 @@
 - stage25 规划入库：`19eda9f` / CI `43553685701`；回填 `d1ceab2`。
 - stage26（AIW-07）：`f3fa0fb` / CI `43558695172`、回填 `0b325bd`；AC-01/03/09/14/15 与 AC-16 部分（mock）有 CLI 证据。
 - stage27（AIW-08）：`694a53b` / CI `43565975450`、回填 `ca74de1` / CI `43566318740`，均四 job success；未部署。
-- stage28（AIW-09 r1）本地新增：`ai_conversations.scope_type/scope_id`、`parse_sessions.user_id`；`POST /api/agent/chat` 作用域入参、`GET /api/agent/conversations` 作用域过滤与逐条可见性复核；`authz` 驱动的对象可见性（不存在与不可见统一 4040）、撤权后拒绝且保留行；前端 `aiChat` 按 `general/activity:<id>/task:<id>` 隔离视图、晚到结果只回原作用域、401/登录/退出三路径清理；`AgentDock` 作用域入口、完整页目标展示与「回到通用助手」。CI 登记 `test_aiw09_context_scope.py`。
+- stage28（AIW-09 r1）提交 `b13a349` / CI run `43569210554` 四个 job 全 success；未部署。本地新增：`ai_conversations.scope_type/scope_id`、`parse_sessions.user_id`；`POST /api/agent/chat` 作用域入参、`GET /api/agent/conversations` 作用域过滤与逐条可见性复核；`authz` 驱动的对象可见性（不存在与不可见统一 4040）、撤权后拒绝且保留行；前端 `aiChat` 按 `general/activity:<id>/task:<id>` 隔离视图、晚到结果只回原作用域、401/登录/退出三路径清理；`AgentDock` 作用域入口、完整页目标展示与「回到通用助手」。CI 登记 `test_aiw09_context_scope.py`。
 - stage28 验证：新增 8 passed、既有会话隔离 11 passed；后端 `run_all` EXIT=0（23 表/6 脚本）；前端 `run_all` 两次 EXIT=0（构建 4/4、契约 25/25、语音 21/21）；CLI 浏览器四项 8/8、3/3、3/3、3/3；安全红线 12 通过 / 1 失败（B5b 忽略目录历史产物）；独立审查三轮 1 Critical+6 Important → 0/1 → 0/0。
 - 历史命令/审查/截图详情见 [stage27 过程](../codearts_proof/ai_dialogue/stage27_信息架构与角色页面.md)、[stage24 报告](../codearts_proof/reports/stage24_整体验收.md)；不把历史通过数字算作本轮测试。
 - 本地安全 B5b 因忽略目录运行产物失败，保留该事实；CI 干净检出成功不等于本地那次检查成功。不删证据或放宽门禁。
@@ -62,4 +62,4 @@ AIW-00～08 为历史阶段交付，AIW-09 只完成 r1（会话作用域），�
 - 走查脚本位于 `work/aiw07/runner/aiw09_scope.mjs`、`aiw09_late.mjs`、`aiw09_account_switch.mjs`、`aiw09_full_page.mjs`（Git 忽略）；日志在 `outputs/aiw09/`。脚本用应用内导航或浏览器返回，避免整页 `goto` 重置 Pinia 内存缓存。
 - stage26 的 MCP doom loop 已停止使用；本轮全部浏览器结果为 Playwright CLI 产出，不写成 MCP 产出。
 - `AGENTS.md` 单步协议条款仍未提交，等待用户确认；不得随本阶段提交顺带带上。
-- 本轮阶段提交与本文档同批入库（提交号以 `git log -1 --format=%H` 为准）；对应 CI 结果由下一次触发按完整 SHA 回填，不为回填自身反复生成提交。
+- 本轮业务提交 `b13a349` 已推送，CI run `43569210554` 四个 job 全 success；本文档回填提交的 CI 只核对结果，不再为回填自身反复生成新提交。
