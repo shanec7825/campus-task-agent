@@ -929,6 +929,42 @@ export interface SubmissionListResult {
   items: SubmissionItem[]
 }
 // --------------------------------------------------------------------------- //
+// AI 任务树草案 / 成果归档（`C-AI-DRAFT@1` / `C-ARCHIVE@1`，S5 §2.2）
+// --------------------------------------------------------------------------- //
+
+/** 草案中的单个任务（`TaskDraftItem`）：只含可编辑的任务树字段，不含发布动作 */
+export interface TaskDraftItem {
+  key: string
+  title: string
+  sop_guide: string | null
+  deadline: string | null
+  depends_on_keys: string[]
+  parent_key: string | null
+}
+
+/** 草案参考资料来源（只读展示）：组织开放资料的 id 与标题 */
+export interface TaskDraftSource {
+  resource_id: number
+  title: string
+}
+
+/** AI 任务树草案返回（`POST /api/ai/task-draft`）：只读，不写库 */
+export interface TaskDraftResult {
+  activity_title: string
+  tasks: TaskDraftItem[]
+  sources: TaskDraftSource[]
+  /** mock 模式下的确定性草案 */
+  mock: boolean
+}
+
+/** 已验收成果归档请求体（`POST /api/org-resources/from-submission`） */
+export interface ArchiveSubmissionPayload {
+  submission_id: number
+  org_id: number
+  /** 缺省时服务端使用「任务标题 · 提交人姓名」 */
+  title?: string | null
+}
+// --------------------------------------------------------------------------- //
 // 组织资料库（`C-ORG-LIBRARY@1`）
 // --------------------------------------------------------------------------- //
 

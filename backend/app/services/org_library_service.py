@@ -24,14 +24,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import ApiError
-from app.models import OrgResource, Organization, User
+from app.models import OrgResource, Organization, Task, TaskMember, TaskSubmission, User
 from app.schemas import (
     OrgResourceCreateIn,
     OrgResourceFileIn,
     OrgResourceOut,
     OrgResourcePatchIn,
 )
-from app.services import authz, document_service, kb_service
+from app.services import authz, document_service, kb_service, submission_service
 
 logger = logging.getLogger(__name__)
 
@@ -350,10 +350,122 @@ def search_allowed(
     return scored[:capped]
 
 
+def archive_submission(
+    db: Session,
+    user: User,
+    submission_id: int,
+    org_id: int,
+    title: str | None = None,
+) -> OrgResource:
+    """把已验收成果复制为组织资料（`C-ARCHIVE@1`），默认关闭学生 AI 检索。
+
+    校验顺序：提交存在 → 任务可验收 → 最新版本且成员 ``verified`` → 组织可管理。
+    归档等同于成果审核，使用 ``submission_service.require_task_review`` 的窄口径
+    （发布者 / 组织管理员 / 活动负责人），**不使用** ``authz.can_manage_task``，
+    因此被指派的普通成员无权归档他人成果。
+    重复归档生成新资料行（非幂等）；落库失败时清理已复制文件。
+    """
+    submission = db.get(TaskSubmission, int(submission_id))
+    if submission is None:
+        raise ApiError(ERR_NOT_FOUND, "成果版本不存在", 404)
+    task = db.get(Task, int(submission.task_id))
+    if task is None:
+        raise ApiError(ERR_NOT_FOUND, "任务不存在", 404)
+    submission_service.require_task_review(db, user, task)
+
+    latest = submission_service.latest_submission(db, int(task.id), int(submission.user_id))
+    member = db.execute(
+        select(TaskMember).where(
+            TaskMember.task_id == int(task.id),
+            TaskMember.user_id == int(submission.user_id),
+        )
+    ).scalar_one_or_none()
+    if (
+        latest is None
+        or int(latest.id) != int(submission.id)
+        or member is None
+        or str(member.status) != "verified"
+    ):
+        raise ApiError(ERR_INVALID_PARAM, "只能归档已验收成果")
+
+    require_manager(db, user, org_id)
+
+    submitter = db.get(User, int(submission.user_id))
+    display_name = submitter.display_name if submitter is not None else None
+    submitter_name = str(display_name) if display_name else str(submission.user_id)
+    final_title = _normalize_title(
+        title if title is not None else f"{task.title} · {submitter_name}"[:200]
+    )
+    summary = f"来自任务「{task.title}」的已验收成果，提交人 {submitter_name}"[:2000]
+
+    fields: dict[str, object] = {
+        "org_id": int(org_id),
+        "title": final_title,
+        "summary": summary,
+        "created_by": int(user.id),
+        "allow_student_ai": 0,
+        "archived": 0,
+    }
+    copied: str | None = None
+
+    if submission.file_path:
+        source = submission_service.SUBMISSION_UPLOAD_ROOT / submission.file_path
+        if not source.is_file():
+            raise ApiError(ERR_NOT_FOUND, "成果文件不存在", 404)
+        data = source.read_bytes()
+        ext = Path(submission.file_path).suffix.lower()
+        relative = f"{int(org_id)}/{uuid.uuid4().hex}{ext}"
+        target = upload_root() / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        copied = relative
+        text_status, text = document_service.extract_text(
+            submission.file_name or source.name, data
+        )
+        fields.update(
+            {
+                "resource_type": "file",
+                "file_name": (submission.file_name or source.name)[:255],
+                "file_mime": submission.file_mime
+                or _MIME_BY_EXT.get(ext, "application/octet-stream"),
+                "file_size": len(data),
+                "file_path": relative,
+                "content_text": text or None,
+                "search_text": text or None,
+                "text_status": text_status,
+            }
+        )
+    elif (submission.resource_url or "").strip():
+        fields.update(
+            {
+                "resource_type": "link",
+                "url": _normalize_url(submission.resource_url or ""),
+                "content_text": None,
+                "search_text": None,
+                "text_status": "pending",
+            }
+        )
+    else:
+        raise ApiError(ERR_INVALID_PARAM, "该成果既没有文件也没有链接，无法归档")
+
+    row = OrgResource(**fields)
+    db.add(row)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        if copied is not None:
+            (upload_root() / copied).unlink(missing_ok=True)
+        raise
+    db.refresh(row)
+    return row
+
+
 __all__ = [
     "MANAGER_ROLES",
     "MAX_FILE_BYTES",
     "MAX_SEARCH_CANDIDATES",
+    "archive_submission",
     "create",
     "get",
     "list",

@@ -2,7 +2,7 @@
 """建表与数据形态校验（契约 `C-DATA@2` / `C-DATA-AUTH@1`，阶段 2 口径）。
 
 断言范围：
-1. **24 张表**全部存在（阶段 1 的 11 张 + 阶段 2 的 organizations / org_members /
+1. **26 张表**全部存在（阶段 1 的 11 张 + 阶段 2 的 organizations / org_members /
    invitations / user_sessions / password_resets + 阶段 19 的 ai_conversations / ai_messages
    + AIW-03 的 task_dependencies + AIW-04 的 activity_resources / task_submissions /
    submission_prechecks + AIW-05 的 ai_usage_ledger + AIW-14 的 library_links）；
@@ -11,7 +11,7 @@
 3. ``checkins`` 存在 ``UNIQUE(task_id, user_id)`` —— 双证同上；
 4. ``tasks.extras`` / ``tasks.reminder_rule`` 读回为 dict —— JSON 接口 + SQLite 原始列双证；
 5. ``progress_logs`` 表及其列存在；
-6. ``/api/health`` 的 ``tables`` 为 24 项且与期望集合完全一致；
+6. ``/api/health`` 的 ``tables`` 为 26 项且与期望集合完全一致；
 7. 阶段 2 认证列的落库形态（``users.status`` 默认 ``active``、``platform_admin`` 默认 0、
    ``tasks.org_id`` / ``activities.org_id`` 可空）与 ``task_members`` 具名唯一索引。
 
@@ -37,7 +37,7 @@ import urllib.request
 BASE_URL = os.getenv("T10_BASE_URL", "http://127.0.0.1:8021").rstrip("/")
 DB_PATH = (os.getenv("T10_DB_PATH") or "").strip()
 
-#: 期望的 24 张表（阶段 1 的 11 张 + 阶段 2 认证与组织的 5 张 + 阶段 19 的 AI 会话 2 张
+#: 期望的 26 张表（阶段 1 的 11 张 + 阶段 2 认证与组织的 5 张 + 阶段 19 的 AI 会话 2 张
 #: + AIW-03 的任务依赖边 1 张 + AIW-04 的资料与成果 3 张 + AIW-05 的 AI 用量账本 1 张
 #: + AIW-14 的个人参考链接 1 张）
 EXPECTED_TABLES: frozenset[str] = frozenset(
@@ -66,6 +66,8 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
         "submission_prechecks",
         "ai_usage_ledger",
         "library_links",
+        "org_resources",
+        "library_refs",
     }
 )
 
@@ -81,7 +83,7 @@ TASK_APPLICATION_UNIQUE_NAME = "uq_task_applications_task_user"
 PROGRESS_LOG_COLUMNS: frozenset[str] = frozenset({"id", "task_id", "user_id", "content", "created_at"})
 
 #: 建表校验任务（deadline 留空，避免被催办扫描命中）
-TABLE_CHECK_TITLE = "T8 建表校验任务（24 表）"
+TABLE_CHECK_TITLE = "T8 建表校验任务（26 表）"
 TABLE_CHECK_EXTRAS = {"装备": "矿泉水", "联系人": "张三"}
 TABLE_CHECK_RULE = {"days_before": 3, "day_of": False, "on_overdue": False}
 
@@ -206,11 +208,11 @@ def main() -> int:
 
     conn = sqlite3.connect(DB_PATH, isolation_level=None)
     try:
-        # ---- 1) 24 张表 ----------------------------------------------------
+        # ---- 1) 26 张表 ----------------------------------------------------
         names = table_names(conn)
         missing = sorted(EXPECTED_TABLES - names)
-        expect(not missing, f"24 张表全部存在（缺失：{missing or '无'}；实际 {sorted(names)}）")
-        expect(len(EXPECTED_TABLES) == 24, f"期望表集合固定为 24 张（实际定义 {len(EXPECTED_TABLES)} 张）")
+        expect(not missing, f"26 张表全部存在（缺失：{missing or '无'}；实际 {sorted(names)}）")
+        expect(len(EXPECTED_TABLES) == 26, f"期望表集合固定为 26 张（实际定义 {len(EXPECTED_TABLES)} 张）")
 
         # ---- 2) checkins 唯一约束 ----------------------------------------
         unique_sets = unique_column_sets(conn, "checkins")
@@ -472,6 +474,51 @@ def main() -> int:
             "library_links 存在 owner_id 索引"
             f"（实际 {sorted(index_names(conn, 'library_links'))}）",
         )
+        expect("org_resources" in names, "org_resources 表存在（V1 S3 第 25 张表）")
+        org_resource_columns = column_names(conn, "org_resources")
+        expect(
+            {
+                "id",
+                "org_id",
+                "title",
+                "summary",
+                "resource_type",
+                "url",
+                "file_name",
+                "file_mime",
+                "file_size",
+                "file_path",
+                "content_text",
+                "search_text",
+                "text_status",
+                "allow_student_ai",
+                "archived",
+                "created_by",
+                "created_at",
+                "updated_at",
+            }
+            <= org_resource_columns,
+            f"org_resources 列齐全（实际 {sorted(org_resource_columns)}）",
+        )
+        expect(
+            "ix_org_resources_org_allow" in index_names(conn, "org_resources"),
+            "org_resources 存在 (org_id, allow_student_ai, archived) 索引"
+            f"（实际 {sorted(index_names(conn, 'org_resources'))}）",
+        )
+
+        expect("library_refs" in names, "library_refs 表存在（V1 S4 第 26 张表）")
+        ref_columns = column_names(conn, "library_refs")
+        expect(
+            {"id", "owner_id", "resource_id", "added_at", "last_used_at"} <= ref_columns,
+            f"library_refs 列齐全（实际 {sorted(ref_columns)}）",
+        )
+        ref_unique = unique_column_sets(conn, "library_refs")
+        expect(
+            ("owner_id", "resource_id") in ref_unique or ("resource_id", "owner_id") in ref_unique,
+            "library_refs 存在 UNIQUE(owner_id, resource_id)"
+            f"（实际唯一组合：{sorted(ref_unique)}）",
+        )
+
         library_sql = (
             "INSERT INTO library_links (owner_id, title, url, created_at, updated_at) "
             "VALUES (990010, 't', 'https://example.com', datetime('now','localtime'), "
@@ -525,14 +572,14 @@ def main() -> int:
             f"（实际 {len(task_columns)} 列）",
         )
 
-        # ---- 6) 健康检查（24 表 + mock）------------------------------------
+        # ---- 6) 健康检查（26 表 + mock）------------------------------------
         health = api_ok("GET", "/api/health", label="健康检查")
         health_tables = sorted(health.get("tables") or [])
         expect(
             health_tables == sorted(EXPECTED_TABLES),
-            f"health.tables 与 24 张表完全一致（实际 {health.get('tables')}）",
+            f"health.tables 与 26 张表完全一致（实际 {health.get('tables')}）",
         )
-        expect(len(health_tables) == 24, f"health.tables 数量为 24（实际 {len(health_tables)}）")
+        expect(len(health_tables) == 26, f"health.tables 数量为 26（实际 {len(health_tables)}）")
         expect(health.get("mock") is True, f"health.mock 为 true（实际 {health.get('mock')}）")
 
         # ---- 7) tasks.extras / reminder_rule 落库形态 ---------------------
@@ -607,7 +654,7 @@ def main() -> int:
     finally:
         conn.close()
 
-    print(f"---- verify_tables.py 全部通过：{_passed} 项断言（24 表 + 阶段 2 认证与组织列 + AI 会话表 + 依赖边表 + 资料与成果表 + AI 用量账本 + 个人参考链接表）----")
+    print(f"---- verify_tables.py 全部通过：{_passed} 项断言（26 表 + 阶段 2 认证与组织列 + AI 会话表 + 依赖边表 + 资料与成果表 + AI 用量账本 + 个人参考链接表 + 组织资料表 + 引用收藏表）----")
     return 0
 
 

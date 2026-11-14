@@ -15,6 +15,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { listActivities } from '../api/activities'
 import { decideApplication, listApplications } from '../api/applications'
 import { ApiError } from '../api/client'
+import { archiveSubmission } from '../api/orgResources'
 import { assignTask, getTaskChangeImpact, getTaskSubmissions, listTasks, patchTask, verifyTask } from '../api/tasks'
 import { getTask } from '../api/tasks'
 import AssignDialog, { type AssignCandidate } from '../components/admin/AssignDialog.vue'
@@ -79,6 +80,33 @@ const verifyStaleError = ref('')
 let verifyStaleSeq = 0
 const verifyStaleCurrent = computed<boolean>(
   () => verifyMemberId.value !== undefined && verifyStaleUsers.value.includes(verifyMemberId.value)
+)
+
+/** 已验收成果归档（`C-ARCHIVE@1`）：仅在验收通过后打开，默认不允许学生 AI 检索 */
+const archiveVisible = ref(false)
+const archiveSubmissionId = ref<number | null>(null)
+const archiveTargetLabel = ref('')
+const archiveOrgId = ref<number | null>(null)
+const archiveTitle = ref('')
+const archiveLoading = ref(false)
+/** 本次会话已归档的成果 id：成功后禁用重复归档（重复提交会在服务端生成新资料行） */
+const archiveDoneIds = ref<number[]>([])
+/** 本次会话已归档的成员（`taskId:memberId`）：持久入口按成员禁用，避免重复归档 */
+const archivedMemberKeys = ref<string[]>([])
+/** 当前归档弹窗对应的任务 / 成员，用于成功后回写成员禁用状态 */
+const archiveTaskId = ref<number | null>(null)
+const archiveMemberId = ref<number | null>(null)
+
+const manageableOrgs = computed(() =>
+  userStore.orgs.filter(
+    (org) => org.status === 'active' && (org.role === 'admin' || org.role === 'collaborator')
+  )
+)
+
+const archiveDone = computed<boolean>(
+  () =>
+    archiveSubmissionId.value !== null &&
+    archiveDoneIds.value.includes(archiveSubmissionId.value)
 )
 
 /** 截止时间编辑（R4：改期后可继续提交并按新时间提醒） */
@@ -362,6 +390,8 @@ async function submitVerify(): Promise<void> {
     ElMessage.warning('请选择要验收的成员')
     return
   }
+  const acceptedMemberId = verifyMemberId.value
+  const targetTitle = target.title
   if (verifyChoice.value === 'pass' && verifyStaleCurrent.value) {
     ElMessage.warning('该成员预审已过期，请成员重新预审后再验收通过；退回不受影响')
     return
@@ -386,10 +416,99 @@ async function submitVerify(): Promise<void> {
     }
     verifyVisible.value = false
     await load()
+    // 归档入口只在验收通过后出现：退回的成果不允许归档
+    if (verifyChoice.value === 'pass') {
+      await openArchive(target.id, targetTitle, acceptedMemberId)
+    }
   } catch (err) {
     ElMessage.error(errorMessage(err))
   } finally {
     verifyLoading.value = false
+  }
+}
+
+/** 已验收成员：只有 verified 成员的成果可归档（`C-ARCHIVE@1`） */
+function verifiedMembers(task: TaskItem): TaskMember[] {
+  return (task.members ?? []).filter((member) => member.status === 'verified')
+}
+
+function memberArchiveKey(taskId: number, memberId: number): string {
+  return `${taskId}:${memberId}`
+}
+
+function isMemberArchived(task: TaskItem, memberId: number): boolean {
+  return archivedMemberKeys.value.includes(memberArchiveKey(task.id, memberId))
+}
+
+/** 全部已验收成员都已归档时禁用持久入口 */
+function allVerifiedArchived(task: TaskItem): boolean {
+  const members = verifiedMembers(task)
+  return members.length > 0 && members.every((member) => isMemberArchived(task, member.user_id))
+}
+
+/** 持久归档入口：已验收成员逐人归档，仍走 openArchive 取该成员 latest 提交 */
+function archiveVerifiedMember(task: TaskItem, command: string | number | object): void {
+  const memberId = typeof command === 'number' ? command : Number(command)
+  if (!Number.isFinite(memberId)) return
+  if (isMemberArchived(task, memberId)) return
+  if (!verifiedMembers(task).some((member) => member.user_id === memberId)) return
+  void openArchive(task.id, task.title, memberId)
+}
+
+/** 验收通过后的归档入口：只取该成员最新成果，组织默认取第一个可管理组织 */
+async function openArchive(taskId: number, taskTitle: string, memberId: number): Promise<void> {
+  if (manageableOrgs.value.length === 0) {
+    ElMessage.warning('没有可管理的组织，无法归档到资料库')
+    return
+  }
+  try {
+    const list = await getTaskSubmissions(taskId)
+    const latest = list.items.find((item) => item.user_id === memberId && item.latest)
+    if (!latest) {
+      ElMessage.warning('未找到该成员的最新成果，暂不能归档')
+      return
+    }
+    const memberName = latest.user_name || `用户 #${memberId}`
+    archiveTaskId.value = taskId
+    archiveMemberId.value = memberId
+    archiveSubmissionId.value = latest.id
+    archiveTargetLabel.value = `${taskTitle} · ${memberName}`
+    archiveTitle.value = ''
+    archiveOrgId.value = manageableOrgs.value[0].org_id
+    archiveVisible.value = true
+  } catch (err) {
+    ElMessage.error(errorMessage(err))
+  }
+}
+
+/** 归档已验收成果：服务端固定关闭学生 AI 检索，重复归档会生成新资料行 */
+async function submitArchive(): Promise<void> {
+  const submissionId = archiveSubmissionId.value
+  if (submissionId === null || archiveLoading.value || archiveDone.value) return
+  if (archiveOrgId.value === null) {
+    ElMessage.warning('请选择归档组织')
+    return
+  }
+  archiveLoading.value = true
+  try {
+    const resource = await archiveSubmission({
+      submission_id: submissionId,
+      org_id: archiveOrgId.value,
+      title: archiveTitle.value.trim() || null
+    })
+    archiveDoneIds.value = [...archiveDoneIds.value, submissionId]
+    if (archiveTaskId.value !== null && archiveMemberId.value !== null) {
+      const memberKey = memberArchiveKey(archiveTaskId.value, archiveMemberId.value)
+      archivedMemberKeys.value = [...new Set([...archivedMemberKeys.value, memberKey])]
+    }
+    ElMessage.success(
+      `已归档《${resource.title}》：默认不允许学生 AI 检索，需在 Library 再开启`
+    )
+    archiveVisible.value = false
+  } catch (err) {
+    ElMessage.error(errorMessage(err))
+  } finally {
+    archiveLoading.value = false
   }
 }
 
@@ -801,6 +920,28 @@ onMounted(async () => {
                     改截止时间
                   </el-button>
                   <el-button size="small" text @click="openAcceptance(asRow(task))">成果要求</el-button>
+                  <el-dropdown
+                    v-if="verifiedMembers(asRow(task)).length > 0"
+                    trigger="click"
+                    :disabled="allVerifiedArchived(asRow(task))"
+                    @command="archiveVerifiedMember(asRow(task), $event)"
+                  >
+                    <el-button size="small" text :disabled="allVerifiedArchived(asRow(task))">
+                      归档到资料库
+                    </el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item
+                          v-for="member in verifiedMembers(asRow(task))"
+                          :key="member.user_id"
+                          :command="member.user_id"
+                          :disabled="isMemberArchived(asRow(task), member.user_id)"
+                        >
+                          {{ member.user_name || `用户 #${member.user_id}` }}
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
                   <el-button size="small" text @click="openRule(asRow(task))">催办规则</el-button>
                   <el-button size="small" text @click="goDetail(task.id)">详情</el-button>
                   <el-button
@@ -899,6 +1040,28 @@ onMounted(async () => {
                     改截止时间
                   </el-button>
                   <el-button size="small" @click="openAcceptance(task)">成果要求</el-button>
+                  <el-dropdown
+                    v-if="verifiedMembers(task).length > 0"
+                    trigger="click"
+                    :disabled="allVerifiedArchived(task)"
+                    @command="archiveVerifiedMember(task, $event)"
+                  >
+                    <el-button size="small" :disabled="allVerifiedArchived(task)">
+                      归档到资料库
+                    </el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item
+                          v-for="member in verifiedMembers(task)"
+                          :key="member.user_id"
+                          :command="member.user_id"
+                          :disabled="isMemberArchived(task, member.user_id)"
+                        >
+                          {{ member.user_name || `用户 #${member.user_id}` }}
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
                   <el-button size="small" @click="openRule(task)">催办规则</el-button>
                   <el-button size="small" @click="goDetail(task.id)">详情</el-button>
                   <el-button
@@ -1016,6 +1179,64 @@ onMounted(async () => {
           @click="submitVerify"
         >
           {{ verifyChoice === 'pass' ? '确认通过' : '确认退回' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 已验收成果归档：仅在验收通过后由 openArchive 打开，默认关闭学生 AI 检索 -->
+    <el-dialog
+      v-model="archiveVisible"
+      title="归档到资料库"
+      width="520px"
+      :close-on-click-modal="false"
+    >
+      <div class="verify-body">
+        <p class="verify-task">{{ archiveTargetLabel }}</p>
+        <el-form label-position="top">
+          <el-form-item label="归档组织" required>
+            <el-select
+              v-model="archiveOrgId"
+              placeholder="选择可管理组织"
+              aria-label="归档组织"
+              class="archive-org-select"
+            >
+              <el-option
+                v-for="org in manageableOrgs"
+                :key="org.org_id"
+                :label="org.name"
+                :value="org.org_id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="资料标题（可选）">
+            <el-input
+              v-model="archiveTitle"
+              maxlength="120"
+              show-word-limit
+              :placeholder="`缺省：${archiveTargetLabel}`"
+            />
+          </el-form-item>
+        </el-form>
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="归档后默认不允许学生 AI 检索，需在 Library 再开启"
+          description="归档会复制该成果为新的组织资料；学生 AI 检索开关保持关闭，需要时由管理员在 Library 手动开启。"
+        />
+        <p v-if="archiveDone" class="verify-hint app-muted">
+          该成果本次已归档过：重复归档会再生成一条组织资料。
+        </p>
+      </div>
+      <template #footer>
+        <el-button :disabled="archiveLoading" @click="archiveVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="archiveLoading"
+          :disabled="archiveDone"
+          @click="submitArchive"
+        >
+          确认归档
         </el-button>
       </template>
     </el-dialog>
@@ -1357,6 +1578,10 @@ onMounted(async () => {
 }
 
 .deadline-picker {
+  width: 100%;
+}
+
+.archive-org-select {
   width: 100%;
 }
 

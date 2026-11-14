@@ -5,7 +5,7 @@
  * 下载走同源 Cookie，前端只负责拼 URL，不额外携带令牌。
  */
 import { request } from './client'
-import type { OrgResource } from '../types/models'
+import type { ArchiveSubmissionPayload, OrgResource } from '../types/models'
 
 export interface OrgResourceListResult {
   items: OrgResource[]
@@ -60,4 +60,13 @@ export function patchOrgResource(
 /** 文件下载地址：仅 `resource_type=file` 可用（链接资料打开 `url`） */
 export function downloadOrgResourceUrl(id: number): string {
   return `/api/org-resources/${id}/download`
+}
+/**
+ * 把已验收成果归档为组织资料（契约 `C-ARCHIVE@1`）。
+ * 归档结果固定 `allow_student_ai=0`，需辅导员在 Library 再显式开启学生 AI 检索。
+ */
+export function archiveSubmission(
+  payload: ArchiveSubmissionPayload
+): Promise<OrgResource> {
+  return request<OrgResource>('POST', '/api/org-resources/from-submission', payload)
 }

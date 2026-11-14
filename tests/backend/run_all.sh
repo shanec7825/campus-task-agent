@@ -5,7 +5,7 @@
 #   1. 用 mktemp 目录下的**临时 SQLite 库** + MAAS_MOCK=1 + RUN_SCHEDULER=0 启动后端，
 #      端口 8040（T5 独占；不占用 8000/5173，避免与人工演示冲突）；
 #   2. 依次执行 6 个验证脚本（任一失败立即以非 0 退出，set -e）：
-#      verify_tables（23 表）→ test_applications（R16 矩阵）→ test_api_e2e（apply/approve 全流程）
+#      verify_tables（26 表）→ test_applications（R16 矩阵）→ test_api_e2e（apply/approve 全流程）
 #      → test_agent_mock（P1 规则回归）→ test_agent_incremental（增量/纯值/红线）
 #      → test_sse_and_reminder（SSE + 三级催办）；
 #   3. 额外做一次「KB 不过滤模式」的观测运行（端口 8041 + KB_MIN_SIMILARITY=0），
@@ -214,7 +214,7 @@ export DATABASE_PATH="$DB_PATH"
 # --------------------------------------------------------------------------- #
 # 依次执行 6 个验证脚本（set -e：任一失败即跳到 cleanup 并以非 0 退出）
 # --------------------------------------------------------------------------- #
-run_step "① 建表与数据形态（23 表 + task_applications 唯一约束）" "verify_tables.py"
+run_step "① 建表与数据形态（26 表 + task_applications 唯一约束）" "verify_tables.py"
 run_step "② 报名审批矩阵（R16-AC1~AC16）" "test_applications.py"
 run_step "③ REST 全流程与错误码矩阵（apply/approve 语义）" "test_api_e2e.py"
 run_step "④ Agent mock 规则与知识库" "test_agent_mock.py"
@@ -251,4 +251,4 @@ else
 fi
 
 echo
-echo "===== T5 全部主验证通过（23 表 / 报名审批 / 链式增量 / SSE 催办） ====="
+echo "===== T5 全部主验证通过（26 表 / 报名审批 / 链式增量 / SSE 催办） ====="

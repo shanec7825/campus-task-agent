@@ -38,7 +38,7 @@ from app.schemas import (
     SubmissionAcceptance,
     SubmissionOut,
 )
-from app.services import authz, resource_service
+from app.services import authz, document_service, resource_service
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ ERR_FORBIDDEN = 4030
 ERR_CONFLICT = 4090
 ERR_INVALID_PARAM = 4001
 
-# 成果文件（`C-SUBMISSION-FILE@1`）：格式白名单与大小上限；不做第三方正文解析。
+# 成果文件（`C-SUBMISSION-FILE@1`）：格式白名单与大小上限；正文解析复用 `C-DOC-PARSE@1`。
 SUBMISSION_UPLOAD_ROOT = Path(__file__).resolve().parents[2] / "uploads" / "submissions"
 MAX_FILE_BYTES = 10 * 1024 * 1024
 ALLOWED_FILE_EXTS = {
@@ -56,7 +56,9 @@ ALLOWED_FILE_EXTS = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
-PARSEABLE_FILE_EXTS = frozenset({".txt", ".md"})
+PARSEABLE_FILE_EXTS = frozenset({".txt", ".md", ".pdf", ".docx"})
+# 预审模型 payload 的正文上限；规则检查仍使用全量正文（≤ MAX_TEXT_CHARS）
+MAX_PRECHECK_AI_CHARS = 8000
 
 # 提交策略（`C-SUBMISSION-POLICY@1`）的拒绝文案：前端本地校验与服务端保持一致。
 MSG_POLICY_EMPTY = "请按任务要求的成果提交方式提交"
@@ -220,18 +222,23 @@ def save_submission_file(task_id: int, filename: str, payload: bytes) -> dict[st
 
 
 def file_text_for_precheck(row: TaskSubmission) -> str | None:
-    """TXT/Markdown 读取前 8000 字符供规则/模型预审；PDF/DOCX 不解析。"""
+    """读取可解析成果正文供规则/模型预审（TXT/MD/PDF/DOCX），失败返回 None、不抛异常。
+
+    PDF/DOCX 复用 :func:`document_service.extract_text`（含页数/压缩比/字符上限）；
+    正文已截断到 ``MAX_TEXT_CHARS``。
+    """
     if not row.file_path:
         return None
     ext = Path(row.file_path).suffix.lower()
     if ext not in PARSEABLE_FILE_EXTS:
         return None
+    path = SUBMISSION_UPLOAD_ROOT / row.file_path
     try:
-        return (SUBMISSION_UPLOAD_ROOT / row.file_path).read_text(
-            encoding="utf-8", errors="replace"
-        )[:8000]
+        data = path.read_bytes()
     except OSError:
         return None
+    status, text = document_service.extract_text(row.file_name or path.name, data)
+    return text if status == "ready" else None
 
 
 def latest_submission(db: Session, task_id: int, user_id: int) -> TaskSubmission | None:
@@ -592,7 +599,7 @@ def precheck(db: Session, user: User, task: Task, submission_id: int) -> Prechec
         else []
     )
     digest = _requirement_digest(task, activity, resources)
-    # TXT/Markdown 文件正文在无文字说明时参与规则/模型预审；PDF/DOCX 不解析正文。
+    # 可解析成果（TXT/MD/PDF/DOCX）正文在无文字说明时参与规则/模型预审。
     file_text = file_text_for_precheck(submission)
     has_text = bool((submission.content or "").strip())
     checks_view = (
@@ -609,19 +616,15 @@ def precheck(db: Session, user: User, task: Task, submission_id: int) -> Prechec
     activity_snapshot = _activity_snapshot(activity)
     submission_snapshot = _submission_snapshot(submission)
     if file_text and not has_text:
-        submission_snapshot["content"] = file_text
+        # 规则检查（checks_view）已用全量正文；模型 payload 单独截断，避免 200k 正文撑大请求。
+        submission_snapshot["content"] = file_text[:MAX_PRECHECK_AI_CHARS]
     db.rollback()
 
     ai_summary, suggestions, mock, ai_error = _ai_suggestions(
         task_snapshot, activity_snapshot, submission_snapshot, resources
     )
-    if (
-        ai_error is None
-        and submission.file_path
-        and Path(submission.file_path).suffix.lower() not in PARSEABLE_FILE_EXTS
-        and not has_text
-    ):
-        ai_error = "PDF/DOCX 暂不解析正文，请补充文字说明"
+    if ai_error is None and submission.file_path and file_text is None and not has_text:
+        ai_error = "文件正文无法解析，请补充文字说明"
     summary = ai_summary or _mock_summary(checks)
 
     row = SubmissionPrecheck(

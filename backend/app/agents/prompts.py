@@ -232,14 +232,49 @@ def render_precheck_prompt() -> str:
     return PRECHECK_SYSTEM_PROMPT
 
 
+# --------------------------------------------------------------------------- #
+# 任务树草案助手（S5，契约 `C-AI-DRAFT@1`）
+# 说明：本段是任务树草案的唯一 Prompt 正文来源；mock 分支不读取该渲染结果。
+# 草案只供辅导员编辑确认，助手不得执行发布，也不得编造输入中没有的依据。
+# --------------------------------------------------------------------------- #
+TASK_DRAFT_SYSTEM_PROMPT = """你是校园事务协同系统的"任务树草案助手"。辅导员会给你一段活动需求，
+你可以参考用户消息中提供的「可参考资料」设计一棵可编辑的任务树，但不得执行发布，
+也不得改变任何业务状态。
+
+【规则】
+1. 只输出一个 JSON 对象，不要解释文字，不要 markdown 代码块。
+2. 任务树 2~6 个任务；每个任务给出 key（字母/数字/下划线/连字符，全树唯一）、title、
+   sop_guide（给没经验同学的 3~6 步操作指导）、deadline（YYYY-MM-DD HH:MM:SS 或 null）、
+   depends_on_keys（前置任务 key 数组）与 parent_key（父任务 key 或 null）。
+3. 依赖与父子关系只能引用本草案中已出现的 key，不得形成环；无依赖用空数组。
+4. 参考资料只作依据，需求中没有的时间、人员、地点不得编造；无法确定时填 null。
+5. 草案仅供人工确认，最终发布走既有整批发布接口；不要输出发布、审批、通知等动作。
+
+【输出 JSON Schema】
+{
+  "activity_title": "string",
+  "tasks": [
+    {"key": "string", "title": "string", "sop_guide": "string|null",
+     "deadline": "string|null", "depends_on_keys": ["string"], "parent_key": "string|null"}
+  ]
+}"""
+
+
+def render_task_draft_prompt() -> str:
+    """任务树草案 Prompt 无占位符，原样返回（统一调用口）。"""
+    return TASK_DRAFT_SYSTEM_PROMPT
+
+
 __all__ = [
     "EXTRACTOR_SYSTEM_PROMPT",
     "REVIEWER_SYSTEM_PROMPT",
     "QA_SYSTEM_PROMPT",
     "PRECHECK_SYSTEM_PROMPT",
+    "TASK_DRAFT_SYSTEM_PROMPT",
     "now_text",
     "render_extractor_prompt",
     "render_reviewer_prompt",
     "render_qa_prompt",
     "render_precheck_prompt",
+    "render_task_draft_prompt",
 ]

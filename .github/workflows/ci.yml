@@ -74,6 +74,10 @@ jobs:
         run: python -m pytest tests/backend/test_v1_library_refs.py -q
       - name: Run V1 AI context suite
         run: python -m pytest tests/backend/test_v1_ai_context.py -q
+      - name: Run V1 archive and precheck text suite
+        run: python -m pytest tests/backend/test_v1_archive_precheck.py -q
+      - name: Run V1 AI task draft suite
+        run: python -m pytest tests/backend/test_v1_task_draft.py -q
 
   backend-integration:
     name: Backend API and SSE integration

@@ -8,6 +8,7 @@
 * ``POST /api/agent/chat``         —— 权限内只读问答（契约 `C-AI-CHAT@1`）
 * ``GET /api/agent/conversations`` —— 本人最近会话
 * ``GET /api/agent/conversations/{id}`` —— 本人会话详情（跨账号 4040）
+* ``POST /api/ai/task-draft``      —— AI 任务树草案（契约 `C-AI-DRAFT@1`，不写库）
 
 问答只写 ``ai_conversations`` / ``ai_messages``，不改变任务、活动、通知等业务数据。
 
@@ -43,11 +44,13 @@ from app.schemas import (
     ReviewIn,
     StreamParseIn,
     StreamParseOut,
+    TaskDraftIn,
 )
-from app.services import ai_service
+from app.services import ai_service, task_draft_service
 
+# 同时承载既有 ``/api/agent/*`` 与 ``/api/ai/task-draft``（`C-AI-DRAFT@1`），
+# 因此不使用 router 级 prefix：各路由显式写全路径，既有 URL 保持不变。
 router = APIRouter(
-    prefix="/api/agent",
     tags=["agent"],
     dependencies=[Depends(require_csrf)],
 )
@@ -93,7 +96,7 @@ def _extract_out(payload: ExtractIn) -> ExtractOut:
     )
 
 
-@router.post("/extract")
+@router.post("/api/agent/extract")
 def extract(
     payload: ExtractIn,
     _current_user: User = Depends(get_current_user),
@@ -102,7 +105,7 @@ def extract(
     return ok(_extract_out(payload).model_dump())
 
 
-@router.post("/review")
+@router.post("/api/agent/review")
 def review(
     payload: ReviewIn,
     _current_user: User = Depends(get_current_user),
@@ -111,7 +114,7 @@ def review(
     return ok(reviewer.review(payload.draft).model_dump())
 
 
-@router.post("/stream/parse")
+@router.post("/api/agent/stream/parse")
 def stream_parse(
     payload: StreamParseIn,
     db: Session = Depends(get_db),
@@ -168,7 +171,7 @@ def stream_parse(
 # --------------------------------------------------------------------------- #
 # 只读问答（契约 `C-AI-CHAT@1`）：只写会话表，不改变业务数据。
 # --------------------------------------------------------------------------- #
-@router.post("/chat")
+@router.post("/api/agent/chat")
 def chat(
     payload: AiChatIn,
     db: Session = Depends(get_db),
@@ -188,7 +191,7 @@ def chat(
     )
 
 
-@router.get("/usage")
+@router.get("/api/agent/usage")
 def get_usage(
     limit: int = Query(20, ge=1, le=50),
     db: Session = Depends(get_db),
@@ -198,7 +201,7 @@ def get_usage(
     return ok(ai_service.get_usage(db, current_user, limit=limit).model_dump())
 
 
-@router.get("/conversations")
+@router.get("/api/agent/conversations")
 def list_conversations(
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=ai_service.MAX_CONVERSATION_LIST),
@@ -220,7 +223,7 @@ def list_conversations(
     )
 
 
-@router.get("/conversations/{conversation_id}")
+@router.get("/api/agent/conversations/{conversation_id}")
 def get_conversation(
     conversation_id: int,
     db: Session = Depends(get_db),
@@ -229,6 +232,23 @@ def get_conversation(
     """读取本人会话与消息；他人会话返回 4040。"""
     return ok(
         ai_service.get_conversation(db, current_user, conversation_id).model_dump()
+    )
+
+
+# --------------------------------------------------------------------------- #
+# AI 任务树草案（契约 `C-AI-DRAFT@1`）：只读生成，不写任何业务表。
+# --------------------------------------------------------------------------- #
+@router.post("/api/ai/task-draft", tags=["ai"])
+def task_draft(
+    payload: TaskDraftIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """按开放资料生成可编辑任务树草案；发布需辅导员确认后走既有整批发布接口。"""
+    return ok(
+        task_draft_service.generate(
+            db, current_user, payload.prompt, payload.org_id
+        ).model_dump()
     )
 
 

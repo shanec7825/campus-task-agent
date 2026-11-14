@@ -3606,5 +3606,193 @@ CHECKS = CHECKS + (
 )
 
 
+def check_task_draft_archive_ui(
+    rel_ai: str,
+    rel_archive: str,
+    rel_publish: str,
+    rel_admin: str,
+    rel_types: str,
+    src_dir: Path,
+) -> str:
+    """㊻ `C-AI-DRAFT@1` / `C-ARCHIVE@1`（前端）：草案只填行不自动提交 + 验收通过后归档入口。"""
+    ai = strip_ts_comments(load_text(src_dir / rel_ai))
+    archive = strip_ts_comments(load_text(src_dir / rel_archive))
+    publish = strip_ts_comments(load_text(src_dir / rel_publish))
+    admin = strip_ts_comments(load_text(src_dir / rel_admin))
+    types_text = strip_ts_comments(load_text(src_dir / rel_types))
+    problems: list[str] = []
+
+    if "generateTaskDraft" not in collect_exported_functions(ai):
+        problems.append(f"{rel_ai} 缺少导出函数 generateTaskDraft（C-AI-DRAFT@1）")
+    _require(problems, ai, "'POST', '/api/ai/task-draft'", rel_ai, "草案接口端点")
+
+    if "archiveSubmission" not in collect_exported_functions(archive):
+        problems.append(f"{rel_archive} 缺少导出函数 archiveSubmission（C-ARCHIVE@1）")
+    _require(
+        problems,
+        archive,
+        "'/api/org-resources/from-submission'",
+        rel_archive,
+        "归档接口端点",
+    )
+    try:
+        archive_body, _line = function_body(archive, "archiveSubmission")
+    except ContractError as exc:
+        problems.append(f"{rel_archive} {exc}")
+    else:
+        if "allow_student_ai" in archive_body:
+            problems.append(
+                f"{rel_archive} 的 archiveSubmission 不应携带 allow_student_ai"
+                "（默认关闭由服务端固定）"
+            )
+
+    draft_iface = re.search(r"export interface TaskDraftItem\s*\{([^}]*)\}", types_text, re.S)
+    if draft_iface is None:
+        problems.append(f"{rel_types} 缺少 `export interface TaskDraftItem`（C-AI-DRAFT@1）")
+    else:
+        for field in ("key", "title", "sop_guide", "deadline", "depends_on_keys", "parent_key"):
+            if not re.search(rf"\b{field}\s*:", draft_iface.group(1)):
+                problems.append(
+                    f"{rel_types} 的 TaskDraftItem 缺少字段 `{field}`（C-AI-DRAFT@1）"
+                )
+
+    result_iface = re.search(r"export interface TaskDraftResult\s*\{([^}]*)\}", types_text, re.S)
+    if result_iface is None:
+        problems.append(f"{rel_types} 缺少 `export interface TaskDraftResult`（C-AI-DRAFT@1）")
+    else:
+        for field in ("activity_title", "tasks", "sources", "mock"):
+            if not re.search(rf"\b{field}\s*:", result_iface.group(1)):
+                problems.append(
+                    f"{rel_types} 的 TaskDraftResult 缺少字段 `{field}`（C-AI-DRAFT@1）"
+                )
+
+    source_iface = re.search(r"export interface TaskDraftSource\s*\{([^}]*)\}", types_text, re.S)
+    if source_iface is None:
+        problems.append(f"{rel_types} 缺少 `export interface TaskDraftSource`（C-AI-DRAFT@1）")
+    else:
+        for field in ("resource_id", "title"):
+            if not re.search(rf"\b{field}\s*:", source_iface.group(1)):
+                problems.append(
+                    f"{rel_types} 的 TaskDraftSource 缺少字段 `{field}`（C-AI-DRAFT@1）"
+                )
+
+    archive_iface = re.search(
+        r"export interface ArchiveSubmissionPayload\s*\{([^}]*)\}", types_text, re.S
+    )
+    if archive_iface is None:
+        problems.append(
+            f"{rel_types} 缺少 `export interface ArchiveSubmissionPayload`（C-ARCHIVE@1）"
+        )
+    else:
+        body = archive_iface.group(1)
+        for field in ("submission_id", "org_id"):
+            if not re.search(rf"\b{field}\s*:", body):
+                problems.append(
+                    f"{rel_types} 的 ArchiveSubmissionPayload 缺少字段 `{field}`（C-ARCHIVE@1）"
+                )
+        if not re.search(r"\btitle\s*\??\s*:", body):
+            problems.append(
+                f"{rel_types} 的 ArchiveSubmissionPayload.title 必须可选（缺省由服务端生成）"
+            )
+
+    for token, detail in (
+        ("generateTaskDraft(", "发布页调用草案接口"),
+        ("AI 生成任务草案", "草案按钮"),
+        ("draftLoading", "生成中禁用状态"),
+        ("参考资料来源", "来源只读展示"),
+        ("rowsFromDraft(", "草案填入可编辑任务行"),
+    ):
+        _require(problems, publish, token, rel_publish, detail)
+
+    try:
+        draft_body, _line = function_body(publish, "generateDraft")
+    except ContractError as exc:
+        problems.append(f"{rel_publish} {exc}")
+    else:
+        for forbidden in ("publishActivityBatch(", "submit(", "router.push"):
+            if forbidden in draft_body:
+                problems.append(
+                    f"{rel_publish} 的 generateDraft 出现 `{forbidden}`（草案不得自动提交）"
+                )
+
+    for token, detail in (
+        ("archiveSubmission(", "归档 API 调用"),
+        ("归档到资料库", "持久归档入口按钮"),
+        ("verifiedMembers(", "仅已验收成员提供归档入口"),
+        ("archiveVerifiedMember(", "持久入口动作"),
+        ("isMemberArchived(", "已归档成员禁用入口"),
+        ("allVerifiedArchived(", "全部已归档时禁用入口"),
+        ("验收通过", "验收通过后入口说明"),
+        ("默认不允许学生 AI 检索", "归档默认关闭说明"),
+        ("archiveOrgId", "归档组织选择"),
+        ("openArchive(", "归档入口复用 openArchive"),
+    ):
+        _require(problems, admin, token, rel_admin, detail)
+
+    try:
+        entry_body, _line = function_body(admin, "archiveVerifiedMember")
+    except ContractError as exc:
+        problems.append(f"{rel_admin} {exc}")
+    else:
+        if "verifiedMembers(" not in entry_body:
+            problems.append(
+                f"{rel_admin} 的 archiveVerifiedMember 未校验 `verifiedMembers(`（仅已验收可归档）"
+            )
+        if "openArchive(" not in entry_body:
+            problems.append(
+                f"{rel_admin} 的 archiveVerifiedMember 未复用 openArchive（C-ARCHIVE@1）"
+            )
+
+    try:
+        verify_body, _line = function_body(admin, "submitVerify")
+    except ContractError as exc:
+        problems.append(f"{rel_admin} {exc}")
+    else:
+        if "openArchive(" not in verify_body:
+            problems.append(
+                f"{rel_admin} 的 submitVerify 未在验收通过后调用 openArchive（C-ARCHIVE@1）"
+            )
+        if "verifyChoice.value === 'pass'" not in verify_body:
+            problems.append(
+                f"{rel_admin} 的 submitVerify 未按 `verifyChoice.value === 'pass'` 区分归档入口"
+            )
+        if "allow_student_ai" in verify_body:
+            problems.append(
+                f"{rel_admin} 的 submitVerify 归档请求不应携带 allow_student_ai"
+            )
+
+    archive_body, _line = function_body(admin, "submitArchive")
+    if "allow_student_ai" in archive_body:
+        problems.append(f"{rel_admin} 的 submitArchive 归档请求不应携带 allow_student_ai")
+    if "archivedMemberKeys" not in admin:
+        problems.append(f"{rel_admin} 缺少归档后成员入口禁用状态（archivedMemberKeys）")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_ai} 提供 generateTaskDraft；{rel_publish} AI 草案只填入可编辑任务行、"
+        f"只读展示来源且不自动提交；{rel_archive} 提供 archiveSubmission；"
+        f"{rel_admin} 已验收成员在操作区保留持久「归档到资料库」入口（复用 openArchive），"
+        "验收通过后仍自动打开归档，已归档成员入口禁用，并提示默认关闭学生 AI 检索；"
+        f"{rel_types} 的 TaskDraftItem/TaskDraftResult/ArchiveSubmissionPayload 字段齐备"
+    )
+
+
+# 追加到既有 45 项之后（S5 AI 任务树草案与成果归档入口）
+CHECKS = CHECKS + (
+    (
+        "㊻ C-AI-DRAFT@1 / C-ARCHIVE@1 草案填入不自动提交 + 验收后归档",
+        lambda: check_task_draft_archive_ui(
+            "api/ai.ts",
+            "api/orgResources.ts",
+            "views/PublishActivityPage.vue",
+            "views/AdminConsole.vue",
+            "types/models.ts",
+            SRC_DIR,
+        ),
+    ),
+)
+
+
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

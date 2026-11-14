@@ -12,10 +12,16 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import { publishActivityBatch } from '../api/activities'
+import { generateTaskDraft } from '../api/ai'
 import { ApiError } from '../api/client'
 import ActivityInfoSection from '../components/activity/ActivityInfoSection.vue'
 import { useUserStore } from '../stores/user'
-import type { Activity, ActivityBatchTaskDraft } from '../types/models'
+import type {
+  Activity,
+  ActivityBatchTaskDraft,
+  TaskDraftItem,
+  TaskDraftSource
+} from '../types/models'
 
 /** 页面内的任务编辑行；`key` 由前端自动生成，`uid` 仅用于稳定渲染 */
 interface TaskRowDraft {
@@ -46,6 +52,15 @@ const form = reactive({
 
 const taskRows = ref<TaskRowDraft[]>([])
 let nextUid = 0
+
+/** AI 草案：提示词、生成中状态、只读来源与 mock 标记 */
+const draftPrompt = ref('')
+const draftLoading = ref(false)
+const draftSources = ref<TaskDraftSource[]>([])
+const draftMock = ref(false)
+
+/** 批内 key 契约正则（`^[A-Za-z0-9_-]{1,32}$`） */
+const DRAFT_KEY_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
 
 /** 只列出本人有发布权的组织；成员组织不冒充可选 */
 const publishableOrgs = computed(() =>
@@ -132,6 +147,90 @@ function addTaskRow(): void {
     depends_on_keys: [],
     parent_key: null
   })
+}
+
+/**
+ * AI 草案的 `deadline` 归一为 `datetime-local` 可回填的格式：
+ * 纯日期按当日 23:59 填入，无法识别的格式留空由用户手填。
+ */
+function normalizeDraftDeadline(value: string | null | undefined): string {
+  const raw = (value ?? '').trim().replace(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/, '$1T$2')
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(raw)) return raw
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return `${raw}T23:59`
+  return ''
+}
+
+/**
+ * 把 AI 草案转成可编辑行：非法/重复 key 自动分配，引用按旧 key → 新 key 映射重写，
+ * 失效引用（含自依赖）直接丢弃；只替换任务行，不触发任何提交。
+ */
+function rowsFromDraft(tasks: TaskDraftItem[]): TaskRowDraft[] {
+  const used = new Set<string>()
+  const mapping = new Map<string, string>()
+  const rows: TaskRowDraft[] = tasks.map((task, index) => {
+    const rawKey = (task.key ?? '').trim()
+    let key = rawKey
+    if (!DRAFT_KEY_PATTERN.test(key) || used.has(key)) {
+      let suffix = index
+      key = `t${suffix}`
+      while (used.has(key)) {
+        suffix += 1
+        key = `t${suffix}`
+      }
+    }
+    used.add(key)
+    if (rawKey && !mapping.has(rawKey)) mapping.set(rawKey, key)
+    return {
+      uid: nextUid++,
+      key,
+      title: (task.title ?? '').trim(),
+      deadline: normalizeDraftDeadline(task.deadline),
+      quota: null,
+      claim_type: 'open',
+      sop_guide: (task.sop_guide ?? '').trim(),
+      credit_reward: 20,
+      depends_on_keys: [],
+      parent_key: null
+    }
+  })
+
+  rows.forEach((row, index) => {
+    const source = tasks[index]
+    const dependencies = (source.depends_on_keys ?? [])
+      .map((key) => mapping.get(key))
+      .filter((key): key is string => typeof key === 'string' && key !== row.key)
+    row.depends_on_keys = [...new Set(dependencies)]
+    const parent = source.parent_key ? mapping.get(source.parent_key) ?? null : null
+    row.parent_key = parent === row.key ? null : parent
+  })
+  return rows
+}
+
+/** 生成任务草案：只填入可编辑任务行，不自动提交；失败展示服务端 msg */
+async function generateDraft(): Promise<void> {
+  if (draftLoading.value || saving.value) return
+  const prompt = draftPrompt.value.trim()
+  if (!prompt) {
+    ElMessage.warning('请先描述活动与需要的任务')
+    return
+  }
+  draftLoading.value = true
+  try {
+    const result = await generateTaskDraft({ prompt, org_id: form.org_id })
+    taskRows.value = rowsFromDraft(result.tasks)
+    draftSources.value = result.sources
+    draftMock.value = result.mock
+    const titleHint = result.activity_title.trim()
+    ElMessage.success(
+      titleHint
+        ? `已生成 ${result.tasks.length} 个任务草案（活动名建议：${titleHint}），请确认后提交`
+        : `已生成 ${result.tasks.length} 个任务草案，请确认后提交`
+    )
+  } catch (err) {
+    ElMessage.error(errorMessage(err))
+  } finally {
+    draftLoading.value = false
+  }
 }
 
 /** 删除行时同步清理其他行对它的引用，避免把已删除的 key 提交上去 */
@@ -379,6 +478,48 @@ async function submit(): Promise<void> {
             </el-button>
           </header>
 
+          <div class="publish-activity__draft">
+            <el-input
+              v-model="draftPrompt"
+              type="textarea"
+              :rows="2"
+              maxlength="500"
+              show-word-limit
+              aria-label="AI 任务草案提示词"
+              placeholder="描述活动与需要的任务，例如：迎新晚会需要总策划、宣传海报、场地布置，海报要等总策划完成后再开始"
+            />
+            <div class="publish-activity__draft-actions">
+              <el-button
+                type="primary"
+                plain
+                :loading="draftLoading"
+                :disabled="saving || draftLoading"
+                @click="generateDraft"
+              >
+                AI 生成任务草案
+              </el-button>
+              <el-tag v-if="draftMock" type="warning" effect="plain" size="small">
+                离线示例草案
+              </el-tag>
+            </div>
+            <p class="publish-activity__draft-hint">
+              草案只填入下方可编辑任务行，不会自动提交；生成会替换当前任务行，确认后可继续修改再提交。
+            </p>
+            <div v-if="draftSources.length > 0" class="publish-activity__draft-sources">
+              <p class="publish-activity__draft-sources-title">参考资料来源（只读）</p>
+              <ul class="publish-activity__draft-source-list">
+                <li
+                  v-for="source in draftSources"
+                  :key="source.resource_id"
+                  class="publish-activity__draft-source-item"
+                >
+                  {{ source.title }}
+                  <span class="publish-activity__draft-source-id">#{{ source.resource_id }}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+
           <p v-if="taskRows.length === 0" class="publish-activity__tasks-empty">
             尚未添加任务，本次将只发布活动本体。
           </p>
@@ -510,7 +651,7 @@ async function submit(): Promise<void> {
           <el-button :disabled="saving" @click="router.push({ name: 'published-activities' })">
             返回我发布的活动
           </el-button>
-          <el-button type="primary" native-type="submit" :loading="saving">
+          <el-button type="primary" native-type="submit" :loading="saving" :disabled="draftLoading">
             {{ submitLabel }}
           </el-button>
         </div>
@@ -599,6 +740,59 @@ async function submit(): Promise<void> {
   background: var(--app-surface-raised);
 }
 
+.publish-activity__draft {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-2);
+  padding: var(--app-space-3);
+  border: 1px dashed var(--app-border-strong);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+}
+
+.publish-activity__draft-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-2);
+  flex-wrap: wrap;
+}
+
+.publish-activity__draft-actions :deep(.el-button) {
+  min-height: var(--app-touch);
+}
+
+.publish-activity__draft-hint,
+.publish-activity__draft-sources-title {
+  margin: 0;
+  font-size: var(--app-font-aux);
+  line-height: 1.5;
+  color: var(--app-text-muted);
+}
+
+.publish-activity__draft-sources {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-1);
+}
+
+.publish-activity__draft-source-list {
+  margin: 0;
+  padding-left: var(--app-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-1);
+}
+
+.publish-activity__draft-source-item {
+  font-size: var(--app-font-aux);
+  line-height: 1.5;
+  color: var(--app-text-secondary);
+}
+
+.publish-activity__draft-source-id {
+  color: var(--app-text-muted);
+}
+
 .publish-activity__task-header {
   display: flex;
   align-items: center;
@@ -680,6 +874,15 @@ async function submit(): Promise<void> {
   }
 
   .publish-activity__tasks-header :deep(.el-button) {
+    width: 100%;
+  }
+
+  .publish-activity__draft-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .publish-activity__draft-actions :deep(.el-button) {
     width: 100%;
   }
 

@@ -3,6 +3,7 @@
 * ``POST /api/org-resources``：上传文件或登记链接（解析失败仍保存）；
 * ``GET /api/org-resources``：按组织列出资料，默认隐藏已归档；
 * ``PATCH /api/org-resources/{id}``：局部更新标题 / 简介 / AI 检索开关 / 归档；
+* ``POST /api/org-resources/from-submission``：把已验收成果归档为组织资料（`C-ARCHIVE@1`）；
 * ``GET /api/org-resources/{id}/download``：下载原文件（组织管理者，或持有有效引用的学生）。
 
 权限与校验全部在 ``services.org_library_service`` 内完成；router 级 CSRF 双提交校验。
@@ -20,7 +21,7 @@ from app.db import get_db
 from app.deps import get_current_user, require_csrf
 from app.errors import ApiError, ok
 from app.models import User
-from app.schemas import OrgResourceCreateIn, OrgResourcePatchIn
+from app.schemas import ArchiveSubmissionIn, OrgResourceCreateIn, OrgResourcePatchIn
 from app.services import library_ref_service, org_library_service
 
 router = APIRouter(
@@ -38,6 +39,19 @@ def create_resource(
 ) -> dict[str, Any]:
     """上传组织资料：文件 / 链接二选一，返回不含正文的条目。"""
     row = org_library_service.create(db, current_user, payload)
+    return ok(org_library_service.to_out(row).model_dump())
+
+
+@router.post("/from-submission")
+def archive_from_submission(
+    payload: ArchiveSubmissionIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """把已验收成果归档为组织资料（`C-ARCHIVE@1`），默认关闭学生 AI 检索。"""
+    row = org_library_service.archive_submission(
+        db, current_user, payload.submission_id, payload.org_id, payload.title
+    )
     return ok(org_library_service.to_out(row).model_dump())
 
 

@@ -997,6 +997,53 @@ class AiConversationDetailOut(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# AI 任务树草案（契约 `C-AI-DRAFT@1`）
+# --------------------------------------------------------------------------- #
+
+
+class TaskDraftIn(BaseModel):
+    """草案请求；``org_id`` 提供时必须属于可管理组织（服务层校验）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    prompt: str = Field(min_length=1, max_length=4000)
+    org_id: int | None = None
+
+
+class TaskDraftItem(BaseModel):
+    """可编辑的任务树节点（对应整批发布的 task draft）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    title: str
+    sop_guide: str | None = None
+    deadline: str | None = None
+    depends_on_keys: list[str] = Field(default_factory=list)
+    parent_key: str | None = None
+
+
+class TaskDraftSource(BaseModel):
+    """草案参考的开放资料（只有 id 与标题，不返回正文）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    resource_id: int
+    title: str
+
+
+class TaskDraftOut(BaseModel):
+    """草案响应；不包含任何发布动作或落库结果。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    activity_title: str
+    tasks: list[TaskDraftItem] = Field(default_factory=list)
+    sources: list[TaskDraftSource] = Field(default_factory=list)
+    mock: bool = False
+
+
+# --------------------------------------------------------------------------- #
 # 资料库（契约 `C-RESOURCE@1`）
 # --------------------------------------------------------------------------- #
 
@@ -1283,6 +1330,19 @@ class OrgResourceOut(BaseModel):
     updated_at: str
 
 
+class ArchiveSubmissionIn(BaseModel):
+    """把已验收成果归档为组织资料（`C-ARCHIVE@1`）。
+
+    ``title`` 缺省时由服务层生成「任务标题 · 提交人姓名」。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    submission_id: int
+    org_id: int
+    title: str | None = Field(default=None, max_length=200)
+
+
 # --------------------------------------------------------------------------- #
 # 成果提交策略（契约 `C-SUBMISSION-POLICY@1`）
 # --------------------------------------------------------------------------- #
@@ -1436,6 +1496,10 @@ __all__ = [
     "AiConversationSummary",
     "AiConversationListOut",
     "AiConversationDetailOut",
+    "TaskDraftIn",
+    "TaskDraftItem",
+    "TaskDraftSource",
+    "TaskDraftOut",
     "ResourceCreateIn",
     "ResourceOut",
     "ResourceListOut",
@@ -1456,6 +1520,7 @@ __all__ = [
     "OrgResourceCreateIn",
     "OrgResourcePatchIn",
     "OrgResourceOut",
+    "ArchiveSubmissionIn",
 ]
 
 # --------------------------------------------------------------------------- #
