@@ -98,7 +98,10 @@
 
 ## 7. 提交与 CI
 
-- 提交与 CI：完成后回填。
+- 提交：`694a53b1dc3270888033e38d1132699f3b8f619f`（`feat(aiw08): 增加我的任务/我发布的活动入口与本人发布活动范围`），已推送 `origin/main`。
+- CI：run `43565975450` 四个 job 全 success（Backend reliability ubuntu/windows、Backend API and SSE integration、Frontend build/voice/public source security checks），`head_sha` 与提交一致。
+- 回滚：`git revert 694a53b`。代码回退不会撤销已创建的活动/任务数据；本轮走查数据仅在忽略目录 `work/aiw08/demo.db`，不在提交内。
+- `AGENTS.md` 单步协议条款仍未包含在提交中，继续留在工作区待用户确认。
 
 ## 8. 并发写入者与工具归属
 

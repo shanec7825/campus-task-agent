@@ -1,6 +1,6 @@
 # 当前开发交接
 
-> 更新日期：2026-11-14（Asia/Shanghai，stage27 / AIW-08 信息架构与角色页面）。当前结论：AIW-00～07 的实现与 CI 已通过；stage27 已完成 AIW-08 的核心增量（服务端本人发布活动范围、独立「我的任务」「我发布的活动」、管理者发布活动入口、侧栏/抽屉最近条目、活动字段共享区块），本地门禁、CLI 浏览器验证与两轮独立审查已通过；提交与对应 CI 在收口时回填。真实模型、真机与部署仍未验证，最终产品验收未完成。
+> 更新日期：2026-11-14（Asia/Shanghai，stage27 / AIW-08 信息架构与角色页面）。当前结论：AIW-00～07 的实现与 CI 已通过；stage27 已完成 AIW-08 的核心增量（服务端本人发布活动范围、独立「我的任务」「我发布的活动」、管理者发布活动入口、侧栏/抽屉最近条目、活动字段共享区块），本地门禁、CLI 浏览器验证与两轮独立审查已通过；提交 `694a53b` 已推送，CI run `43565975450` 四 job success。真实模型、真机与部署仍未验证，最终产品验收未完成。
 
 ## 1. 当前基线与本轮授权
 
@@ -24,7 +24,7 @@
 - AIW-00～06 对应 stage18～24：活动下发布与权限、统一 AI 入口/持久问答、网格/预览/共享助手、依赖时间图、资料与文本成果版本/预审、提醒失效/人工影响卡/问答额度、完整 API 验收链路。最近业务提交 `a728788`，CI run 43532974986 四 job success。
 - stage25 规划入库：`19eda9f` / CI `43553685701`；回填 `d1ceab2` / CI `43554038152`。
 - stage26（AIW-07）：`f3fa0fb` / CI `43558695172`、回填 `0b325bd`，均四 job success。AC-01/03/09/14/15 与 AC-16 部分（mock）已取得 CLI 证据。
-- stage27（AIW-08）本地新增：`scope=published`（SQL 叠加可见性）、`/my-tasks`（复用 TaskHall，范围锁定 mine）、`/published-activities`、`/activities/new`、`ActivityInfoSection` 共享字段区块、侧栏/抽屉最近条目（各 5 条 + 查看全部）；CI 登记 `test_aiw08_navigation_scope.py`。
+- stage27（AIW-08）本地新增：`scope=published`（SQL 叠加可见性）、`/my-tasks`（复用 TaskHall，范围锁定 mine）、`/published-activities`、`/activities/new`、`ActivityInfoSection` 共享字段区块、侧栏/抽屉最近条目（各 5 条 + 查看全部）；CI 登记 `test_aiw08_navigation_scope.py`。提交 `694a53b` / CI run `43565975450` 四个 job 全 success；未部署。
 - stage27 验证：新增测试 8 passed；与 AIW-02 合并 14 passed；前端 `run_all` 三跑 EXIT=0（构建 4/4、契约 25/25、语音 21/21）；后端 `run_all` EXIT=0（7 子脚本全部通过）；安全红线 12 通过 / 1 失败（B5b 忽略目录产物）；浏览器桌面/移动 15 项与补验 4 项通过；独立审查两轮 0 Critical / 0 Important（首轮 3 Important 已闭环）。
 - 历史命令/审查/截图详情见 [stage26 过程](../codearts_proof/ai_dialogue/stage26_既有验收补齐.md)、[stage24 报告](../codearts_proof/reports/stage24_整体验收.md)；不把历史通过数字算作本轮测试。
 - 本地安全 B5b 因忽略目录运行产物失败，保留该事实；CI 干净检出成功不等于本地那次检查成功。不删证据或放宽门禁。
@@ -59,4 +59,4 @@ AIW-00～07 为历史阶段交付，AIW-08 为 stage27 增量，均不等于完�
 - 8000 端口仍为 stage26 遗留后端进程（未终止）；8010 零额度实例保留。stage27 全部浏览器证据来自 `http://127.0.0.1:8020` + `work/aiw08/demo.db`（`work/aiw07/demo2.db` 的副本，未触碰 `backend/campus.db`）。8000 因运行旧代码会拒绝 `scope=published`，不得用它的结果判断本轮功能。
 - 走查脚本位于 `work/aiw07/runner/aiw08_*.mjs`（Git 忽略）；本地结果保留 `outputs/aiw08/*.log`。
 - stage26 的 MCP doom loop 已停止使用；本轮全部浏览器结果为 Playwright CLI 产出，不写成 MCP 产出。历史 Codex 桌面端在 stage26 的核对原文仍见 `codearts_proof/reports/stage26_浏览器工具恢复核对.md`。
-- `AGENTS.md` 单步协议条款仍未提交，等待用户确认；不得随本阶段提交顺带带上。
+- `AGENTS.md` 单步协议条款仍未提交，等待用户确认；不得随本阶段提交顺带带上。- 本轮业务提交 `694a53b`，CI run `43565975450` 四 job success；本文档回填提交的 CI 只核对结果，不再为回填自身反复生成新提交。
