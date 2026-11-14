@@ -106,5 +106,6 @@
 - 真实模型输出质量与引用质量（全程 `MAAS_MOCK=1`）。
 - 真机、多真机并发、真实移动浏览器。
 - 移动端完整提交/验收操作、深色主题。
-- 部署、公网、CI 实际运行（提交推送后另行核对）。
+- 部署与公网未验证。
+- CI 已核对（2026-11-14 回填）：业务提交 `a728788` → run `43532974986` 四个 job success（Backend API and SSE integration、Frontend build/voice/public source security checks、Backend reliability ubuntu-latest、Backend reliability windows-latest）。
 - 全量 `pytest tests/backend/` 下本套件 skip 的具体报告形态（未运行）。

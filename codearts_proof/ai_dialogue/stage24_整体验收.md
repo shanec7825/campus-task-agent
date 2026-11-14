@@ -1,6 +1,6 @@
 # stage24 整体验收（AIW-06）
 
-> 日期：2026-11-14。状态（截至本记录）：验收套件完成并**1 passed**；后端 `run_all` **EXIT=0**；前端 `run_all` **EXIT=0**（构建 4/4、契约 25/25、语音 21/21）；安全红线 **12 通过 / 1 失败（B5b）**；独立审查三轮 **0/4 → 0/2 → 0/0 Important**；桌面 + 390×844 截图 8 张；真实模型、真机、移动端完整提交/验收、深色主题未验证。提交、推送与 CI 结果见第 8 节（提交后回填）。
+> 日期：2026-11-14。状态（截至本记录）：验收套件完成并**1 passed**；后端 `run_all` **EXIT=0**；前端 `run_all` **EXIT=0**（构建 4/4、契约 25/25、语音 21/21）；安全红线 **12 通过 / 1 失败（B5b）**；独立审查三轮 **0/4 → 0/2 → 0/0 Important**；桌面 + 390×844 截图 8 张；真实模型、真机、移动端完整提交/验收、深色主题未验证。业务提交 `a728788` 已推送，CI run 43532974986 四个 job 全 success（见第 8 节）。
 
 ## 1. 需求来源与授权
 
@@ -78,4 +78,5 @@
 
 - 证据：本记录、`reports/stage24_整体验收.md`、截图 8 张、`outputs/aiw06/*.log`（本地忽略）。
 - 未验证：真实模型、真机、移动端完整提交/验收、深色主题、部署、全量 pytest 的 skip 形态。
-- 提交/推送/CI：**提交后回填**（本文件在业务提交前写为待回填，不预填哈希或 CI 结果）。
+- 提交/推送/CI：业务提交 `a728788af906ccd2bf529166321f467277beec92` 已推送 `origin/main`；对应 CI run `43532974986`（run_number 20）**completed / success**，四个 job 全 success（Backend API and SSE integration、Frontend build/voice/public source security checks、Backend reliability ubuntu-latest、Backend reliability windows-latest）。核对方式为 GitHub REST API（本机无 `gh`）。未部署。
+- 2026-11-14 CI 回填续跑：本轮读取现场、实跑 `tests/backend/test_aiw06_acceptance.py`（**1 passed**，5.15s，EXIT=0）核对代码现状后回填 CI 结论与本轮启动指令；未改业务代码、测试或表结构，未新开独立审查（无新增业务 diff）。

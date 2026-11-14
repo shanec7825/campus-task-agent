@@ -1,12 +1,12 @@
 # 当前开发交接
 
-> 更新日期：2026-11-14（Asia/Shanghai，stage24 / AIW-06 收口：验收套件、阶段门禁、三轮独立审查、浏览器关键流程与留痕已完成；提交、推送与对应 CI 见第 3 节）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
+> 更新日期：2026-11-14（Asia/Shanghai，stage24 / AIW-06 收口：验收套件、阶段门禁、三轮独立审查、浏览器关键流程与留痕已完成；业务提交 `a728788` 已推送，对应 CI run 43532974986 四个 job success。AIW-00 至 AIW-06 全部完成并通过验收）。这是当前状态入口，不替代历史阶段记录。交接前后都应重新核对 Git 与实际文件。
 
 ## 1. 当前基线与本轮授权
 
 - 分支：`main`。
 - 本轮开工基线：`d25c91cc2fd38910fff76d2934465e46558c5fdd`（stage23 文档回填）。
-- 本轮改动：AIW-06「整体验收」验收增量；提交、推送与 CI 状态见第 3 节（提交后回填）。
+- 本轮改动：AIW-06「整体验收」验收增量；业务提交 `a728788af906ccd2bf529166321f467277beec92` 已推送 `origin/main`；对应 CI run 43532974986 四个 job 全部 success。
 - 本轮授权范围：AIW-00 至 AIW-06 已确认阶段的实现、必要修复、测试、独立审查、留痕；每阶段一次提交、正常推送 `origin/main` 并跟踪对应 SHA 的 CI；不授权部署、付费、删除文件或数据、破坏性 Git 操作、修改安全策略。
 - 本轮使用编号：留痕 **stage24**（新增，LOG 原最大 23）。未改业务 Prompt，无新 P 编号。
 - AIW-05 验收依据：业务提交 `e35836d` → CI run 43513010046 四个 job success。
@@ -25,14 +25,14 @@
 
 ## 3. 验证、审查与提交状态
 
-- 验收套件：`PYTHON_BIN="$(command -v python)" python -m pytest tests/backend/test_aiw06_acceptance.py -q` → **1 passed**（3.46s，EXIT=0）。
+- 验收套件：`PYTHON_BIN="$(command -v python)" python -m pytest tests/backend/test_aiw06_acceptance.py -q` → **1 passed**（收口时 3.46s；2026-11-14 CI 回填续跑复跑 5.15s，均 EXIT=0）。
 - 后端 `run_all`：**EXIT=0**；`verify_tables` **58 项（23 表）**、applications 410、api_e2e 255、agent_mock 229、incremental 358、sse 105、unfiltered 25。
 - 前端 `run_all`：**EXIT=0**；构建 **4/4**、契约 **25/25**、语音 **21/21**；dist 已重建。
 - 安全红线：本地 **12 通过 / 0 PASS-LOCAL / 1 失败（B5b）**。失败仅因 `outputs/`、`.playwright-mcp/`、`.codeartsdoer/temp/`、`work/` 的忽略日志残留；未删除证据、未修改基线，CI 干净检出不含这些文件。
 - 浏览器（Playwright MCP，8000 同源 dist + `outputs/aiw06/demo.db`，`MAAS_MOCK=1`、`RUN_SCHEDULER=0`）：AI 首页通知/额度；大厅活动下任务；活动详情任务全景；成员提交 v1；预审 fail（时间一致性）；后台改期影响卡（成员 1、后续任务 0、通知接收人 2）；移动 AI 首页与任务详情。页面宽度实测 `innerWidth=390`、`docScrollWidth=375`、`horizontalOverflow=false`。截图见 `codearts_proof/screenshots/stage24/`。
 - 未验证：真实模型输出质量、真机、移动端完整提交/验收操作、深色主题、部署、全量 pytest 下本套件 skip 的报告形态。
 - 独立审查三轮（general，只读）：首轮 **0 Critical / 4 Important**；第二轮 **0 Critical / 2 Important**；第三轮 **0 Critical / 0 Important / 3 Suggestion**。第三轮为最终轮，之后仅补文档留痕，未改测试或业务代码。
-- **提交/推送/CI：** 本轮业务提交、推送与对应 CI 结果在提交发生后回填；未回填前不得声称已通过。未部署。
+- **提交/推送/CI：** `a728788` 已推送 `origin/main`；CI run [43532974986](https://github.com/shanec7825/campus-task-agent/actions/runs/43532974986) 四个 job 全部 success（Backend API/SSE integration、Backend reliability ubuntu/windows、Frontend build/voice/security）。未部署。
 
 ## 4. 计划阅读入口
 
@@ -48,7 +48,7 @@
 
 ## 5. 下一步
 
-- AIW-00 至 AIW-06 的实现与本地验收已全部收口；待本轮提交对应 SHA 的 CI 通过后，方可把 AIW-06 标记为最终完成。
+- AIW-00 至 AIW-06 的实现、本地验收与对应 CI 已全部通过，AIW-06 标记为最终完成。
 - 全部已确认阶段完成并通过验收后，本轮不再新增开发工作。若平台提供管理定时任务的能力，应暂停该每小时任务；平台不支持时请用户手动暂停，**不删除任务**。
 - 未验证项保持如实记录：真实模型、真机、移动端完整提交/验收、深色主题、部署。后续若要继续，先单独确认新的产品范围，不从本交接自动推导新阶段。
 - 不提交 `outputs/`、`.playwright-mcp/`、`.codeartsdoer/`、数据库、演示凭据与依赖、构建产物。
