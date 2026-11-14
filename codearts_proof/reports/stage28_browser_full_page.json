@@ -1,0 +1,26 @@
+{
+  "base": "http://127.0.0.1:8030",
+  "mode": "full-page-scope",
+  "cases": [
+    {
+      "id": "D1-task-session",
+      "ok": true,
+      "dockContext": "任务：场地准备"
+    },
+    {
+      "id": "D2-full-page-keeps-scope",
+      "ok": true,
+      "hasTaskScope": true
+    },
+    {
+      "id": "D3-back-to-general",
+      "ok": true,
+      "general": true,
+      "taskStillAvailable": true
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ],
+  "apiErrors": []
+}

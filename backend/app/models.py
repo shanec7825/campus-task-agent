@@ -173,6 +173,8 @@ class ParseSession(Base):
     __tablename__ = "parse_sessions"
 
     session_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    # 解析会话归属（`C-AI-SCOPE@1`）：NULL 表示旧行无主，任何账号不得续写。
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     accumulated_text: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default=text("''"))
     draft: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
     updated_at: Mapped[str] = mapped_column(
@@ -356,10 +358,14 @@ class UserSession(Base):
 
 
 class AiConversation(Base):
-    """AI 只读问答会话（契约 `C-AI-DATA@1`）。
+    """AI 只读问答会话（契约 `C-AI-DATA@1` / `C-AI-SCOPE@1`）。
 
     会话只按 ``user_id`` 归属；列表 / 详情 / 续写都由服务层校验归属，
     不把客户端传入的 user_id 当作可信输入。``updated_at`` 在每次问答后刷新。
+
+    ``scope_type`` / ``scope_id`` 表达会话作用域：``general`` 不绑定对象；
+    ``activity`` / ``task`` 绑定对象 ID，对象可见性每次读取/续写前由服务层重校验。
+    旧会话行由默认值视为 ``general``，不静默绑定到当前任务。
     """
 
     __tablename__ = "ai_conversations"
@@ -367,6 +373,10 @@ class AiConversation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope_type: Mapped[str] = mapped_column(
+        Text, nullable=False, default="general", server_default=text("'general'")
+    )
+    scope_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(
         Text, nullable=False, default=_now_local, server_default=_NOW_SQL

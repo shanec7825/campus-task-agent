@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ApiError } from '../api/client'
 import ThemeToggle from '../components/common/ThemeToggle.vue'
 import { resolveSafeRedirect } from '../router'
+import { useAiChatStore } from '../stores/aiChat'
 import { useUserStore } from '../stores/user'
 
 /**
@@ -18,6 +19,7 @@ const LOGIN_FAILED_MESSAGE = '账号或密码错误，请重新输入'
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const aiChat = useAiChatStore()
 
 const username = ref('')
 const password = ref('')
@@ -41,6 +43,8 @@ async function submit(): Promise<void> {
   errorMessage.value = ''
   try {
     await userStore.login({ username: name, password: password.value })
+    // 账号边界：登录成功后清空上一个账号可能残留的 AI 会话与作用域缓存。
+    aiChat.reset()
     await router.replace(resolveSafeRedirect(route.query.redirect))
   } catch (error) {
     if (error instanceof ApiError && error.code === 4010) {

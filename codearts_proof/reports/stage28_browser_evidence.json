@@ -1,0 +1,62 @@
+{
+  "base": "http://127.0.0.1:8030",
+  "mode": "spa-navigation",
+  "cases": [
+    {
+      "id": "A1-open-activity",
+      "ok": true,
+      "context": "活动：2026 迎新志愿活动",
+      "value": "活动上下文问题A",
+      "panelClosed": true
+    },
+    {
+      "id": "A2-switch-task",
+      "ok": true,
+      "context": "任务：场地准备",
+      "value": ""
+    },
+    {
+      "id": "A3-back-activity",
+      "ok": true,
+      "value": "活动上下文问题A"
+    },
+    {
+      "id": "A4-send-activity",
+      "ok": true,
+      "messageCount": 4,
+      "first": "账号A私密问题"
+    },
+    {
+      "id": "A5-task-isolated",
+      "ok": true,
+      "messageCount": 4,
+      "value": "任务上下文问题B"
+    },
+    {
+      "id": "A6-reload-restore",
+      "ok": true,
+      "messageCount": 4
+    },
+    {
+      "id": "A7-mobile",
+      "ok": true,
+      "context": "活动：2026 迎新志愿活动",
+      "overflow": {
+        "innerWidth": 390,
+        "scrollWidth": 390,
+        "horizontalOverflow": false
+      }
+    },
+    {
+      "id": "A8-other-account",
+      "ok": true,
+      "contentHasLeak": false
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ],
+  "apiErrors": []
+}

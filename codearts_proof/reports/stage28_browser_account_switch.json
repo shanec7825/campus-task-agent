@@ -1,0 +1,29 @@
+{
+  "base": "http://127.0.0.1:8030",
+  "mode": "account-switch-after-401",
+  "cases": [
+    {
+      "id": "C1-seed-account-a",
+      "ok": true,
+      "seeded": true
+    },
+    {
+      "id": "C2-401-to-login",
+      "ok": true,
+      "url": "/login"
+    },
+    {
+      "id": "C3-new-account-clean",
+      "ok": true,
+      "leaked": false,
+      "inputValue": ""
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ],
+  "apiErrors": []
+}

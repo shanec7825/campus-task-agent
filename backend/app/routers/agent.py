@@ -25,6 +25,7 @@ R13-AC5：字段值不出现 ``AI建议`` / ``改为`` / ``用户：``）。
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -114,9 +115,12 @@ def review(
 def stream_parse(
     payload: StreamParseIn,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
-    """语音顺序增量解析：本片 chunk 交模型解析 + 服务端草稿全量合并 + 本片 changes。"""
+    """语音顺序增量解析：本片 chunk 交模型解析 + 服务端草稿全量合并 + 本片 changes。
+
+    ``C-AI-SCOPE@1``：解析会话按实际发起者归属；无主（旧行）或他人会话一律 4040。
+    """
     session_id = (payload.session_id or "").strip()
     if not session_id:
         raise ApiError(4001, "session_id 不能为空")
@@ -124,9 +128,16 @@ def stream_parse(
     chunk = payload.chunk or ""
     session = db.get(ParseSession, session_id)
     if session is None:
-        session = ParseSession(session_id=session_id, accumulated_text="", draft={})
+        session = ParseSession(
+            session_id=session_id,
+            user_id=int(current_user.id),
+            accumulated_text="",
+            draft={},
+        )
         db.add(session)
         db.flush()
+    elif session.user_id is None or int(session.user_id) != int(current_user.id):
+        raise ApiError(4040, "解析会话不存在", 404)
 
     # ② accumulated_text += chunk（chunk 允许为空串）；仅留痕写库，不进入 prompt（B7）
     accumulated_text = (session.accumulated_text or "") + chunk
@@ -171,6 +182,8 @@ def chat(
             conversation_id=payload.conversation_id,
             message=payload.message,
             request_id=payload.request_id,
+            scope_type=payload.scope_type,
+            scope_id=payload.scope_id,
         ).model_dump()
     )
 
@@ -188,11 +201,21 @@ def get_usage(
 @router.get("/conversations")
 def list_conversations(
     limit: int = Query(20, ge=1, le=ai_service.MAX_CONVERSATION_LIST),
+    scope_type: Literal["general", "activity", "task"] | None = Query(None),
+    scope_id: int | None = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """当前用户最近的会话（按更新时间倒序）。"""
-    return ok(ai_service.list_conversations(db, current_user, limit=limit).model_dump())
+    """当前用户最近的会话（按更新时间倒序）；可按会话作用域过滤。"""
+    return ok(
+        ai_service.list_conversations(
+            db,
+            current_user,
+            limit=limit,
+            scope_type=scope_type,
+            scope_id=scope_id,
+        ).model_dump()
+    )
 
 
 @router.get("/conversations/{conversation_id}")

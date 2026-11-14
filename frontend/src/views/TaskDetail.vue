@@ -1390,7 +1390,11 @@ watch(
         </el-timeline>
       </el-card>
 
-      <AgentDock :context-label="`任务：${task.title}`" />
+      <AgentDock
+        :context-label="`任务：${task.title}`"
+        :scope-type="'task'"
+        :scope-id="task?.id"
+      />
     </template>
 
     <el-dialog

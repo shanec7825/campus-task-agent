@@ -25,7 +25,7 @@ const SUGGESTIONS = ['我有哪些临近截止的事务？', '我有权限查看
 const router = useRouter()
 const notificationsStore = useNotificationsStore()
 const aiChat = useAiChatStore()
-const { messages, input, historyLoading, historyError, sending, mockMode, hasMessages, usage, usageLoading, usageError } =
+const { messages, input, historyLoading, historyError, sending, mockMode, hasMessages, usage, usageLoading, usageError, scopeType, scopeId, scopeLabel } =
   storeToRefs(aiChat)
 
 const noticesLoading = ref(true)
@@ -35,6 +35,14 @@ const messageListRef = ref<HTMLElement | null>(null)
 const unreadItems = computed<NotificationItem[]>(() => notificationsStore.unreadItems.slice(0, 3))
 const unreadCount = computed<number>(() => notificationsStore.unread)
 const quotaExhausted = computed<boolean>(() => usage.value !== null && usage.value.remaining <= 0)
+const isScoped = computed<boolean>(() => scopeType.value !== 'general')
+const scopeTargetText = computed<string>(() => {
+  if (scopeType.value === 'general') return '通用助手'
+  if (scopeLabel.value) return scopeLabel.value
+  return scopeType.value === 'activity'
+    ? `活动 #${scopeId.value ?? ''}`
+    : `任务 #${scopeId.value ?? ''}`
+})
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -63,6 +71,12 @@ async function loadHistory(force = false): Promise<void> {
   const refreshError = await aiChat.restore(force)
   if (refreshError) ElMessage.error(`刷新对话失败：${refreshError}`)
   await scrollToBottom()
+}
+
+/** 回到通用助手：恢复通用作用域缓存/最近会话，不删除已有 scoped 会话。 */
+async function backToGeneral(): Promise<void> {
+  aiChat.setScope('general', null)
+  await loadHistory()
 }
 
 async function loadNotices(): Promise<void> {
@@ -115,6 +129,7 @@ function openMessages(): void {
 }
 
 onMounted(async () => {
+  // 保留当前作用域：从活动/任务长条打开完整页时继续同一目标的会话。
   await Promise.allSettled([loadHistory(), loadNotices(), aiChat.loadUsage()])
 })
 </script>
@@ -127,8 +142,14 @@ onMounted(async () => {
         <p class="app-page-subtitle">
           只读问答：只使用你有权限查看的最近 20 项事务摘要，不执行发布、验收等写操作。
         </p>
+        <p class="scope-target">
+          当前目标：<strong>{{ scopeTargetText }}</strong>
+        </p>
       </div>
       <div class="app-actions">
+        <el-button v-if="isScoped" class="header-button" @click="backToGeneral">
+          回到通用助手
+        </el-button>
         <el-button class="header-button" @click="openWorkbench">打开工作台</el-button>
         <el-button
           class="header-button"
@@ -318,6 +339,18 @@ onMounted(async () => {
   font-size: var(--app-font-aux-lg);
   line-height: 1.6;
   color: var(--app-text-secondary);
+}
+
+.scope-target {
+  margin: var(--app-space-1) 0 0;
+  font-size: var(--app-font-aux-lg);
+  line-height: 1.6;
+  color: var(--app-text-secondary);
+}
+
+.scope-target strong {
+  color: var(--app-text);
+  font-weight: 600;
 }
 
 .header-button {

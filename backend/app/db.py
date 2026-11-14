@@ -152,6 +152,26 @@ _ORG_INDEXES: tuple[tuple[str, str], ...] = (
     ("password_resets", "CREATE INDEX IF NOT EXISTS ix_password_resets_user_id ON password_resets(user_id)"),
 )
 
+# AIW-09（`C-AI-SCOPE@1`）：旧库补齐会话作用域与解析会话归属列。
+# 只加列、不改旧行数据；不是业务数据迁移，验收仍只用全新隔离库。
+_AI_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    (
+        "ai_conversations",
+        "scope_type",
+        "ALTER TABLE ai_conversations ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'general'",
+    ),
+    (
+        "ai_conversations",
+        "scope_id",
+        "ALTER TABLE ai_conversations ADD COLUMN scope_id INTEGER",
+    ),
+    (
+        "parse_sessions",
+        "user_id",
+        "ALTER TABLE parse_sessions ADD COLUMN user_id INTEGER",
+    ),
+)
+
 
 def _migrate(conn) -> None:
     """幂等增量迁移（契约 `C-MIGRATION@1`）：只加列 / 加索引 / 补行，不删列不删行。"""
@@ -197,6 +217,10 @@ def _migrate(conn) -> None:
         if _table_exists(conn, table):
             conn.exec_driver_sql(statement)
 
+    for table, column, statement in _AI_ADDED_COLUMNS:
+        if _table_exists(conn, table) and column not in _column_names(conn, table):
+            conn.exec_driver_sql(statement)
+
 
 def init_db() -> None:
     """建表 + 幂等迁移（可重复调用）。调用前必须先 import app.models 以注册全部表。
@@ -210,8 +234,9 @@ def init_db() -> None:
     ``uq_task_members_task_user``、legacy ``approved`` 报名与逐人成员行、
     ``tasks.activity_id``，以及阶段 2 的 ``users`` 认证列、``tasks`` /
     ``activities`` 的 ``org_id`` 与组织相关索引，并把无密码旧账号标记为
-    ``legacy_unclaimed``。AI 会话表只新增、不修改既有表；全程不使用 DROP / 删列 / 删行，
-    重复执行不会产生重复数据。
+    ``legacy_unclaimed``，以及 AIW-09 的 ``ai_conversations.scope_type`` /
+    ``scope_id`` 与 ``parse_sessions.user_id``。AI 会话表只新增、不修改既有表；
+    全程不使用 DROP / 删列 / 删行，重复执行不会产生重复数据。
     """
     from app import models  # noqa: F401  （注册 ORM 映射，避免循环导入）
 

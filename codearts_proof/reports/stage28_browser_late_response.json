@@ -1,0 +1,26 @@
+{
+  "base": "http://127.0.0.1:8030",
+  "mode": "late-response-ownership",
+  "cases": [
+    {
+      "id": "B1-send-then-switch",
+      "ok": true,
+      "context": "任务：场地准备"
+    },
+    {
+      "id": "B2-late-not-in-task",
+      "ok": true,
+      "messageCount": 4,
+      "sendDisabled": true
+    },
+    {
+      "id": "B3-late-in-activity",
+      "ok": true,
+      "messageCount": 4
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ],
+  "apiErrors": []
+}

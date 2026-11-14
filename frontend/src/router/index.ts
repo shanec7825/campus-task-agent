@@ -9,6 +9,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 import { setUnauthorizedHandler } from '../api/client'
+import { useAiChatStore } from '../stores/aiChat'
 import { useUserStore } from '../stores/user'
 
 /** 回跳地址只接受站内路径，其余一律回退 AI 助手 */
@@ -130,6 +131,8 @@ let restoringSession = false
 
 // 任意接口返回 401 / code=4010 时，由 client 调用此处理器跳到登录页（保留回跳地址）
 setUnauthorizedHandler(() => {
+  // 账号边界：401 即失去当前会话，先清空 AI 会话与各作用域缓存，避免串话。
+  useAiChatStore().reset()
   if (restoringSession) return
   const current = router.currentRoute.value
   if (current.name === 'login') return

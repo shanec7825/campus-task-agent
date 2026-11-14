@@ -551,6 +551,15 @@ export interface AiCitation {
   activity_id: number | null
 }
 
+/** AI 会话作用域（`C-AI-SCOPE@1`）：通用 / 活动 / 任务 */
+export type AiScopeType = 'general' | 'activity' | 'task'
+
+/** 请求作用域；`general` 不绑定对象，`id` 必须为 null */
+export interface AiScope {
+  type: AiScopeType
+  id: number | null
+}
+
 /** 会话消息（`AiMessageOut`） */
 export interface AiChatMessage {
   id: number
@@ -578,6 +587,8 @@ export interface AiConversationSummary {
   created_at: string
   updated_at: string
   message_count: number
+  scope_type: AiScopeType
+  scope_id: number | null
 }
 
 /** 会话列表（`AiConversationListOut`） */

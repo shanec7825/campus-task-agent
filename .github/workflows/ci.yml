@@ -54,6 +54,8 @@ jobs:
         run: python -m pytest tests/backend/test_aiw06_acceptance.py -q
       - name: Run AIW-08 navigation and published scope suite
         run: python -m pytest tests/backend/test_aiw08_navigation_scope.py -q
+      - name: Run AIW-09 context scope suite
+        run: python -m pytest tests/backend/test_aiw09_context_scope.py -q
 
   backend-integration:
     name: Backend API and SSE integration

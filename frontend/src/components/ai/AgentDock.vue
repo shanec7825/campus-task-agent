@@ -4,17 +4,22 @@
  *
  * - 活动详情、任务详情底部使用；与 `/ai` 完整页共用 `aiChat` store；
  * - 长条含上下文标签、输入、发送；展开后显示最近消息与来源；
- * - 展开/收起不重置输入，不创建新会话；完整页入口保留同一会话；
+ * - 展开/收起不重置输入，不创建新会话；完整页入口继续当前目标的同一会话；
  * - 问答请求仍只读权限内事务，不执行写操作。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import { ApiError } from '../../api/client'
 import { useAiChatStore } from '../../stores/aiChat'
 
-const props = withDefaults(defineProps<{ contextLabel?: string }>(), { contextLabel: '' })
+const props = defineProps<{
+  contextLabel?: string
+  /** 当前页面绑定的问答目标（`C-FE-AI-SCOPE@1`）；缺省为通用作用域 */
+  scopeType?: 'activity' | 'task'
+  scopeId?: number
+}>()
 
 const router = useRouter()
 const aiChat = useAiChatStore()
@@ -22,6 +27,20 @@ const expanded = ref(false)
 
 const recent = computed(() => aiChat.recentMessages)
 const contextText = computed(() => props.contextLabel || '当前事务范围')
+
+watch(
+  [() => props.scopeType, () => props.scopeId, () => props.contextLabel],
+  () => {
+    aiChat.setScope(
+      props.scopeType ?? 'general',
+      props.scopeId ?? null,
+      props.contextLabel ?? ''
+    )
+    // 失败不阻塞当前页面；该作用域已有缓存时直接展示，不自动重发请求。
+    void aiChat.restore()
+  },
+  { immediate: true }
+)
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -58,8 +77,7 @@ function openFull(): void {
 }
 
 onMounted(() => {
-  // 失败不阻塞当前页面；已有消息时保留内容
-  void aiChat.restore()
+
   if (!aiChat.usage) void aiChat.loadUsage()
 })
 </script>

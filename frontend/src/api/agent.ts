@@ -6,6 +6,7 @@ import type {
   AiChatResult,
   AiConversationDetail,
   AiConversationList,
+  AiScope,
   AiUsage,
   Draft,
   ExtractResult,
@@ -55,11 +56,23 @@ export function streamParse(
     is_final: isFinal
   })
 }
-/** 权限内只读问答；`conversationId` 缺省时由后端新建会话，`requestId` 用于重试幂等 */
-export function chat(message: string, conversationId?: number, requestId?: string): Promise<AiChatResult> {
+/**
+ * 权限内只读问答；`conversationId` 缺省时由后端新建会话，`requestId` 用于重试幂等。
+ * `scope` 省略时保持通用作用域，兼容旧调用（`C-FE-AI-SCOPE@1`）。
+ */
+export function chat(
+  message: string,
+  conversationId?: number,
+  requestId?: string,
+  scope?: AiScope
+): Promise<AiChatResult> {
   const body: Record<string, unknown> = { message }
   if (conversationId !== undefined) body.conversation_id = conversationId
   if (requestId !== undefined) body.request_id = requestId
+  if (scope !== undefined) {
+    body.scope_type = scope.type
+    if (scope.type !== 'general' && scope.id !== null) body.scope_id = scope.id
+  }
   return request<AiChatResult>('POST', '/api/agent/chat', body)
 }
 
@@ -68,9 +81,17 @@ export function getUsage(limit = 20): Promise<AiUsage> {
   return request<AiUsage>('GET', '/api/agent/usage', undefined, { limit })
 }
 
-/** 当前用户最近的会话 */
-export function listConversations(limit = 20): Promise<AiConversationList> {
-  return request<AiConversationList>('GET', '/api/agent/conversations', undefined, { limit })
+/**
+ * 当前用户最近的会话；`scope` 省略时不按作用域过滤（旧调用行为）。
+ * `general` 只传 `scope_type`，活动 / 任务同时传 `scope_id`。
+ */
+export function listConversations(limit = 20, scope?: AiScope | null): Promise<AiConversationList> {
+  const query: Record<string, string | number | boolean | undefined> = { limit }
+  if (scope) {
+    query.scope_type = scope.type
+    if (scope.type !== 'general' && scope.id !== null) query.scope_id = scope.id
+  }
+  return request<AiConversationList>('GET', '/api/agent/conversations', undefined, query)
 }
 
 /** 本人会话详情（跨账号由后端返回 4040） */

@@ -441,7 +441,11 @@ watch(
         </div>
       </section>
 
-      <AgentDock :context-label="`活动：${activity.title}`" />
+      <AgentDock
+        :context-label="`活动：${activity.title}`"
+        :scope-type="'activity'"
+        :scope-id="activity?.id"
+      />
     </template>
 
     <el-dialog

@@ -5,6 +5,8 @@
 * 上下文只取 ``authz.visible_task_filter`` 命中的任务，最多 20 条；
 * 回答来源由服务端把模型返回的 ``ref`` 映射回真实任务，模型给出的 ID / 标题不落库；
 * 会话按 ``user_id`` 归属，跨账号读写一律 4040，不泄露资源存在性；
+* 会话作用域（``C-AI-SCOPE@1``）绑定通用 / 活动 / 任务，每次读取 / 续写前
+  重新校验对象可见性，撤权后 4040 且保留历史行；
 * 本模块只写 ``ai_conversations`` / ``ai_messages``，不改变任何业务表。
 
 事务边界：可见上下文与模型调用均在写库前完成，模型调用期间不持有 SQLite
@@ -22,7 +24,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -50,6 +52,12 @@ TITLE_LENGTH = 30
 
 ROLE_USER = "user"
 ROLE_ASSISTANT = "assistant"
+
+#: 会话作用域（`C-AI-SCOPE@1`）：通用会话不绑定对象，活动 / 任务绑定正整数 ID。
+SCOPE_GENERAL = "general"
+SCOPE_ACTIVITY = "activity"
+SCOPE_TASK = "task"
+SCOPE_TYPES = (SCOPE_GENERAL, SCOPE_ACTIVITY, SCOPE_TASK)
 
 ERR_NOT_FOUND = 4040
 ERR_INVALID_INPUT = 4001
@@ -164,18 +172,88 @@ def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _visible_context(db: Session, user: User) -> list[_ContextItem]:
-    """按截止时间取当前用户可见任务摘要（NULL 截止排在最后）。"""
-    rows = db.execute(
+def _normalize_scope(scope_type: str | None, scope_id: int | None) -> tuple[str, int | None]:
+    """归一化会话作用域；非法组合统一 4001（`C-AI-SCOPE@1`）。"""
+    normalized = (scope_type or SCOPE_GENERAL).strip()
+    if normalized not in SCOPE_TYPES:
+        raise ApiError(ERR_INVALID_INPUT, "会话作用域无效")
+    if normalized == SCOPE_GENERAL:
+        if scope_id is not None:
+            raise ApiError(ERR_INVALID_INPUT, "会话作用域无效")
+        return SCOPE_GENERAL, None
+    if scope_id is None or isinstance(scope_id, bool) or int(scope_id) <= 0:
+        raise ApiError(ERR_INVALID_INPUT, "会话作用域无效")
+    return normalized, int(scope_id)
+
+
+def _scope_visible(db: Session, user: User, scope_type: str, scope_id: int) -> bool:
+    """作用对象存在且当前用户可见；general 恒为可见。"""
+    if scope_type == SCOPE_ACTIVITY:
+        activity = db.get(Activity, scope_id)
+        return activity is not None and authz.can_view_activity(db, user, activity)
+    if scope_type == SCOPE_TASK:
+        task = db.get(Task, scope_id)
+        return task is not None and authz.can_view_task(db, user, task)
+    return True
+
+
+def _scope_object(db: Session, user: User, scope_type: str, scope_id: int) -> None:
+    """校验作用对象存在且当前用户可见；不可见与不存在同样 4040。"""
+    if not _scope_visible(db, user, scope_type, scope_id):
+        raise ApiError(ERR_NOT_FOUND, "会话作用对象不存在", 404)
+
+
+def _conversation_scope_visible(db: Session, user: User, conversation: AiConversation) -> bool:
+    """列表口径：逐条判断会话作用对象当前是否可见（行本身保留）。"""
+    try:
+        scope_type, scope_id = _normalize_scope(conversation.scope_type, conversation.scope_id)
+    except ApiError:
+        return False
+    if scope_type == SCOPE_GENERAL:
+        return True
+    return _scope_visible(db, user, scope_type, int(scope_id))
+
+
+def _ensure_conversation_scope_visible(
+    db: Session, user: User, conversation: AiConversation
+) -> None:
+    """读取 / 续写前按会话行重新校验作用对象可见性（撤权后拒绝，保留历史行）。"""
+    scope_type, scope_id = _normalize_scope(conversation.scope_type, conversation.scope_id)
+    if scope_type != SCOPE_GENERAL:
+        _scope_object(db, user, scope_type, int(scope_id))
+
+
+def _visible_context(
+    db: Session,
+    user: User,
+    scope_type: str = SCOPE_GENERAL,
+    scope_id: int | None = None,
+) -> list[_ContextItem]:
+    """按截止时间取当前用户可见任务摘要（NULL 截止排在最后）。
+
+    ``general`` 取全部可见任务；``activity`` 只取该活动下可见任务；
+    ``task`` 取该任务及同活动可见任务；均最多 ``MAX_CONTEXT_TASKS`` 条。
+    """
+    query = (
         select(Task, Activity)
         .outerjoin(Activity, Activity.id == Task.activity_id)
         .where(authz.visible_task_filter(db, user))
-        .order_by(
+    )
+    if scope_type == SCOPE_ACTIVITY:
+        query = query.where(Task.activity_id == int(scope_id))
+    elif scope_type == SCOPE_TASK:
+        task = db.get(Task, int(scope_id))
+        activity_id = int(task.activity_id) if task is not None and task.activity_id is not None else None
+        if activity_id is None:
+            query = query.where(Task.id == int(scope_id))
+        else:
+            query = query.where(or_(Task.id == int(scope_id), Task.activity_id == activity_id))
+    rows = db.execute(
+        query.order_by(
             case((Task.deadline.is_(None), 1), else_=0),
             Task.deadline.asc(),
             Task.id.asc(),
-        )
-        .limit(MAX_CONTEXT_TASKS)
+        ).limit(MAX_CONTEXT_TASKS)
     ).all()
     items: list[_ContextItem] = []
     for index, (task, activity) in enumerate(rows, start=1):
@@ -322,6 +400,8 @@ def _summary(db: Session, conversation: AiConversation) -> AiConversationSummary
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
         message_count=int(count),
+        scope_type=conversation.scope_type,
+        scope_id=conversation.scope_id,
     )
 
 
@@ -332,16 +412,20 @@ def chat(
     conversation_id: int | None,
     message: str,
     request_id: str | None = None,
+    scope_type: str = SCOPE_GENERAL,
+    scope_id: int | None = None,
 ) -> AiChatOut:
     """执行一次只读问答并持久化用户与助手消息。
 
-    顺序：请求幂等检查 → 归属校验 → 额度检查 → 读取可见上下文 → 结束只读事务 →
-    生成回答 → 写会话、消息与用量账本。模型调用期间不持有数据库事务；模型失败时
-    直接返回错误，不写任何一行、不扣额度。
+    顺序：请求幂等检查 → 归属校验 → 作用域一致 → 对象可见性 → 额度检查 →
+    读取作用域内可见上下文 → 结束只读事务 → 生成回答 → 写会话、消息与用量账本。
+    模型调用期间不持有数据库事务；模型或作用域校验失败时不写任何一行、不扣额度。
     """
     text = message.strip()
     if not text:
         raise ApiError(ERR_INVALID_INPUT, "消息不能为空")
+
+    normalized_scope_type, normalized_scope_id = _normalize_scope(scope_type, scope_id)
 
     normalized_request_id: str | None = None
     if request_id is not None:
@@ -354,9 +438,16 @@ def chat(
             return replayed
 
     if conversation_id is not None:
-        _get_conversation(db, user, conversation_id)
-        # 只读校验后结束事务，避免模型调用期间持有 SQLite 读锁。
-        db.rollback()
+        conversation = _get_conversation(db, user, conversation_id)
+        if (
+            conversation.scope_type != normalized_scope_type
+            or conversation.scope_id != normalized_scope_id
+        ):
+            raise ApiError(ERR_INVALID_INPUT, "会话作用域无效")
+    if normalized_scope_type != SCOPE_GENERAL:
+        _scope_object(db, user, normalized_scope_type, int(normalized_scope_id))
+    # 只读校验后结束事务，避免模型调用期间持有 SQLite 读锁。
+    db.rollback()
 
     limit = _quota_limit()
     used = _used_today(db, int(user.id))
@@ -367,7 +458,7 @@ def chat(
             "今日 AI 问答额度已用完；任务、通知与审批等协作功能仍可正常使用",
         )
 
-    items = _visible_context(db, user)
+    items = _visible_context(db, user, normalized_scope_type, normalized_scope_id)
     db.rollback()
 
     mock = llm_client.is_mock_mode()
@@ -377,11 +468,17 @@ def chat(
         answer, citations = _real_answer(items, text)
 
     if conversation_id is None:
-        conversation = AiConversation(user_id=int(user.id), title=text[:TITLE_LENGTH])
+        conversation = AiConversation(
+            user_id=int(user.id),
+            title=text[:TITLE_LENGTH],
+            scope_type=normalized_scope_type,
+            scope_id=normalized_scope_id,
+        )
         db.add(conversation)
         db.flush()
     else:
         conversation = _get_conversation(db, user, conversation_id)
+        _ensure_conversation_scope_visible(db, user, conversation)
 
     now = _now_text()
     user_message = AiMessage(
@@ -474,32 +571,66 @@ def get_usage(db: Session, user: User, limit: int = 20) -> AiUsageOut:
     )
 
 
-def list_conversations(db: Session, user: User, limit: int = 20) -> AiConversationListOut:
+def list_conversations(
+    db: Session,
+    user: User,
+    limit: int = 20,
+    scope_type: str | None = None,
+    scope_id: int | None = None,
+) -> AiConversationListOut:
+    """本人最近会话；给定作用域时只返回该作用域（`C-AI-SCOPE@1`）。
+
+    不带作用域时返回本人全部会话，但逐条重校验作用对象可见性：
+    撤权后的 scoped 会话不出现在列表，行与消息保留不删除。
+    """
     bounded = max(1, min(int(limit), MAX_CONVERSATION_LIST))
-    rows = db.execute(
+    scoped_request = scope_type is not None or scope_id is not None
+    query = (
         select(AiConversation, func.count(AiMessage.id))
         .outerjoin(AiMessage, AiMessage.conversation_id == AiConversation.id)
         .where(AiConversation.user_id == user.id)
-        .group_by(AiConversation.id)
-        .order_by(AiConversation.updated_at.desc(), AiConversation.id.desc())
-        .limit(bounded)
+    )
+    if scoped_request:
+        normalized_type, normalized_id = _normalize_scope(scope_type, scope_id)
+        if normalized_type == SCOPE_GENERAL:
+            query = query.where(
+                AiConversation.scope_type == SCOPE_GENERAL,
+                AiConversation.scope_id.is_(None),
+            )
+        else:
+            _scope_object(db, user, normalized_type, int(normalized_id))
+            query = query.where(
+                AiConversation.scope_type == normalized_type,
+                AiConversation.scope_id == normalized_id,
+            )
+    rows = db.execute(
+        query.group_by(AiConversation.id).order_by(
+            AiConversation.updated_at.desc(), AiConversation.id.desc()
+        )
     ).all()
-    return AiConversationListOut(
-        items=[
+    items: list[AiConversationSummary] = []
+    for conversation, count in rows:
+        if not scoped_request and not _conversation_scope_visible(db, user, conversation):
+            continue
+        items.append(
             AiConversationSummary(
                 id=int(conversation.id),
                 title=conversation.title,
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,
                 message_count=int(count),
+                scope_type=conversation.scope_type,
+                scope_id=conversation.scope_id,
             )
-            for conversation, count in rows
-        ]
-    )
+        )
+        if len(items) >= bounded:
+            break
+    return AiConversationListOut(items=items)
 
 
 def get_conversation(db: Session, user: User, conversation_id: int) -> AiConversationDetailOut:
     conversation = _get_conversation(db, user, conversation_id)
+    _ensure_conversation_scope_visible(db, user, conversation)
     messages = db.execute(
         select(AiMessage)
         .where(AiMessage.conversation_id == conversation.id)

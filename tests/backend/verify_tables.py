@@ -457,6 +457,17 @@ def main() -> int:
             "ai_usage_ledger 存在 user_id/created_at 索引"
             f"（实际 {sorted(index_names(conn, 'ai_usage_ledger'))}）",
         )
+        ai_conversation_columns = column_names(conn, "ai_conversations")
+        expect(
+            {"scope_type", "scope_id"} <= ai_conversation_columns,
+            "ai_conversations 含 AIW-09 作用域列 scope_type/scope_id"
+            f"（实际 {sorted(ai_conversation_columns)}）",
+        )
+        parse_session_columns = column_names(conn, "parse_sessions")
+        expect(
+            "user_id" in parse_session_columns,
+            f"parse_sessions 含 AIW-09 归属列 user_id（实际 {sorted(parse_session_columns)}）",
+        )
         notification_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
         expect(
             "stale" in notification_columns,

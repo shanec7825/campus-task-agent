@@ -830,6 +830,9 @@ class AiChatIn(BaseModel):
     message: str = Field(max_length=2000)
     # 客户端请求幂等键（`C-AI-USAGE@1`）：同一用户同一键只生成一次回答与账本。
     request_id: str | None = Field(default=None, max_length=64)
+    # 会话作用域（`C-AI-SCOPE@1`）：缺省为 general，兼容旧客户端。
+    scope_type: Literal["general", "activity", "task"] = "general"
+    scope_id: int | None = None
 
 
 class AiCitation(BaseModel):
@@ -899,6 +902,9 @@ class AiConversationSummary(BaseModel):
     created_at: str
     updated_at: str
     message_count: int = 0
+    # 会话作用域（`C-AI-SCOPE@1`）：所有列表 / 详情 / 新建路径都返回。
+    scope_type: Literal["general", "activity", "task"] = "general"
+    scope_id: int | None = None
 
 
 class AiConversationListOut(BaseModel):
