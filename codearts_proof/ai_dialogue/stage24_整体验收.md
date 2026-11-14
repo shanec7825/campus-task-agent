@@ -79,4 +79,4 @@
 - 证据：本记录、`reports/stage24_整体验收.md`、截图 8 张、`outputs/aiw06/*.log`（本地忽略）。
 - 未验证：真实模型、真机、移动端完整提交/验收、深色主题、部署、全量 pytest 的 skip 形态。
 - 提交/推送/CI：业务提交 `a728788af906ccd2bf529166321f467277beec92` 已推送 `origin/main`；对应 CI run `43532974986`（run_number 20）**completed / success**，四个 job 全 success（Backend API and SSE integration、Frontend build/voice/public source security checks、Backend reliability ubuntu-latest、Backend reliability windows-latest）。核对方式为 GitHub REST API（本机无 `gh`）。未部署。
-- 2026-11-14 CI 回填续跑：本轮读取现场、实跑 `tests/backend/test_aiw06_acceptance.py`（**1 passed**，5.15s，EXIT=0）核对代码现状后回填 CI 结论与本轮启动指令；未改业务代码、测试或表结构，未新开独立审查（无新增业务 diff）。
+- 2026-11-14 CI 回填续跑：本轮读取现场、实跑 `tests/backend/test_aiw06_acceptance.py`（**1 passed**，5.15s，EXIT=0）核对代码现状后回填 CI 结论与本轮启动指令；未改业务代码、测试或表结构，未新开独立审查（无新增业务 diff）。- 文档回填提交 `2439154078ecb3860526c0c70edbcee251f272b9` 已推送，CI run `43533483789` 四个 job success。每小时定时任务 `75f554a4` 已暂停（未删除，配置保留）。
