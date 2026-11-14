@@ -1,0 +1,182 @@
+{
+  "note": "stage26 AC-09/14/16 浏览器验收脱敏证据副本；不含口令、Cookie、令牌。原始文件保留在 work/aiw07/。",
+  "ac09": {
+    "cases": [
+      {
+        "id": "AC-09-resubmit-v2",
+        "sawReject": true,
+        "msg": "已提交，等待发布者验收",
+        "v2": {
+          "id": 2,
+          "version": 2
+        },
+        "ok": true
+      },
+      {
+        "id": "AC-09-old-version-rejected",
+        "status": 200,
+        "code": 4090,
+        "msg": "该成果版本已不是最新版本，请刷新后重新验收",
+        "ok": true
+      },
+      {
+        "id": "AC-09-precheck-v2",
+        "pendingCount": 1,
+        "verdict": "",
+        "ok": false
+      },
+      {
+        "id": "AC-09-verify-v2",
+        "msg": "验收通过，成员获得 4 积分",
+        "ok": true
+      },
+      {
+        "id": "AC-09-member-credit",
+        "credits": 4,
+        "hasVerifyNotice": true,
+        "ok": true
+      },
+      {
+        "id": "AC-09-cross-org-blocked",
+        "apiStatus": 404,
+        "code": 4040,
+        "uiDenied": true,
+        "ok": true
+      }
+    ],
+    "loginMember": "member01",
+    "v2Id": 2,
+    "loginCollab": "collab",
+    "loginMember2": "member01",
+    "loginOutsider": "outsider",
+    "finishedAt": "2026-11-14T04:30:37.984Z"
+  },
+  "ac14": {
+    "cases": [
+      {
+        "id": "AC-14-zero-quota-ai",
+        "quotaText": "今日 AI 问答 0 / 0 次，剩余 0 次",
+        "hasQuotaAlert": true,
+        "quotaAlertText": "今日 AI 问答额度已用完任务、通知、报名、审批与验收等协作功能仍可正常使用。",
+        "textareaDisabled": true,
+        "sendDisabled": true,
+        "ok": true
+      },
+      {
+        "id": "AC-14-collab-unaffected",
+        "tasks": 1,
+        "bodyHasTask": true,
+        "ok": true
+      },
+      {
+        "id": "AC-14-agentdock-forms",
+        "exists": true,
+        "inputDisabled": true,
+        "hasToggle": true,
+        "panel": true,
+        "hasFullEntry": true,
+        "panelText": "最近对话\n\n打开完整页\n\n还没有对话。输入问题后，这里会显示最近消息与来源。\n\n问答只读取你有权限查看的事务，不替你发布、改期或验收；完整页、长条与微展开共用同一会话与草稿。",
+        "ok": true
+      },
+      {
+        "id": "AC-14-agentdock-fullpage",
+        "url": "http://127.0.0.1:8010/ai",
+        "ok": true
+      },
+      {
+        "id": "AC-14-mobile",
+        "innerWidth": 390,
+        "scrollWidth": 390,
+        "dockVisible": true,
+        "ok": true
+      }
+    ],
+    "finishedAt": "2026-11-14T04:31:51.602Z"
+  },
+  "ac03_notify": {
+    "cases": [
+      {
+        "id": "AC-01-notification-deeplink",
+        "noticeCount": 2,
+        "noticeText": "通知\n验收通过，积分到账\n未读\n2026-11-14 12:30\n\n《场地准备》验收通过，获得 4 积分。\n\n查看任务\n标记已读",
+        "url": "http://127.0.0.1:8000/tasks/1",
+        "ok": true
+      },
+      {
+        "id": "AC-03-detail-back",
+        "metrics": {
+          "h": 936,
+          "c": 844,
+          "y": 0
+        },
+        "before": 92,
+        "after": 92,
+        "detailUrl": "http://127.0.0.1:8000/tasks/1",
+        "delta": 0,
+        "ok": true
+      }
+    ],
+    "finishedAt": "2026-11-14T04:32:29.285Z"
+  },
+  "ac16": {
+    "cases": [
+      {
+        "id": "E-01-visible-activities",
+        "answer": "你有权限查看的活动包括：2026 迎新志愿活动。每个活动下的任务可以在活动详情中查看，本回答只使用当前可见范围。",
+        "citations": [
+          "搬运桌椅",
+          "场地准备"
+        ],
+        "leaksForeign": false,
+        "ok": true
+      },
+      {
+        "id": "E-02-next-action",
+        "answer": "根据你有权限查看的 2 项事务，先列出最需要关注的 2 项：\nT1. 搬运桌椅（2026 迎新志愿活动），截止：2026-11-17 18:00\nT2. 场地准备（2026 迎新志愿活动），截止：2026-11-18 18:00\n以上内容来自当前可见任务；如需查看要求或更新进度，请打开对应任务详情。",
+        "citations": [
+          "搬运桌椅",
+          "场地准备",
+          "搬运桌椅",
+          "场地准备"
+        ],
+        "leaksForeign": false,
+        "ok": true
+      },
+      {
+        "id": "E-03-read-only",
+        "answer": "根据你有权限查看的 2 项事务，先列出最需要关注的 2 项：\nT1. 搬运桌椅（2026 迎新志愿活动），截止：2026-11-17 18:00\nT2. 场地准备（2026 迎新志愿活动），截止：2026-11-18 18:00\n以上内容来自当前可见任务；如需查看要求或更新进度，请打开对应任务详情。",
+        "citations": [
+          "场地准备",
+          "搬运桌椅",
+          "场地准备",
+          "搬运桌椅",
+          "场地准备"
+        ],
+        "readOnlyHint": false,
+        "claimsDone": false,
+        "ok": false
+      },
+      {
+        "id": "script-error",
+        "error": "TimeoutError: locator.fill: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.auth-page input[type=\"text\"]')\u001b[22m\n"
+      }
+    ],
+    "mode": "MAAS_MOCK=1",
+    "finishedAt": "2026-11-14T04:33:49.263Z"
+  },
+  "ac16_e05": {
+    "cases": [
+      {
+        "id": "E-05-cross-org",
+        "answer": "你有权限查看的活动包括：外语角筹备。每个活动下的任务可以在活动详情中查看，本回答只使用当前可见范围。",
+        "citations": [
+          "外语角志愿者招募"
+        ],
+        "leaksOrgA": false,
+        "ok": true
+      }
+    ],
+    "mode": "MAAS_MOCK=1",
+    "finishedAt": "2026-11-14T04:34:09.613Z"
+  }
+}

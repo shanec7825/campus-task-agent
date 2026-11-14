@@ -1,0 +1,87 @@
+{
+  "note": "stage26 浏览器证据脱敏副本；原始文件位于 Git 忽略的 work/aiw07/，本副本不含口令、Cookie 或令牌。",
+  "proof": {
+    "cases": [
+      {
+        "id": "AC-01-unauthenticated-redirect",
+        "url": "http://127.0.0.1:8000/login?redirect=/admin",
+        "hasAuth": true,
+        "shot": true,
+        "ok": true
+      },
+      {
+        "id": "AC-01-member-admin-denied",
+        "afterLoginUrl": "http://127.0.0.1:8000/ai",
+        "deniedUrl": "http://127.0.0.1:8000/ai",
+        "orgShown": true,
+        "shot": true,
+        "ok": true
+      },
+      {
+        "id": "AC-15-dark-theme",
+        "before": {
+          "theme": "light",
+          "bg": "rgb(245, 247, 251)"
+        },
+        "after": {
+          "theme": "dark",
+          "bg": "rgb(15, 17, 21)"
+        },
+        "shot": true,
+        "ok": true
+      },
+      {
+        "id": "AC-15-mobile",
+        "innerWidth": 390,
+        "scrollWidth": 390,
+        "hasBottomNav": true,
+        "smallVisibleButtons": 0,
+        "shot": true,
+        "ok": true
+      },
+      {
+        "id": "AC-03-hover-peek",
+        "openCount": 1,
+        "afterEsc": 0,
+        "quickCount": 0,
+        "shot": true,
+        "ok": true
+      },
+      {
+        "id": "AC-03-detail-back",
+        "beforeScroll": 92,
+        "afterScroll": 92,
+        "detailUrl": "http://127.0.0.1:8000/tasks/1",
+        "shot": true,
+        "ok": true
+      }
+    ],
+    "tool": "Playwright CLI 1.65.1",
+    "db": "work/aiw07/demo2.db",
+    "finishedAt": "2026-11-14T04:39:59.344Z"
+  },
+  "proof2": {
+    "cases": [
+      {
+        "id": "AC-01-session-expired-redirect",
+        "afterLogoutUrl": "http://127.0.0.1:8000/login",
+        "expiredUrl": "http://127.0.0.1:8000/login?redirect=/admin",
+        "hasAuth": true,
+        "shot": true,
+        "ok": true
+      },
+      {
+        "id": "AC-03-hall-load",
+        "activities": 1,
+        "tasks": 1,
+        "hasFilter": true,
+        "hasActivityTitle": true,
+        "shot": true,
+        "ok": true
+      }
+    ],
+    "tool": "Playwright CLI 1.65.1",
+    "db": "work/aiw07/demo2.db",
+    "finishedAt": "2026-11-14T04:45:24.019Z"
+  }
+}
