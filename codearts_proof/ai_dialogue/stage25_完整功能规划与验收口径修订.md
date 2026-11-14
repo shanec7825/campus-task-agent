@@ -53,4 +53,4 @@
 - 触发与授权：用户在本轮交互中明确选择「先收口 stage25 再开工 AIW-07」，并扩大阶段开发授权至 AIW-07～13。§6 第 1 条保留 08:46 原文，本节记录实际发生的收口结果。
 - 归属核对：4 个新增文件与 `codearts_proof/LOG.md`、`docs/HANDOFF.md` 修改均由 Codex 桌面端在 08:38–08:46 产生；本轮仅做脱敏核对、显式暂存与提交，不改写其中的规划结论。
 - 敏感信息核对：逐文件检查，仅含日期、相对路径、提交 SHA、CI 编号与规划文本，无凭证、Cookie、令牌或个人数据。
-- 收口提交：随本节一并提交；SHA 与对应 CI 在下一次回填中写入，不提前填写未发生的 CI 结果。
+- 收口提交：`19eda9f`（`docs(stage25): 收口完整功能规划与 AIW-07～13 计划摘要`），已推送 `origin/main`；CI run 43553685701 四个 job 全 success（Backend reliability ubuntu/windows、Backend API and SSE integration、Frontend build/voice/security）。本次仍是文档提交，未运行业务测试；该结果不证明真实模型、真机或浏览器场景。
