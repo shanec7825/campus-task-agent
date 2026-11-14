@@ -1,0 +1,310 @@
+{
+  "stage": 29,
+  "date": "2026-11-14",
+  "timezone": "Asia/Shanghai",
+  "plan_version": "2026-11-14-r3",
+  "baseline": "a4d2714f067ed0a819401a07434944878c6f9589",
+  "status": "pass",
+  "passed": 69,
+  "failed": 0,
+  "local_markdown_links_checked": 118,
+  "method": "final Node file API verification after user forwarded r2 review; no shell or child process",
+  "previous_python_validation": {
+    "command": "python -X utf8 work/stage29/verify_plans.py",
+    "passed": 94,
+    "failed": 0,
+    "exit_code": 0,
+    "local_markdown_links_checked": 118,
+    "git_diff_check": "exit 0 in that run; not rerun after final prose additions"
+  },
+  "initial_failure_report": "stage29_plan_document_check_initial.json",
+  "ownership": "stage29 modified planning/docs only; r2 code and evidence belong to original executor and were only read",
+  "r2_review": "1 Critical / 2 Important unresolved; source design-r2 §6 and user-forwarded report, not independently reviewed here",
+  "business_tests_run": false,
+  "browser_run": false,
+  "independent_code_review": false,
+  "automation_changed": false,
+  "commit_push_ci_deployment": "not performed in stage29",
+  "checks": [
+    {
+      "name": "UTF8 .codeartsdoer/plans/ai-workbench/roadmap.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/ai-workbench/requirements.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/ai-workbench/execution-contract.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/ai-workbench/decisions.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/ai-workbench/acceptance-matrix.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw08-navigation-roles/design.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw08-navigation-roles/task.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw09-context-voice/design.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw09-context-voice/task.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw10-documents-review/design.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw10-documents-review/task.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw11-collaboration-actions/design.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw11-collaboration-actions/task.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw12-assets-quota/design.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw12-assets-quota/task.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw13-product-acceptance/design.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw13-product-acceptance/task.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw14-workbench-library-search/design.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/aiw14-workbench-library-search/task.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 .codeartsdoer/plans/ai-workbench/continue-development-prompt.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 docs/HANDOFF.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 codearts_proof/LOG.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 codearts_proof/prompts/prompt迭代记录.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 codearts_proof/ai_dialogue/stage29_工作台体验与资源库计划修订.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 codearts_proof/prompts/agent_team_启动指令/2026-11-14_stage29_计划修订_用户原文.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 codearts_proof/prompts/agent_team_启动指令/2026-11-14_stage29_后续连续开发提示词.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 codearts_proof/reports/stage29_后续开发计划摘要.md",
+      "pass": true
+    },
+    {
+      "name": "UTF8 codearts_proof/reports/stage29_plan_document_check.json",
+      "pass": true
+    },
+    {
+      "name": "UTF8 codearts_proof/reports/stage29_plan_document_check_initial.json",
+      "pass": true
+    },
+    {
+      "name": "final local Markdown links",
+      "pass": true,
+      "detail": {
+        "checked": 118,
+        "broken": []
+      }
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/ai-workbench/roadmap.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/ai-workbench/requirements.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/ai-workbench/execution-contract.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/ai-workbench/decisions.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/ai-workbench/acceptance-matrix.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw08-navigation-roles/design.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw08-navigation-roles/task.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw09-context-voice/design.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw09-context-voice/task.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw10-documents-review/design.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw10-documents-review/task.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw11-collaboration-actions/design.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw11-collaboration-actions/task.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw12-assets-quota/design.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw12-assets-quota/task.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw13-product-acceptance/design.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved .codeartsdoer/plans/aiw13-product-acceptance/task.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved AGENTS.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved docs/HANDOFF.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved codearts_proof/LOG.md",
+      "pass": true
+    },
+    {
+      "name": "snapshot preserved codearts_proof/prompts/prompt迭代记录.md",
+      "pass": true
+    },
+    {
+      "name": "preexisting AGENTS unchanged",
+      "pass": true
+    },
+    {
+      "name": "prompt copies identical",
+      "pass": true
+    },
+    {
+      "name": "prompt puts r2 blockers before new work",
+      "pass": true
+    },
+    {
+      "name": "prompt releases documentation writer without forced commit",
+      "pass": true
+    },
+    {
+      "name": "R rows complete",
+      "pass": true
+    },
+    {
+      "name": "AC rows complete",
+      "pass": true
+    },
+    {
+      "name": "D rows complete",
+      "pass": true
+    },
+    {
+      "name": "handoff retains cancellation and r2 blocker order",
+      "pass": true
+    },
+    {
+      "name": "other executor file preserved since observation frontend/src/components/ai/AgentDock.vue",
+      "pass": true
+    },
+    {
+      "name": "other executor file preserved since observation frontend/src/composables/useVoiceComposer.ts",
+      "pass": true
+    },
+    {
+      "name": "other executor file preserved since observation frontend/src/stores/aiChat.ts",
+      "pass": true
+    },
+    {
+      "name": "other executor file preserved since observation frontend/src/views/AiConsole.vue",
+      "pass": true
+    },
+    {
+      "name": "other executor file preserved since observation codearts_proof/reports/stage28_browser_voice.json",
+      "pass": true
+    },
+    {
+      "name": "other executor file preserved since observation codearts_proof/reports/stage28_browser_voice_publish.json",
+      "pass": true
+    },
+    {
+      "name": "other executor file preserved since observation codearts_proof/screenshots/stage28/stage28_voice_dock.png",
+      "pass": true
+    },
+    {
+      "name": "other executor file preserved since observation frontend/src/components/ai/AgentVoiceButton.vue",
+      "pass": true
+    },
+    {
+      "name": "other executor file preserved since observation frontend/src/composables/useAiVoiceSink.ts",
+      "pass": true
+    },
+    {
+      "name": "HEAD read via files remains baseline",
+      "pass": true
+    }
+  ]
+}

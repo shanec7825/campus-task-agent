@@ -1,32 +1,29 @@
 <script setup lang="ts">
 /**
- * 事务列表（R3 / `C-CARD@2` / `C-FE-HALL@1` / `C-FE-PEEK@1` / `C-FE-HALL-RETURN@1`）。
+ * 事务列表（契约 `C-BROWSE-TABS@3` / `C-BROWSE-SPLIT@1`）。
  *
- * - 两个分区：活动（`GET /api/activities`）与任务（活动下第一层任务 + 独立任务）；
- * - 子任务不在本页重复铺满；
- * - 范围筛选同时作用于活动与任务（`scope=all|mine`）；
- * - 筛选：状态 / 范围 / 类型；≤768px 收进单个「筛选」按钮的底部抽屉；
- * - 桌面精确指针设备提供 200ms 悬浮预览；手机点击直接进入详情；
- * - 筛选与滚动位置保存在当前标签页 `sessionStorage`，从详情返回后恢复；
- * - 加载中不渲染空状态；本页不放发布入口（发布入口由外壳提供）；
- * - `variant="mine"` 复用同一实现作为独立「我的任务」页：范围锁定 `mine`，
- *   筛选与滚动位置使用独立键，不复制第二套查询逻辑。
+ * - 活动 / 任务双段胶囊：路由 `?type=activity|task` 决定唯一渲染的集合，缺省 `activity`；
+ * - 两类筛选与滚动位置各存独立 sessionStorage 键，互不覆盖；切换类型清除不匹配的选中；
+ * - 选中事项后结果区变为左单列卡片 + 右侧两列详情（`≥768px`），`<768px` 直接进入独立详情页；
+ * - 卡片只读，报名 / 验收 / 图谱 / 成员仍在独立详情页，本页不提供写入；
+ * - `variant="mine"` 复用同一实现作为「我的任务」页：范围锁定 `mine`，使用独立持久化键。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import { listActivities } from '../api/activities'
-import { applyTask } from '../api/applications'
 import { ApiError } from '../api/client'
 import { listTasks } from '../api/tasks'
+import ActivityBrowseCard from '../components/browse/ActivityBrowseCard.vue'
+import BrowseDetailPanel from '../components/browse/BrowseDetailPanel.vue'
+import HallTabs, { type BrowseType } from '../components/browse/HallTabs.vue'
+import TaskBrowseCard from '../components/browse/TaskBrowseCard.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import HoverPeek from '../components/common/HoverPeek.vue'
 import LoadingState from '../components/common/LoadingState.vue'
 import { STATUS_MAP, statusText } from '../components/task/StatusTag.vue'
-import TaskCard, { formatDeadline, quotaText } from '../components/task/TaskCard.vue'
-import { useUserStore } from '../stores/user'
+import { formatDeadline, quotaText } from '../components/task/TaskCard.vue'
 import type { Activity, TaskItem } from '../types/models'
 
 type ScopeValue = 'all' | 'mine'
@@ -38,60 +35,63 @@ interface HallViewState {
   scrollTop: number
 }
 
-const HALL_VIEW_KEY = 'cta_hall_view'
-const MY_TASKS_VIEW_KEY = 'cta_my_tasks_view'
+/** 两类集合各自一份筛选与滚动记录（契约 `C-BROWSE-TABS@3` 持久化键） */
+const VIEW_KEYS: Record<'hall' | 'mine', Record<BrowseType, string>> = {
+  hall: { activity: 'cta_hall_view_activity', task: 'cta_hall_view_task' },
+  mine: { activity: 'cta_my_tasks_view_activity', task: 'cta_my_tasks_view_task' }
+}
 
 const props = withDefaults(defineProps<{ variant?: 'hall' | 'mine' }>(), { variant: 'hall' })
-/** 「我的任务」与大厅共用本组件，只锁定范围与文案 */
 const isMineVariant = props.variant === 'mine'
-const viewStorageKey = isMineVariant ? MY_TASKS_VIEW_KEY : HALL_VIEW_KEY
+const viewKeys = VIEW_KEYS[isMineVariant ? 'mine' : 'hall']
 
+const route = useRoute()
 const router = useRouter()
-const userStore = useUserStore()
 
-function readHallView(): HallViewState {
-  const fallback: HallViewState = {
+const activities = ref<Activity[]>([])
+const tasks = ref<TaskItem[]>([])
+const loading = ref(false)
+const error = ref('')
+const filterDrawerOpen = ref(false)
+const isCompact = ref(false)
+
+function defaultView(): HallViewState {
+  return {
     status: 'all',
     scope: isMineVariant ? 'mine' : 'all',
     type: 'all',
     scrollTop: 0
   }
+}
+
+function readView(type: BrowseType): HallViewState {
+  const fallback = defaultView()
   try {
-    const raw = window.sessionStorage.getItem(viewStorageKey)
+    const raw = window.sessionStorage.getItem(viewKeys[type])
     if (!raw) return fallback
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null) return fallback
     const candidate = parsed as Partial<HallViewState>
     return {
-      status: typeof candidate.status === 'string' ? candidate.status : 'all',
+      status: typeof candidate.status === 'string' ? candidate.status : fallback.status,
       scope: isMineVariant ? 'mine' : candidate.scope === 'mine' ? 'mine' : 'all',
-      type: typeof candidate.type === 'string' ? candidate.type : 'all',
-      scrollTop: typeof candidate.scrollTop === 'number' && candidate.scrollTop > 0 ? candidate.scrollTop : 0
+      type: typeof candidate.type === 'string' ? candidate.type : fallback.type,
+      scrollTop:
+        typeof candidate.scrollTop === 'number' && candidate.scrollTop > 0 ? candidate.scrollTop : 0
     }
   } catch {
     return fallback
   }
 }
 
-const savedView = readHallView()
-const activities = ref<Activity[]>([])
-const tasks = ref<TaskItem[]>([])
-const loading = ref(false)
-const error = ref('')
-const statusFilter = ref(savedView.status)
-const scope = ref<ScopeValue>(savedView.scope)
-const typeFilter = ref(savedView.type)
-const filterDrawerOpen = ref(false)
-const applyingId = ref<number | null>(null)
+const viewStates = reactive<Record<BrowseType, HallViewState>>({
+  activity: readView('activity'),
+  task: readView('task')
+})
 
-/** 请求序号：快速切换筛选时只接受最后一次响应 */
-let loadSeq = 0
-/** 滚动写入节流定时器 */
-let scrollWriteTimer: number | null = null
-/** 加载期间用户已主动滚动时，不再用旧位置覆盖 */
-let userScrolledDuringLoad = false
-/** 页面已卸载：防止加载完成后的 scrollTo 作用到新页面 */
-let disposed = false
+/** 活动 / 任务集合由路由 query 唯一决定（缺省活动） */
+const activeType = computed<BrowseType>(() => (route.query.type === 'task' ? 'task' : 'activity'))
+const currentView = computed<HallViewState>(() => viewStates[activeType.value])
 
 /** 状态过滤项直接由 StatusTag 的映射表生成，保证文案唯一来源 */
 const statusOptions = Object.entries(STATUS_MAP).map(([value, meta]) => ({
@@ -104,38 +104,39 @@ const typeOptions = [
   { value: 'assign', label: '指派' }
 ]
 
-const currentUserId = computed<number | null>(() => userStore.user?.id ?? null)
-
-/** 任务区 = 活动下第一层任务 + 独立任务；子任务不重复铺满 */
+/** 任务集合 = 活动下第一层任务 + 独立任务；子任务不重复铺满 */
 const visibleTasks = computed<TaskItem[]>(() =>
   tasks.value.filter(
     (task) =>
       task.parent_id === null &&
-      (typeFilter.value === 'all' || task.claim_type === typeFilter.value)
+      (currentView.value.type === 'all' || task.claim_type === currentView.value.type)
   )
 )
 
-const activityTaskCount = computed<number>(
-  () => visibleTasks.value.filter((task) => task.activity_id !== null).length
-)
-const independentTaskCount = computed<number>(
-  () => visibleTasks.value.filter((task) => task.activity_id === null).length
-)
-
-/** 活动标题映射：任务卡显示所属活动，不新增后端字段 */
+/** 活动标题映射：任务卡与预览显示所属活动，不新增后端字段 */
 const activityTitleById = computed<Map<number, string>>(
   () => new Map(activities.value.map((activity) => [activity.id, activity.title]))
 )
 
-const hasFilter = computed<boolean>(
-  () => statusFilter.value !== 'all' || (!isMineVariant && scope.value !== 'all') || typeFilter.value !== 'all'
-)
+const hasFilter = computed<boolean>(() => {
+  const state = currentView.value
+  const scopeFiltered = !isMineVariant && state.scope !== 'all'
+  if (activeType.value === 'activity') return scopeFiltered
+  return scopeFiltered || state.status !== 'all' || state.type !== 'all'
+})
 
 const emptyTitle = computed<string>(() => {
+  if (activeType.value === 'activity') {
+    return currentView.value.scope === 'mine' ? '暂无与你相关的活动' : '暂无活动'
+  }
   if (hasFilter.value) return '没有符合条件的任务'
   return isMineVariant ? '还没有与你相关的任务' : '暂无任务'
 })
+
 const emptyDescription = computed<string>(() => {
+  if (activeType.value === 'activity') {
+    return '活动发布后会出现在这里；点击卡片可在右侧查看摘要，或打开完整活动详情。'
+  }
   if (hasFilter.value) return '试着切换状态、范围或类型筛选，或点击「刷新」重新加载。'
   return isMineVariant
     ? '你还没有需要执行或管理的任务；报名通过或成为负责人后，任务会出现在这里。'
@@ -144,15 +145,63 @@ const emptyDescription = computed<string>(() => {
 
 /** 当前筛选摘要：不依赖按钮高亮即可读到「现在筛了什么」 */
 const activeFilterText = computed<string>(() => {
+  const state = currentView.value
+  if (activeType.value === 'activity') {
+    if (!isMineVariant && state.scope === 'mine') return '范围：我的任务与活动'
+    return isMineVariant ? '我的全部活动' : '全部活动'
+  }
   const parts: string[] = []
-  if (statusFilter.value !== 'all') parts.push(`状态：${statusText(statusFilter.value)}`)
-  if (!isMineVariant && scope.value !== 'all') parts.push('范围：我的任务与活动')
-  if (typeFilter.value !== 'all') {
-    const matched = typeOptions.find((option) => option.value === typeFilter.value)
-    parts.push(`类型：${matched?.label ?? typeFilter.value}`)
+  if (state.status !== 'all') parts.push(`状态：${statusText(state.status)}`)
+  if (!isMineVariant && state.scope !== 'all') parts.push('范围：我的任务与活动')
+  if (state.type !== 'all') {
+    const matched = typeOptions.find((option) => option.value === state.type)
+    parts.push(`类型：${matched?.label ?? state.type}`)
   }
   return parts.length > 0 ? parts.join(' · ') : isMineVariant ? '我的全部任务与活动' : '全部事务'
 })
+
+const subtitle = computed<string>(() => {
+  if (loading.value) return `正在加载${activeType.value === 'activity' ? '活动' : '任务'}…`
+  return activeType.value === 'activity'
+    ? `共 ${activities.value.length} 个活动`
+    : `共 ${visibleTasks.value.length} 个任务`
+})
+
+/** 选中态完全来自 query：`selectedType` 与当前集合不一致时不生效 */
+const detailType = computed<BrowseType | null>(() => {
+  const raw = route.query.selectedType
+  if (raw !== 'activity' && raw !== 'task') return null
+  return raw === activeType.value ? raw : null
+})
+
+const detailId = computed<number | null>(() => {
+  const raw = Array.isArray(route.query.selectedId) ? route.query.selectedId[0] : route.query.selectedId
+  const value = Number(raw)
+  return Number.isInteger(value) && value > 0 ? value : null
+})
+
+/** 分栏只在 ≥768px 生效；移动端点击粒子直接进独立详情页 */
+const splitSelection = computed<{ type: BrowseType; id: number } | null>(() => {
+  const type = detailType.value
+  const id = detailId.value
+  if (type === null || id === null || isCompact.value) return null
+  return { type, id }
+})
+
+function isSelected(type: BrowseType, id: number): boolean {
+  return splitSelection.value?.type === type && splitSelection.value?.id === id
+}
+
+let loadSeq = 0
+let scrollWriteTimer: number | null = null
+let userScrolledDuringLoad = false
+let disposed = false
+/** 打开分栏前的滚动位置：关闭后回到原处 */
+let restoreScrollTop: number | null = null
+
+function updateCompact(): void {
+  isCompact.value = window.innerWidth < 768
+}
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -162,44 +211,45 @@ function errorMessage(err: unknown): string {
   return '请求失败，请稍后重试'
 }
 
-function taskQuery(): { status?: string; scope: 'all' | 'mine'; include_sub: boolean } {
-  return {
-    status: statusFilter.value === 'all' ? undefined : statusFilter.value,
-    scope: scope.value,
-    include_sub: true
-  }
-}
-
-function writeHallView(): void {
+function writeView(type: BrowseType): void {
+  const state = viewStates[type]
   try {
     window.sessionStorage.setItem(
-      viewStorageKey,
+      viewKeys[type],
       JSON.stringify({
-        status: statusFilter.value,
-        scope: scope.value,
-        type: typeFilter.value,
+        status: state.status,
+        scope: state.scope,
+        type: state.type,
         scrollTop: Math.max(0, Math.round(window.scrollY))
       } satisfies HallViewState)
     )
   } catch {
-    // 隐私模式下无法持久化时仅保留本次内存状态
+    // 隐私模式无法持久化时只保留本次内存状态
   }
 }
 
-/** 滚动时 200ms 节流写入，避免每帧同步写 sessionStorage；刷新前由 beforeunload 兜底 */
+function cancelPendingWrite(): void {
+  if (scrollWriteTimer !== null) {
+    window.clearTimeout(scrollWriteTimer)
+    scrollWriteTimer = null
+  }
+}
+
+/** 滚动时 200ms 节流写入；分栏期间不覆盖原列表位置 */
 function scheduleWrite(): void {
-  if (scrollWriteTimer !== null) window.clearTimeout(scrollWriteTimer)
+  cancelPendingWrite()
   scrollWriteTimer = window.setTimeout(() => {
     scrollWriteTimer = null
-    writeHallView()
+    writeView(activeType.value)
   }, 200)
 }
 
 function handleScroll(): void {
-  if (!loading.value) scheduleWrite()
+  if (loading.value || splitSelection.value !== null) return
+  scheduleWrite()
 }
 
-/** 只有用户主动滚轮 / 触摸 / 翻页键才取消恢复；浏览器保留详情页 scrollY 不算主动滚动 */
+/** 只有用户主动滚轮 / 触摸 / 翻页键才取消恢复 */
 function markUserScroll(): void {
   if (loading.value) userScrolledDuringLoad = true
 }
@@ -211,105 +261,173 @@ function markUserKeyScroll(event: KeyboardEvent): void {
 }
 
 function handleBeforeUnload(): void {
-  writeHallView()
+  writeView(activeType.value)
 }
 
-async function loadAll(): Promise<void> {
+async function loadCurrent(): Promise<void> {
   const seq = ++loadSeq
+  const type = activeType.value
+  const state = viewStates[type]
   loading.value = true
   error.value = ''
   try {
-    const [taskResult, activityResult] = await Promise.all([
-      listTasks(taskQuery()),
-      listActivities({ scope: scope.value })
-    ])
-    if (seq !== loadSeq) return
-    tasks.value = taskResult?.items ?? []
-    activities.value = activityResult?.items ?? []
+    if (type === 'activity') {
+      const result = await listActivities({ scope: state.scope })
+      if (seq !== loadSeq) return
+      activities.value = result?.items ?? []
+      tasks.value = []
+    } else {
+      const [taskResult, activityResult] = await Promise.all([
+        listTasks({
+          status: state.status === 'all' ? undefined : state.status,
+          scope: state.scope,
+          include_sub: true
+        }),
+        listActivities({ scope: state.scope })
+      ])
+      if (seq !== loadSeq) return
+      tasks.value = taskResult?.items ?? []
+      activities.value = activityResult?.items ?? []
+    }
   } catch (err) {
     if (seq !== loadSeq) return
-    tasks.value = []
     activities.value = []
+    tasks.value = []
     error.value = errorMessage(err)
   } finally {
     if (seq === loadSeq) loading.value = false
   }
 }
 
-/** 筛选变化：活动与任务共用范围，必须同时重载 */
-function handleFilterChange(): void {
-  writeHallView()
-  void loadAll()
+async function restoreScrollFor(type: BrowseType): Promise<void> {
+  await nextTick()
+  if (disposed || userScrolledDuringLoad) {
+    userScrolledDuringLoad = false
+    return
+  }
+  const top = viewStates[type].scrollTop
+  if (top > 0) window.scrollTo({ top, behavior: 'auto' })
 }
 
-/** 清空筛选并重新加载（无筛选时为空操作） */
+function handleFilterChange(): void {
+  writeView(activeType.value)
+  // 筛选变化后原选中可能已不在结果集内，清掉失效的 selectedType/selectedId
+  clearSelectionQuery()
+  void loadCurrent()
+}
+
 function resetFilters(): void {
   if (!hasFilter.value) return
-  statusFilter.value = 'all'
-  scope.value = isMineVariant ? 'mine' : 'all'
-  typeFilter.value = 'all'
-  writeHallView()
-  void loadAll()
+  const state = viewStates[activeType.value]
+  state.status = 'all'
+  state.scope = isMineVariant ? 'mine' : 'all'
+  state.type = 'all'
+  writeView(activeType.value)
+  void loadCurrent()
 }
 
-function goDetail(id: number): void {
-  void router.push({ name: 'detail', params: { id } })
+/** 路由 query 的浅拷贝：显式收窄为 `string | null`，避免展开后推断成只含单个键的字面量 */
+function copyQuery(): Record<string, string | null> {
+  const result: Record<string, string | null> = {}
+  for (const [key, raw] of Object.entries(route.query)) {
+    if (Array.isArray(raw)) {
+      const first = raw[0]
+      if (first !== undefined && first !== null) result[key] = first
+      continue
+    }
+    result[key] = raw ?? null
+  }
+  return result
 }
 
-function goActivity(id: number): void {
-  void router.push({ name: 'activity', params: { id } })
+function clearSelectionQuery(): void {
+  if (route.query.selectedType === undefined && route.query.selectedId === undefined) return
+  const query = copyQuery()
+  delete query.selectedType
+  delete query.selectedId
+  void router.replace({ query })
 }
+
+/** 切换集合：写回当前集合状态，清除不匹配的选中，交由路由驱动重新加载 */
+function changeType(value: BrowseType): void {
+  if (value === activeType.value) return
+  cancelPendingWrite()
+  writeView(activeType.value)
+  filterDrawerOpen.value = false
+  const query = copyQuery()
+  query.type = value
+  delete query.selectedType
+  delete query.selectedId
+  void router.replace({ query })
+}
+
+function selectCard(type: BrowseType, id: number): void {
+  if (isCompact.value) {
+    void router.push({ name: type === 'activity' ? 'activity' : 'detail', params: { id } })
+    return
+  }
+  if (restoreScrollTop === null) restoreScrollTop = Math.max(0, Math.round(window.scrollY))
+  const query = copyQuery()
+  const target = {
+    query: { ...query, selectedType: type, selectedId: String(id) }
+  }
+  // 从列表进入详情形成一条历史（返回可回列表）；已在详情中切卡只替换当前条目
+  if (detailId.value === null) void router.push(target)
+  else void router.replace(target)
+}
+
+function closeDetail(): void {
+  clearSelectionQuery()
+}
+
+watch(detailId, (value, previous) => {
+  if (value !== null || previous === null || restoreScrollTop === null) return
+  const top = restoreScrollTop
+  restoreScrollTop = null
+  void nextTick(() => {
+    if (!disposed) window.scrollTo({ top, behavior: 'auto' })
+  })
+})
+
+watch(activeType, (next) => {
+  if (route.query.selectedType !== undefined && route.query.selectedType !== next) {
+    clearSelectionQuery()
+  }
+  void loadCurrent().then(() => restoreScrollFor(next))
+})
 
 function dateText(value: string | null): string {
   if (!value) return '未设置'
   return value.length > 16 ? value.slice(0, 16) : value
 }
 
-/** 报名（A1）：返回 `ApplyResult`，成功后本卡片的 `my_application_status` 变为 `pending` */
-async function handleApply(task: TaskItem): Promise<void> {
-  if (applyingId.value !== null) return
-  applyingId.value = task.id
-  try {
-    const result = await applyTask(task.id)
-    // 返回值是 ApplyResult，任务数据在 `result.task`（不得当作 TaskItem）
-    const taskTitle = result.task?.title ?? task.title
-    ElMessage.success(`已报名《${taskTitle}》，等待发布者审核`)
-    await loadAll()
-  } catch (err) {
-    ElMessage.error(errorMessage(err))
-  } finally {
-    applyingId.value = null
-  }
-}
-
 onMounted(async () => {
   disposed = false
+  updateCompact()
+  window.addEventListener('resize', updateCompact)
   window.addEventListener('scroll', handleScroll, { passive: true })
   window.addEventListener('beforeunload', handleBeforeUnload)
   window.addEventListener('wheel', markUserScroll, { passive: true })
   window.addEventListener('touchmove', markUserScroll, { passive: true })
   window.addEventListener('keydown', markUserKeyScroll)
-  await loadAll()
-  await nextTick()
-  if (disposed) return
-  if (savedView.scrollTop > 0 && !userScrolledDuringLoad) {
-    window.scrollTo({ top: savedView.scrollTop, behavior: 'auto' })
+  if (detailId.value === null && (route.query.selectedType !== undefined || route.query.selectedId !== undefined)) {
+    clearSelectionQuery()
   }
+  await loadCurrent()
+  await restoreScrollFor(activeType.value)
 })
 
 onBeforeUnmount(() => {
   disposed = true
   loadSeq += 1
+  window.removeEventListener('resize', updateCompact)
   window.removeEventListener('scroll', handleScroll)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('wheel', markUserScroll)
   window.removeEventListener('touchmove', markUserScroll)
   window.removeEventListener('keydown', markUserKeyScroll)
-  if (scrollWriteTimer !== null) {
-    window.clearTimeout(scrollWriteTimer)
-    scrollWriteTimer = null
-  }
-  writeHallView()
+  cancelPendingWrite()
+  if (splitSelection.value === null) writeView(activeType.value)
 })
 </script>
 
@@ -318,16 +436,12 @@ onBeforeUnmount(() => {
     <header class="app-page-header hall-header">
       <div class="hall-heading">
         <h1 class="app-page-title">{{ isMineVariant ? '我的任务' : '任务大厅' }}</h1>
-        <p class="app-page-subtitle" aria-live="polite">
-          <template v-if="loading">正在加载{{ isMineVariant ? '我的' : '' }}事务…</template>
-          <template v-else>
-            共 {{ activities.length }} 个活动 · {{ activityTaskCount }} 个活动任务 ·
-            {{ independentTaskCount }} 个独立任务
-          </template>
-        </p>
+        <p class="app-page-subtitle" aria-live="polite">{{ subtitle }}</p>
       </div>
-      <el-button class="hall-refresh" :loading="loading" @click="loadAll">刷新</el-button>
+      <el-button class="hall-refresh" :loading="loading" @click="loadCurrent">刷新</el-button>
     </header>
+
+    <HallTabs :model-value="activeType" @update:model-value="changeType" />
 
     <LoadingState v-if="loading" :rows="4" />
 
@@ -336,88 +450,32 @@ onBeforeUnmount(() => {
       :message="error"
       detail="事务列表加载失败，请检查后端服务后重试。"
       retryable
-      @retry="loadAll"
+      @retry="loadCurrent"
     />
 
     <template v-else>
-      <section class="hall-region hall-region--activities" aria-labelledby="hall-activities-heading">
-        <div class="region-head">
-          <h2 id="hall-activities-heading" class="region-title">活动</h2>
-          <span class="region-count">{{ activities.length }} 个</span>
+      <div v-if="activeType === 'task' || !isMineVariant" class="filter-mobile-row">
+        <span class="app-muted">当前筛选：{{ activeFilterText }}</span>
+        <el-button @click="filterDrawerOpen = true">筛选</el-button>
+      </div>
+
+      <section
+        v-if="activeType === 'task' || !isMineVariant"
+        class="app-section-card filter-panel"
+        aria-label="事务筛选"
+      >
+        <div v-if="!isMineVariant" class="filter-row">
+          <span class="filter-label">范围</span>
+          <el-radio-group v-model="currentView.scope" class="filter-group" @change="handleFilterChange">
+            <el-radio-button value="all">全部</el-radio-button>
+            <el-radio-button value="mine">我的任务与活动</el-radio-button>
+          </el-radio-group>
         </div>
 
-        <p v-if="activities.length === 0" class="region-empty">
-          {{ scope === 'mine' ? '暂无与你相关的活动' : '暂无活动' }}
-        </p>
-
-        <ul v-else class="activity-list">
-          <li v-for="activity in activities" :key="activity.id">
-            <HoverPeek class="peek-item">
-              <article class="activity-item">
-                <h3 class="activity-title">
-                  <router-link :to="`/activities/${activity.id}`">{{ activity.title }}</router-link>
-                </h3>
-                <p class="activity-progress">
-                  整体进度 {{ activity.progress.percent }}% ·
-                  {{ activity.progress.completed_tasks }}/{{ activity.progress.total_tasks }} 个任务已完成
-                </p>
-                <p class="activity-meta">
-                  负责人 {{ activity.owner_name || '—' }} · 截止
-                  {{ formatDeadline(activity.deadline) }}
-                </p>
-                <div class="activity-actions">
-                  <el-button size="small" text type="primary" @click="goActivity(activity.id)">
-                    查看活动
-                  </el-button>
-                </div>
-              </article>
-
-              <template #preview>
-                <p class="preview-title">{{ activity.title }}</p>
-                <p v-if="activity.description" class="preview-desc">{{ activity.description }}</p>
-                <dl class="preview-facts">
-                  <div>
-                    <dt>举办</dt>
-                    <dd>{{ dateText(activity.start_time) }} 至 {{ dateText(activity.deadline) }}</dd>
-                  </div>
-                  <div>
-                    <dt>地点</dt>
-                    <dd>{{ activity.location || '未设置' }}</dd>
-                  </div>
-                  <div>
-                    <dt>负责人</dt>
-                    <dd>{{ activity.owner_name || '—' }}</dd>
-                  </div>
-                  <div>
-                    <dt>任务</dt>
-                    <dd>
-                      {{ activity.progress.completed_tasks }}/{{ activity.progress.total_tasks }} 已完成 ·
-                      {{ activity.progress.percent }}%
-                    </dd>
-                  </div>
-                </dl>
-                <p class="preview-hint">点击进入活动详情查看任务树</p>
-              </template>
-            </HoverPeek>
-          </li>
-        </ul>
-      </section>
-
-      <section class="hall-region hall-region--tasks" aria-labelledby="hall-tasks-heading">
-        <div class="region-head">
-          <h2 id="hall-tasks-heading" class="region-title">任务</h2>
-          <span class="region-count">{{ visibleTasks.length }} 个</span>
-        </div>
-
-        <div class="filter-mobile-row">
-          <span class="app-muted">当前筛选：{{ activeFilterText }}</span>
-          <el-button @click="filterDrawerOpen = true">筛选</el-button>
-        </div>
-
-        <section class="app-section-card filter-panel" aria-label="事务筛选">
+        <template v-if="activeType === 'task'">
           <div class="filter-row">
             <span class="filter-label">状态</span>
-            <el-radio-group v-model="statusFilter" class="filter-group" @change="handleFilterChange">
+            <el-radio-group v-model="currentView.status" class="filter-group" @change="handleFilterChange">
               <el-radio-button value="all">全部</el-radio-button>
               <el-radio-button v-for="option in statusOptions" :key="option.value" :value="option.value">
                 {{ option.label }}
@@ -425,117 +483,169 @@ onBeforeUnmount(() => {
             </el-radio-group>
           </div>
 
-          <div v-if="!isMineVariant" class="filter-row">
-            <span class="filter-label">范围</span>
-            <el-radio-group v-model="scope" class="filter-group" @change="handleFilterChange">
-              <el-radio-button value="all">全部</el-radio-button>
-              <el-radio-button value="mine">我的任务与活动</el-radio-button>
-            </el-radio-group>
-          </div>
-
           <div class="filter-row">
             <span class="filter-label">类型</span>
-            <el-radio-group v-model="typeFilter" class="filter-group" @change="handleFilterChange">
+            <el-radio-group v-model="currentView.type" class="filter-group" @change="handleFilterChange">
               <el-radio-button value="all">全部</el-radio-button>
               <el-radio-button v-for="option in typeOptions" :key="option.value" :value="option.value">
                 {{ option.label }}
               </el-radio-button>
             </el-radio-group>
           </div>
+        </template>
 
-          <div class="filter-current">
-            <span class="app-muted">当前筛选：{{ activeFilterText }}</span>
-            <el-button v-if="hasFilter" text type="primary" size="small" @click="resetFilters">
-              清除筛选
-            </el-button>
-          </div>
-        </section>
-
-        <EmptyState
-          v-if="visibleTasks.length === 0"
-          :title="emptyTitle"
-          :description="emptyDescription"
-        />
-
-        <div v-else class="task-grid">
-          <HoverPeek v-for="task in visibleTasks" :key="task.id" class="peek-item">
-            <TaskCard
-              :task="task"
-              :current-user-id="currentUserId"
-              :applying="applyingId === task.id"
-              :activity-title="
-                task.activity_id !== null ? activityTitleById.get(task.activity_id) : undefined
-              "
-              @apply="handleApply"
-              @open="goDetail"
-              @manage="goDetail"
-            />
-
-            <template #preview>
-              <p class="preview-title">{{ task.title }}</p>
-              <p class="preview-desc">
-                {{ task.description || '暂无描述，打开详情查看完整要求。' }}
-              </p>
-              <dl class="preview-facts">
-                <div v-if="task.activity_id !== null">
-                  <dt>所属活动</dt>
-                  <dd>
-                    {{ activityTitleById.get(task.activity_id) || `活动 #${task.activity_id}` }}
-                  </dd>
-                </div>
-                <div>
-                  <dt>截止</dt>
-                  <dd>{{ formatDeadline(task.deadline) }}</dd>
-                </div>
-                <div>
-                  <dt>名额</dt>
-                  <dd>{{ quotaText(task) }}</dd>
-                </div>
-                <div v-if="task.location">
-                  <dt>地点</dt>
-                  <dd>{{ task.location }}</dd>
-                </div>
-                <div>
-                  <dt>发布者</dt>
-                  <dd>{{ task.publisher_name || '—' }}</dd>
-                </div>
-              </dl>
-              <p class="preview-hint">点击「查看详情」进入任务页</p>
-            </template>
-          </HoverPeek>
+        <div class="filter-current">
+          <span class="app-muted">当前筛选：{{ activeFilterText }}</span>
+          <el-button v-if="hasFilter" text type="primary" size="small" @click="resetFilters">
+            清除筛选
+          </el-button>
         </div>
       </section>
+
+      <div
+        id="browse-collection"
+        role="tabpanel"
+        :aria-label="activeType === 'activity' ? '活动列表' : '任务列表'"
+        class="hall-results"
+        :class="{ 'hall-results--split': splitSelection !== null }"
+      >
+        <div class="hall-results__list">
+          <template v-if="activeType === 'activity'">
+            <div v-if="activities.length === 0" class="hall-results__empty">
+              <EmptyState :title="emptyTitle" :description="emptyDescription" />
+            </div>
+
+            <template v-else>
+              <HoverPeek v-for="activity in activities" :key="activity.id" class="peek-item">
+                <ActivityBrowseCard
+                  :activity="activity"
+                  :selected="isSelected('activity', activity.id)"
+                  @select="selectCard('activity', $event)"
+                />
+
+                <template #preview>
+                  <p class="preview-title">{{ activity.title }}</p>
+                  <p v-if="activity.description" class="preview-desc">{{ activity.description }}</p>
+                  <dl class="preview-facts">
+                    <div>
+                      <dt>举办</dt>
+                      <dd>{{ dateText(activity.start_time) }} 至 {{ dateText(activity.deadline) }}</dd>
+                    </div>
+                    <div>
+                      <dt>地点</dt>
+                      <dd>{{ activity.location || '未设置' }}</dd>
+                    </div>
+                    <div>
+                      <dt>负责人</dt>
+                      <dd>{{ activity.owner_name || '—' }}</dd>
+                    </div>
+                    <div>
+                      <dt>任务</dt>
+                      <dd>
+                        {{ activity.progress.completed_tasks }}/{{ activity.progress.total_tasks }} 已完成 ·
+                        {{ activity.progress.percent }}%
+                      </dd>
+                    </div>
+                  </dl>
+                  <p class="preview-hint">点击卡片可在右侧查看摘要</p>
+                </template>
+              </HoverPeek>
+            </template>
+          </template>
+
+          <template v-else>
+            <div v-if="visibleTasks.length === 0" class="hall-results__empty">
+              <EmptyState :title="emptyTitle" :description="emptyDescription" />
+            </div>
+
+            <template v-else>
+              <HoverPeek v-for="task in visibleTasks" :key="task.id" class="peek-item">
+                <TaskBrowseCard
+                  :task="task"
+                  :activity-title="
+                    task.activity_id !== null ? activityTitleById.get(task.activity_id) : undefined
+                  "
+                  :selected="isSelected('task', task.id)"
+                  @select="selectCard('task', $event)"
+                />
+
+                <template #preview>
+                  <p class="preview-title">{{ task.title }}</p>
+                  <p class="preview-desc">
+                    {{ task.description || '暂无描述，打开详情查看完整要求。' }}
+                  </p>
+                  <dl class="preview-facts">
+                    <div v-if="task.activity_id !== null">
+                      <dt>所属活动</dt>
+                      <dd>
+                        {{ activityTitleById.get(task.activity_id) || `活动 #${task.activity_id}` }}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>截止</dt>
+                      <dd>{{ formatDeadline(task.deadline) }}</dd>
+                    </div>
+                    <div>
+                      <dt>名额</dt>
+                      <dd>{{ quotaText(task) }}</dd>
+                    </div>
+                    <div v-if="task.location">
+                      <dt>地点</dt>
+                      <dd>{{ task.location }}</dd>
+                    </div>
+                    <div>
+                      <dt>发布者</dt>
+                      <dd>{{ task.publisher_name || '—' }}</dd>
+                    </div>
+                  </dl>
+                  <p class="preview-hint">点击卡片可在右侧查看摘要</p>
+                </template>
+              </HoverPeek>
+            </template>
+          </template>
+        </div>
+
+        <BrowseDetailPanel
+          v-if="splitSelection"
+          :type="splitSelection?.type ?? 'activity'"
+          :id="splitSelection?.id ?? 0"
+          class="hall-results__detail"
+          @close="closeDetail"
+        />
+      </div>
     </template>
 
     <el-drawer v-model="filterDrawerOpen" direction="btt" size="70%" title="筛选">
       <div class="drawer-filters">
-        <div class="filter-row">
-          <span class="filter-label">状态</span>
-          <el-radio-group v-model="statusFilter" class="filter-group" @change="handleFilterChange">
-            <el-radio-button value="all">全部</el-radio-button>
-            <el-radio-button v-for="option in statusOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </el-radio-button>
-          </el-radio-group>
-        </div>
-
         <div v-if="!isMineVariant" class="filter-row">
           <span class="filter-label">范围</span>
-          <el-radio-group v-model="scope" class="filter-group" @change="handleFilterChange">
+          <el-radio-group v-model="currentView.scope" class="filter-group" @change="handleFilterChange">
             <el-radio-button value="all">全部</el-radio-button>
             <el-radio-button value="mine">我的任务与活动</el-radio-button>
           </el-radio-group>
         </div>
 
-        <div class="filter-row">
-          <span class="filter-label">类型</span>
-          <el-radio-group v-model="typeFilter" class="filter-group" @change="handleFilterChange">
-            <el-radio-button value="all">全部</el-radio-button>
-            <el-radio-button v-for="option in typeOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </el-radio-button>
-          </el-radio-group>
-        </div>
+        <template v-if="activeType === 'task'">
+          <div class="filter-row">
+            <span class="filter-label">状态</span>
+            <el-radio-group v-model="currentView.status" class="filter-group" @change="handleFilterChange">
+              <el-radio-button value="all">全部</el-radio-button>
+              <el-radio-button v-for="option in statusOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </el-radio-button>
+            </el-radio-group>
+          </div>
+
+          <div class="filter-row">
+            <span class="filter-label">类型</span>
+            <el-radio-group v-model="currentView.type" class="filter-group" @change="handleFilterChange">
+              <el-radio-button value="all">全部</el-radio-button>
+              <el-radio-button v-for="option in typeOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </el-radio-button>
+            </el-radio-group>
+          </div>
+        </template>
 
         <p class="app-muted">当前筛选：{{ activeFilterText }}</p>
       </div>
@@ -554,111 +664,62 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--app-space-3);
 }
 
 .hall-heading {
   min-width: 0;
 }
 
-.hall-region {
-  display: flex;
-  flex-direction: column;
-  gap: var(--app-space-3);
-}
-
-.region-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.region-title {
-  margin: 0;
-  font-size: var(--app-font-section-title, 19px);
-  font-weight: 600;
-  line-height: 1.3;
-  color: var(--app-text);
-}
-
-.region-count {
-  font-size: var(--app-font-aux, 13px);
-  color: var(--app-text-muted);
-}
-
-.region-empty {
-  margin: 0;
-  padding: 12px 14px;
-  border-radius: var(--app-radius-sm);
-  background: var(--app-surface-sunken);
-  font-size: var(--app-font-aux-lg, 14px);
-  color: var(--app-text-secondary);
-}
-
-.activity-list {
+.hall-results {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
-  gap: 16px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--app-space-4);
+  align-items: start;
+}
+
+.hall-results__list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--app-space-4);
+  align-items: stretch;
+}
+
+.hall-results__empty {
+  grid-column: 1 / -1;
+}
+
+.hall-results__detail {
+  min-width: 0;
+}
+
+/* 宽桌面三列短卡片 */
+@media (min-width: 1200px) {
+  .hall-results__list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* 选中后：左侧单列卡片 + 右侧占原两列的详情 */
+@media (min-width: 768px) {
+  .hall-results--split {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+
+  .hall-results--split .hall-results__list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 手机单列；点击卡片直接进独立详情页 */
+@media (max-width: 767px) {
+  .hall-results__list {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .peek-item {
   height: 100%;
-}
-
-.activity-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  height: 100%;
-  box-sizing: border-box;
-  padding: 12px 14px;
-  background: var(--app-surface);
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  box-shadow: var(--app-shadow-sm);
-}
-
-.activity-title {
-  margin: 0;
-  font-size: var(--el-font-size-medium);
-  font-weight: 600;
-  line-height: 1.4;
-  word-break: break-word;
-}
-
-.activity-title a {
-  color: var(--app-text);
-  text-decoration: none;
-}
-
-.activity-title a:hover {
-  color: var(--app-primary);
-}
-
-.activity-progress,
-.activity-meta {
-  margin: 0;
-  font-size: var(--app-font-aux, 13px);
-  line-height: 1.5;
-  color: var(--app-text-secondary);
-}
-
-.activity-meta {
-  color: var(--app-text-muted);
-}
-
-.activity-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: auto;
-  padding-top: 8px;
-}
-
-.activity-actions :deep(.el-button) {
-  min-height: var(--app-touch);
 }
 
 .filter-mobile-row {
@@ -668,22 +729,22 @@ onBeforeUnmount(() => {
 .filter-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: var(--app-space-2);
+  padding: var(--app-space-3) var(--app-space-4);
 }
 
 .filter-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: var(--app-space-2);
 }
 
 .filter-label {
-  font-size: var(--app-font-aux-lg, 14px);
-  color: var(--app-text-secondary);
-  width: 32px;
   flex-shrink: 0;
+  width: 32px;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-aux-lg, 14px);
 }
 
 .filter-group {
@@ -695,16 +756,10 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding-top: 8px;
-  font-size: var(--app-font-aux, 13px);
+  gap: var(--app-space-2);
+  padding-top: var(--app-space-2);
   border-top: 1px dashed var(--app-border);
-}
-
-.task-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
-  gap: 16px;
+  font-size: var(--app-font-aux, 13px);
 }
 
 .preview-title {
@@ -716,7 +771,7 @@ onBeforeUnmount(() => {
 }
 
 .preview-desc {
-  margin: 0 0 8px;
+  margin: 0 0 var(--app-space-2);
   color: var(--app-text-secondary);
   font-size: var(--app-font-aux-lg, 14px);
   line-height: 1.65;
@@ -727,14 +782,14 @@ onBeforeUnmount(() => {
 .preview-facts {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--app-space-1);
   margin: 0;
 }
 
 .preview-facts > div {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--app-space-2);
 }
 
 .preview-facts dt {
@@ -751,7 +806,7 @@ onBeforeUnmount(() => {
 }
 
 .preview-hint {
-  margin: 8px 0 0;
+  margin: var(--app-space-2) 0 0;
   color: var(--app-text-muted);
   font-size: var(--app-font-aux, 13px);
 }
@@ -759,7 +814,7 @@ onBeforeUnmount(() => {
 .drawer-filters {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--app-space-4);
 }
 
 .drawer-footer {
@@ -774,20 +829,7 @@ onBeforeUnmount(() => {
   margin-left: 0;
 }
 
-/* 手机：筛选收进单个「筛选」按钮的底部抽屉；任务前置以保证首屏可见 */
 @media (max-width: 768px) {
-  .hall-header {
-    order: 0;
-  }
-
-  .hall-region--tasks {
-    order: 1;
-  }
-
-  .hall-region--activities {
-    order: 2;
-  }
-
   .hall-refresh {
     min-width: var(--app-touch);
     min-height: var(--app-touch);
@@ -798,7 +840,7 @@ onBeforeUnmount(() => {
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: var(--app-space-2);
     font-size: var(--app-font-aux, 13px);
   }
 
@@ -808,12 +850,6 @@ onBeforeUnmount(() => {
 
   .filter-mobile-row :deep(.el-button),
   .drawer-footer :deep(.el-button) {
-    min-height: var(--app-touch);
-  }
-
-  .activity-title a {
-    display: inline-flex;
-    align-items: center;
     min-height: var(--app-touch);
   }
 
@@ -835,7 +871,7 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: center;
     min-height: var(--app-touch);
-    padding: 0 12px;
+    padding: 0 var(--app-space-3);
     font-size: var(--app-font-body, 15px);
   }
 }

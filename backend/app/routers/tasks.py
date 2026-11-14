@@ -14,11 +14,14 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 from datetime import datetime
 from typing import Any, Iterable, Literal
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import FileResponse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -32,6 +35,7 @@ from app.schemas import (
     Draft,
     ProgressIn,
     ProgressOut,
+    SubmissionFileIn,
     SubmitIn,
     TaskBrief,
     TaskChangeDownstream,
@@ -1088,6 +1092,105 @@ def submit_task(
     return ok(_single_task_payload(db, task, current_user.id))
 
 
+@router.post("/{task_id}/submissions/upload")
+def upload_submission(
+    task_id: int,
+    payload: SubmissionFileIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """成员上传成果文件（`C-SUBMISSION-FILE@1`），与文字提交共用逐人状态机。
+
+    JSON + base64 传输（不引入 multipart 依赖）；格式白名单 TXT/Markdown/PDF/DOCX、
+    上限 10MB；PDF/DOCX 只存储，预审不解析正文。重复提交由 ``record_submit`` 幂等处理。
+    """
+    task = _get_task_or_404(db, task_id)
+    authz.require_task_view(db, current_user, task)
+    if not application_service.is_approved_participant(db, task, int(current_user.id)):
+        raise ApiError(ERR_FORBIDDEN, "只有任务成员可以提交完成")
+    if str(task.status) == "cancelled":
+        raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+
+    # base64 体积上限先于解码，避免超大请求进入内存解码（10MB 文件的 base64 约 13.4MB）
+    if len(payload.file_base64) > 14 * 1024 * 1024:
+        raise ApiError(ERR_INVALID_PARAM, "文件不能超过 10MB")
+    try:
+        raw = base64.b64decode(payload.file_base64, validate=True)
+    except (binascii.Error, ValueError):
+        raise ApiError(ERR_INVALID_PARAM, "文件编码无效") from None
+    # 先校验格式/大小，再改动成员状态；重复提交时也保持同样的错误语义。
+    submission_service.validate_submission_file(payload.file_name, raw)
+
+    member, changed = member_service.record_submit(db, task, int(current_user.id))
+    if not changed:
+        db.rollback()
+        raise ApiError(ERR_CONFLICT, "当前成果已提交，等待验收；如需重新提交请先退回")
+    if changed:
+        try:
+            stored = submission_service.save_submission_file(
+                int(task.id), payload.file_name, raw
+            )
+        except ApiError:
+            db.rollback()
+            raise
+        submission_service.create_submission(
+            db,
+            task,
+            int(current_user.id),
+            content=payload.content,
+            resource_url=None,
+            **stored,
+        )
+        notify_service.create_notification(
+            db,
+            user_id=int(task.publisher_id),
+            task_id=int(task.id),
+            level="info",
+            title="有新任务待验收",
+            content=f"《{task.title}》有新提交，请验收。",
+            commit=False,
+            dedupe_key=f"submit:{int(task.id)}:{int(current_user.id)}:{member.submitted_at}",
+        )
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        notify_service.discard_pending(db)
+        if changed:
+            (submission_service.SUBMISSION_UPLOAD_ROOT / str(stored["file_path"])).unlink(
+                missing_ok=True
+            )
+        raise
+    notify_service.publish_committed(db)
+    db.refresh(task)
+
+    return ok(_single_task_payload(db, task, current_user.id))
+
+
+@router.get("/{task_id}/submissions/{submission_id}/file")
+def download_submission_file(
+    task_id: int,
+    submission_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """下载成果文件：提交者本人或审核者（`require_submission_access`）。"""
+    task = _get_task_or_404(db, task_id)
+    submission = submission_service.get_submission(db, task, submission_id)
+    submission_service.require_submission_access(db, current_user, task, submission)
+    if not submission.file_path:
+        raise ApiError(ERR_NOT_FOUND, "该成果没有文件")
+    path = submission_service.SUBMISSION_UPLOAD_ROOT / submission.file_path
+    if not path.is_file():
+        raise ApiError(ERR_NOT_FOUND, "文件不存在")
+    return FileResponse(
+        path,
+        media_type=submission.file_mime or "application/octet-stream",
+        filename=submission.file_name or path.name,
+    )
+
+
 @router.get("/{task_id}/submissions")
 def list_task_submissions(
     task_id: int,
@@ -1156,6 +1259,8 @@ def verify_task(
     - 未指定且多名 ``submitted`` → ``pass=true`` 时逐人全部通过（兼容旧语义），
       ``pass=false`` 时返回 4001；
     - 目标成员不在 ``submitted`` → 4090；目标是发布者本人 → 4030（防御历史脏数据）；
+    - ``pass=true`` 且最新成果的最新预审已过期 → 4090（要求或引用资料变化后需重新预审）；
+      无预审记录视为未检查，不阻断；``pass=false`` 退回不受预审过期影响；
     - 通过：按 ``(task_id, user_id)`` 幂等加分，积分流水、成员状态与通知同一事务提交。
     """
     task = _get_task_or_404(db, task_id)
@@ -1192,6 +1297,11 @@ def verify_task(
     }
     if any(target not in submitted_ids for target in targets):
         raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+
+    # 通过前校验最新预审（`C-PRECHECK-EVIDENCE@2`）：任务要求或引用资料变化后
+    # 旧预审失效，即使页面未刷新也不能用过期预审批准当前成果；退回不受影响。
+    if payload.pass_:
+        submission_service.require_fresh_precheck(db, task, targets)
 
     reason = (payload.reason or "").strip() or None
     reward = (

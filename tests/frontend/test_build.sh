@@ -97,7 +97,7 @@ fi
 # ---------------------------------------------------------------------------
 echo
 echo "== [4/4] 断言 src 内无 ': any' / 'as any' =="
-ANY_HITS="$(grep -rnE ': any|as any' src || true)"
+ANY_HITS="$(grep -rnE ': any([^A-Za-z]|$)|as any([^A-Za-z]|$)' src || true)"
 if [ -z "${ANY_HITS}" ]; then
   pass "src 内无 ': any' / 'as any' 命中"
 else

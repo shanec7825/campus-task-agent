@@ -1,10 +1,11 @@
-"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1` / `C-TASK-GRAPH@1` / `C-RESOURCE@1` / `C-SUBMISSION@1` / `C-PRECHECK@1` / `C-AI-USAGE@1`）。
+"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1` / `C-TASK-GRAPH@1` / `C-RESOURCE@1` / `C-SUBMISSION@1` / `C-PRECHECK@1` / `C-AI-USAGE@1` / `C-LIBRARY@1`）。
 
-23 张表：users / tasks / checkins / credit_logs / notifications /
+24 张表：users / tasks / checkins / credit_logs / notifications /
 kb_entries / parse_sessions / progress_logs / task_applications / task_members /
 activities / organizations / org_members / invitations / user_sessions /
 password_resets / ai_conversations / ai_messages / task_dependencies /
-activity_resources / task_submissions / submission_prechecks / ai_usage_ledger。
+activity_resources / task_submissions / submission_prechecks / ai_usage_ledger /
+library_links。
 
 说明：Demo 期不建数据库级外键约束，仅做应用层校验（PLAN 2.2.1 A：
 「Demo 期不建数据库级外键，应用层校验」）；JSON 列落库为 SQLite TEXT，
@@ -151,6 +152,9 @@ class Notification(Base):
     dedupe_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 失效标记（契约 `C-REMINDER-STALE@1`）：改期/取消后旧提醒置 1，历史保留但不计未读。
     stale: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    # 归档标记（契约 `C-NOTICE-ARCHIVE@1`）：已处理通知从默认列表移入归档，不删除、不改已读。
+    archived: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    archived_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(
         Text, nullable=False, default=_now_local, server_default=_NOW_SQL
     )
@@ -462,16 +466,23 @@ class TaskSubmission(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     resource_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 成果文件（`C-SUBMISSION-FILE@1`）：原始文件名/大小/MIME 用于展示，file_path 存相对上传根目录的路径。
+    file_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    file_mime: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(
         Text, nullable=False, default=_now_local, server_default=_NOW_SQL
     )
 
 
 class SubmissionPrecheck(Base):
-    """成果预审记录（契约 `C-PRECHECK@1`）。
+    """成果预审记录（契约 `C-PRECHECK@1` / `C-PRECHECK-EVIDENCE@2`）。
 
     - 绑定具体 ``submission_id``，不改变成员、任务、积分或通知；
-    - ``requirement_digest`` 记录当次任务/活动要求摘要，要求变化后旧预审标记过期；
+    - ``requirement_digest`` 记录当次任务/活动要求与引用资料版本摘要，任一变化后
+      旧预审标记过期；
+    - ``resource_snapshot`` 保存当次引用的资料 ``[{id,title,version}]``，旧库行为 ``[]``；
     - ``checks`` 只存规则预审结果，``ai_suggestions`` 只存模型建议；``mock`` 与
       ``ai_error`` 分开标注，模型失败不得冒充通过。
     """
@@ -488,6 +499,9 @@ class SubmissionPrecheck(Base):
     ai_suggestions: Mapped[list] = mapped_column(
         JSON, nullable=False, default=list, server_default=text("'[]'")
     )
+    resource_snapshot: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list, server_default=text("'[]'")
+    )
     mock: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     ai_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(
@@ -499,6 +513,7 @@ class AiUsageLedger(Base):
     """AI 问答用量账本（契约 `C-AI-USAGE@1`）。
 
     - 每次成功生成回答写一条 ``settled`` 记录，与消息同一事务提交；失败不写、不扣额度。
+    - 生成前先写 ``pending`` 预留行（计入当日 ``used``），成功转 ``settled``，失败/超时释放。
     - ``UNIQUE(user_id, request_id)`` 提供请求幂等；``request_id`` 为空时容许重复行。
     - 额度按 ``created_at`` 的本地日期统计，本表不保存额度上限（由环境变量提供）。
     """
@@ -543,6 +558,31 @@ class PasswordReset(Base):
     )
 
 
+class LibraryLink(Base):
+    """个人私有参考链接（契约 `C-LIBRARY@1`，设计 §9.2）。
+
+    - ``owner_id`` 语义上是 ``users.id`` 外键，但沿用项目「Demo 期不建数据库级外键」的
+      约定，由 ``services.library_service`` 按当前会话写入与过滤；
+    - 长度上限（title 200 / url 1000 / note 2000）由服务层校验，SQLite 不强制列宽；
+    - 本阶段不提供删除、公开共享或网页抓取。
+    """
+
+    __tablename__ = "library_links"
+    __table_args__ = (Index("ix_library_links_owner_id", "owner_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+    updated_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
 __all__ = [
     "User",
     "Task",
@@ -567,4 +607,5 @@ __all__ = [
     "TaskSubmission",
     "SubmissionPrecheck",
     "AiUsageLedger",
+    "LibraryLink",
 ]

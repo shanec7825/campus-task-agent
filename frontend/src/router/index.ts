@@ -63,6 +63,11 @@ export const routes: RouteRecordRaw[] = [
     props: { variant: 'mine' }
   },
   {
+    name: 'library',
+    path: '/library',
+    component: () => import('../views/LibraryPage.vue')
+  },
+  {
     name: 'published-activities',
     path: '/published-activities',
     component: () => import('../views/PublishedActivitiesPage.vue'),
@@ -89,7 +94,8 @@ export const routes: RouteRecordRaw[] = [
   {
     name: 'messages',
     path: '/messages',
-    component: () => import('../views/Messages.vue')
+    // 消息入口已移除：通知只保留在 AI 页右栏，旧链接兼容跳到待处理
+    redirect: { name: 'ai', query: { panel: 'inbox' } }
   },
   {
     name: 'profile',
@@ -182,6 +188,7 @@ export const PAGE_TITLES: Record<string, string> = {
   workbench: '工作台',
   hall: '任务大厅',
   'my-tasks': '我的任务',
+  library: 'Library',
   'published-activities': '我发布的活动',
   'publish-activity': '发布活动',
   detail: '任务详情',

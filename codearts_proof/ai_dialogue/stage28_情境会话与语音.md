@@ -55,3 +55,54 @@
 - 真实模型、真机、部署与线上验收未执行；mock 回答不能替代真实模型质量证明，390×844 模拟视口不能替代真机。
 - `AGENTS.md` 工作区改动仍等待用户单独授权处置。
 - 三轮审查共 18 条 Suggestion 未全部处理（scopeKey 重复实现、非法 scope 行 4001 语义、AiChatOut 注释、ScopeView 未保存 historyError、无作用域列表逐条查询的 N+1、失败回填分支无自动化）。其中“浏览器完整页断言偏弱”已在证据脚本收紧；“契约检查未覆盖新增两条契约”和“完整页文案前缀重复（当前目标：任务：场地标题）”留在后续增量（r2 语音或单独小修）处理，不阻断 r1。
+## 6. 增量 r2：语音跨形态收口（2026-11-14 接续）
+
+> 本节由 stage29 交付后的单写入接管者补记，只覆盖 r2 语音；r1 会话作用域结果保留在第 1～5 节，不重算。r2 计划见本地 `.codeartsdoer/plans/aiw09-context-voice/design-r2.md`，状态：**本地完成、未提交、未推送、无新 CI、未部署**。
+
+### 6.1 范围与最小写集合
+
+- 范围：AI 完整页 / 长条 / 微展开共用语音录入，定稿写入当前作用域输入；发布页语音保持原行为；切目标停止并保留原目标文本；录音中禁用文字输入与发送，避免手打被 interim/定稿覆盖。
+- 写集合：`frontend/src/composables/useVoiceComposer.ts`、`useAiVoiceSink.ts`（新）、`components/ai/AgentVoiceButton.vue`（新）、`AgentDock.vue`、`views/AiConsole.vue`、`stores/aiChat.ts`、`tests/frontend/check_contracts.py`、`work/aiw07/runner/aiw09_voice*.mjs`。
+- 不做：录音持久化、外部识别供应商、自动发送、语音执行业务写动作、额度口径变更；AIW-11 取消项未恢复。
+
+### 6.2 审查轮次与关闭状态
+
+| 轮次 | 结论 | 处置 |
+|---|---|---|
+| 首轮（原执行者） | 1 Critical / 2 Important / 6 Suggestion | 本轮接管后按 design-r2 §6 修复，不重做 |
+| 第二轮独立复核 | 0 Critical / 2 Important（新残留）/ 若干 Suggestion | 首轮 1C/2I 已关闭；修复 finalize 单槽与录音中发送按钮 |
+| 第三轮独立复核（末轮） | 0 Critical / 3 Important（前轮修复引入）/ 建议 | 已修复 start 清空 finalizeSinks、live timer 本地状态丢失、resumeTimer 早退；轮次上限内未再开第四轮独立复核 |
+
+- Critical 修复：`currentSink()` 只返回 `configuredSink ?? draftSink`；`QueuedChunk` 固定 `sink` + `round`；`start()` 非续接先 `settlePreviousSession()` 再递增轮次；`drain` 用 `item.sink.applyStream`；失败回滚与缓冲清空仅作用于当前轮。
+- Important 2 修复：`flushLiveText/clearLiveText` 使用 `activeSink()`；尾片收尾用 `finalizeSinks: VoiceSink[]` 逐轮 `finishStreaming()`；`commitStoppedSession` 先固定发起轮 sink；发布页录音切 AI 页停止后 `draft.mode` 回 `typing`。
+- Important 3 修复：AI 输入框与发送按钮绑定 `voiceRecording`，语音按钮在录音中保持可停止；`send`/`sendMessage` 增加录音中 guard。
+- 第三轮遗留 Suggestion 未处理：2000 截断静默丢字提示、语音写回未纳入 aiChat epoch、模块级 `configuredSink` 依赖 setup 顺序、失败请求后同轮后继切片不重发。均非本轮阻断项。
+
+### 6.3 实际验证
+
+工作目录：仓库根；后端隔离库 `work/aiw09/demo.db`（由 `work/aiw08/demo.db` 复制，`MAAS_MOCK=1`、`RUN_SCHEDULER=0`），服务 `127.0.0.1:8030`；未触碰 `backend/campus.db`。
+
+| 检查 | 命令 / 证据 | 结果 |
+|---|---|---|
+| 前端完整门禁 | `PYTHON_BIN="$(command -v python)" bash tests/frontend/run_all.sh`；日志 `outputs/aiw09/frontend-runall-r2-round3e.log` | EXIT=0（构建 4/4、契约 26/26、语音 21/21） |
+| 后端完整门禁 | `PYTHON_BIN="$(command -v python)" bash tests/backend/run_all.sh`；日志 `outputs/aiw09/backend-runall-r2.log` | EXIT=0（23 表 / 6 脚本；后端未改动，此结果在最终前端修复前取得） |
+| AI 三形态语音 | `node work/aiw07/runner/aiw09_voice.mjs`；日志 `outputs/aiw09/voice-r2-round3b.log`，证据 `reports/stage28_browser_voice_r2.json` | 8/8：V1 实时/定稿、V2 切目标保留、V5 不重复、V3 不支持兜底、V4 麦克风拒绝、V6 网络失败、V7 旧轮尾片窗口切目标再开录、V8 录音中禁用输入 |
+| 发布页与跨页收尾 | `node work/aiw07/runner/aiw09_voice_publish.mjs`；日志 `outputs/aiw09/voice-publish-r2-round3b.log`，证据 `reports/stage28_browser_voice_publish_r2.json` | 3/3：P1 原发布页；P2 `modeBefore=streaming → modeAfter=typing`；P3 旧轮尾片晚到 + 新轮在队，`modeAfter=typing` |
+| r1 四个浏览器场景 | `aiw09_scope/full_page/late/account_switch.mjs`；日志 `outputs/aiw09/*-r2-final.log`，JSON `reports/stage28_*_r2.json` | 合计 17 用例 / 0 失败 |
+| 静态契约 | `tests/frontend/check_contracts.py` ㉖ | 26/26；固定 currentSink/队列 sink+round/start 结算/finalizeSinks/录音中禁用输入与发送 |
+
+- 全部浏览器证据为伪造 `SpeechRecognition` + mock 后端，**不代表真实 Chrome/Edge 识别、真实模型或真机**。
+- 控制台 401 来自登录探测，`ERR_FAILED` 来自 V6 故意断网；`apiErrors` 为空。
+
+### 6.4 本轮真实问题
+
+1. **AiConsole 模板误吞**：修复发送按钮时一处 `edit` 匹配到建议问题按钮，删除了额度条、`composer` 容器、输入框与语音按钮；前端契约检查 25/26 失败暴露。已按 HEAD 原文恢复整块并重新绑定 `voiceRecording`，恢复后 26/26、构建与浏览器回归通过。
+2. **V6 首跑失败**：录音中禁用输入后，断网场景未先停止录音就尝试 `fill`，超时。判定为回归脚本前置状态错误，不是产品缺陷；脚本改为先停止录音再验证文字兜底。
+3. **P2 返回导航失败**：侧栏没有 `/publish` 导航项；改用顶部 `data-testid="publish-button"`，P2 通过。
+
+### 6.5 未完成与未验证
+
+- AIW-09 新增历史对话（T09-09～T09-12）未实施；本轮只收口 r2 语音。
+- 第三轮修复后未再开第四轮独立审查（项目上限三轮）；该修复只经本轮回归与静态契约覆盖。
+- 真机、真实模型、部署未验证；提交/推送/CI 未发生，等待用户当轮具体授权。
+- `stage29` 计划、LOG、Prompt 与过程记录保留原样，未为解除写者互斥先行提交。

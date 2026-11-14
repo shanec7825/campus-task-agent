@@ -1,0 +1,29 @@
+{
+  "base": "http://127.0.0.1:8030",
+  "mode": "publish-page-voice-regression",
+  "cases": [
+    {
+      "id": "P1-publish-voice",
+      "ok": true,
+      "drafted": true,
+      "settled": true
+    },
+    {
+      "id": "P3-old-finalize-not-overwritten-by-new-round",
+      "ok": true,
+      "modeAfter": "typing"
+    },
+    {
+      "id": "P2-publish-voice-stop-on-ai-page",
+      "ok": true,
+      "modeBefore": "streaming",
+      "modeAfter": "typing",
+      "textKept": true,
+      "aiButton": "停止录音"
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ],
+  "apiErrors": []
+}

@@ -540,36 +540,50 @@ def test_same_reschedule_does_not_repeat_notification(ctx: _Ctx) -> None:
     assert after == count, "相同值重复 PATCH 不应新增变更通知"
 
 
-def test_second_quota_check_after_committed_overrun(
+def test_reserved_quota_blocks_concurrent_generation(
     ctx: _Ctx, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """模拟模型调用期间另一请求已提交用满额度。
+    """另一请求已原子预留额度时，本请求不得再生成（`C-AI-RESERVATION@2`）。
 
-    该检查只缩小竞态窗口，不构成 SQLite 并发硬上限；测试验证“已提交超限”的顺序场景。
+    旧实现依赖“模型调用后二次额度检查”；该机制已被“模型调用前原子预留”取代，
+    此处用一条 pending 预留模拟并发中的另一请求，验证额度争用顺序场景。
     """
-    monkeypatch.setenv("AI_DAILY_QUOTA", "50")
-    calls = {"n": 0}
-
-    def _fake_used(_db: Any, _user_id: int) -> int:
-        calls["n"] += 1
-        return 0 if calls["n"] == 1 else 50
-
-    monkeypatch.setattr(ai_service, "_used_today", _fake_used)
-    _err(
-        ctx.client,
-        "POST",
-        "/api/agent/chat",
-        code=ERR_QUOTA,
-        headers=ctx.worker,
-        body={"message": "二次额度检查", "request_id": "aiw05-second-check"},
-        label="二次额度检查",
-    )
-    assert calls["n"] >= 2, "应在写账本前执行第二次额度检查"
+    monkeypatch.setenv("AI_DAILY_QUOTA", "1")
     with SessionLocal() as db:
-        assert (
-            db.query(AiUsageLedger).filter(AiUsageLedger.request_id == "aiw05-second-check").count()
-            == 0
+        db.add(
+            AiUsageLedger(
+                user_id=ctx.worker_id,
+                request_id="aiw05-other-pending",
+                operation="chat",
+                units=1,
+                status="pending",
+                created_at=datetime.now(),
+            )
         )
+        db.commit()
+    try:
+        _err(
+            ctx.client,
+            "POST",
+            "/api/agent/chat",
+            code=ERR_QUOTA,
+            headers=ctx.worker,
+            body={"message": "预留额度检查", "request_id": "aiw05-second-check"},
+            label="预留额度检查",
+        )
+        with SessionLocal() as db:
+            assert (
+                db.query(AiUsageLedger)
+                .filter(AiUsageLedger.request_id == "aiw05-second-check")
+                .count()
+                == 0
+            ), "额度争用失败时不得写入本请求账本"
+    finally:
+        with SessionLocal() as db:
+            db.query(AiUsageLedger).filter(
+                AiUsageLedger.request_id == "aiw05-other-pending"
+            ).delete()
+            db.commit()
 
 
 def test_real_model_success_writes_settled_ledger(

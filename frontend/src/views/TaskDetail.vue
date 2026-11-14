@@ -18,7 +18,7 @@ import { applyTask, myApplications, withdrawApply } from '../api/applications'
 import { getActivity } from '../api/activities'
 import { ApiError } from '../api/client'
 import { checkin, myCheckins } from '../api/checkin'
-import { getTask, getTaskSubmissions, precheckSubmission, submitTask, updateProgress, verifyTask } from '../api/tasks'
+import { getTask, getTaskSubmissions, precheckSubmission, submitTask, uploadSubmission, updateProgress, verifyTask } from '../api/tasks'
 import { listResources } from '../api/resources'
 import AgentDock from '../components/ai/AgentDock.vue'
 import EmptyState from '../components/common/EmptyState.vue'
@@ -75,6 +75,12 @@ const submitLoading = ref(false)
 const submitDialogVisible = ref(false)
 const submitContent = ref('')
 const submitResourceUrl = ref('')
+/** 成果文件（`C-SUBMISSION-FILE@1`）：可选，TXT/Markdown/PDF/DOCX，≤10MB */
+const submitFile = ref<File | null>(null)
+const submitFileError = ref('')
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const FILE_MAX_BYTES = 10 * 1024 * 1024
+const FILE_EXTS = ['.txt', '.md', '.pdf', '.docx']
 /** 当前任务可见的成果版本（管理者看全部，普通成员只看自己） */
 const submissions = ref<SubmissionItem[]>([])
 const submissionsLoading = ref(false)
@@ -164,6 +170,11 @@ const pendingVerifications = computed<
     .filter((member) => member.status === 'submitted')
     .map((member) => ({ member, submission: latestByMember.value.get(member.user_id) ?? null }))
 )
+
+/** 最新成果的预审已过期时，「通过」需先重新预审；「退回」不受影响 */
+function passBlockedByStalePrecheck(submission: SubmissionItem | null): boolean {
+  return Boolean(submission?.precheck?.stale)
+}
 
 function precheckMeta(status: PrecheckStatus): { type: '' | 'success' | 'warning' | 'danger' | 'info'; text: string } {
   if (status === 'pass') return { type: 'success', text: '通过' }
@@ -586,17 +597,63 @@ function openSubmitDialog(): void {
   }
   submitContent.value = ''
   submitResourceUrl.value = ''
+  submitFile.value = null
+  submitFileError.value = ''
   submitDialogVisible.value = true
+}
+
+function fileSizeText(size: number): string {
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`
+  return `${Math.max(1, Math.round(size / 1024))} KB`
+}
+
+function triggerFilePick(): void {
+  fileInputRef.value?.click()
+}
+
+function clearSubmitFile(): void {
+  submitFile.value = null
+  submitFileError.value = ''
+  if (fileInputRef.value) fileInputRef.value.value = ''
+}
+
+/** 前端预检格式与大小；服务端仍会再校验一次 */
+function onSubmitFileChange(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  submitFileError.value = ''
+  if (!file) {
+    submitFile.value = null
+    return
+  }
+  const lower = file.name.toLowerCase()
+  if (!FILE_EXTS.some((ext) => lower.endsWith(ext))) {
+    submitFileError.value = '仅支持 TXT/Markdown/PDF/DOCX'
+    submitFile.value = null
+    input.value = ''
+    return
+  }
+  if (file.size > FILE_MAX_BYTES) {
+    submitFileError.value = '文件不能超过 10MB'
+    submitFile.value = null
+    input.value = ''
+    return
+  }
+  submitFile.value = file
 }
 
 async function confirmSubmit(): Promise<void> {
   if (!task.value || submitLoading.value) return
   submitLoading.value = true
   try {
-    await submitTask(task.value.id, {
-      content: submitContent.value.trim() || null,
-      resource_url: submitResourceUrl.value.trim() || null
-    })
+    if (submitFile.value) {
+      await uploadSubmission(task.value.id, submitFile.value, submitContent.value.trim() || null)
+    } else {
+      await submitTask(task.value.id, {
+        content: submitContent.value.trim() || null,
+        resource_url: submitResourceUrl.value.trim() || null
+      })
+    }
     submitDialogVisible.value = false
     ElMessage.success('已提交，等待发布者验收')
     await load()
@@ -672,7 +729,7 @@ async function handleVerifyMember(
     await load()
   } catch (err) {
     if (err instanceof ApiError && err.code === 4090) {
-      ElMessage.warning('该成果版本已不是最新版本，请刷新后再验收')
+      ElMessage.warning(err.message || '验收被拒绝，请刷新后重试')
       await loadSubmissions()
       return
     }
@@ -1111,7 +1168,7 @@ watch(
                   {{ verdictText(item.precheck.verdict) }}
                 </el-tag>
                 <el-tag v-if="item.precheck?.stale" size="small" type="warning" effect="plain">
-                  要求已变化，预审过期
+                  要求或资料已变化，预审过期
                 </el-tag>
               </div>
               <p v-if="item.content" class="submission-text">{{ item.content }}</p>
@@ -1123,6 +1180,14 @@ watch(
                 rel="noopener noreferrer"
               >
                 查看成果链接
+              </a>
+              <a
+                v-if="item.file_name"
+                class="submission-link"
+                :href="`/api/tasks/${task.id}/submissions/${item.id}/file`"
+              >
+                下载附件：{{ item.file_name }}
+                <template v-if="item.file_size">（{{ fileSizeText(item.file_size) }}）</template>
               </a>
               <p v-if="item.precheck?.summary" class="precheck-summary">{{ item.precheck.summary }}</p>
               <p v-if="item.precheck?.ai_error" class="precheck-error">{{ item.precheck.ai_error }}</p>
@@ -1206,7 +1271,7 @@ watch(
                   {{ verdictText(submission.precheck.verdict) }}：{{ submission.precheck.summary }}
                 </p>
                 <p v-if="submission.precheck?.stale" class="precheck-warning">
-                  任务要求已变化，该预审已过期，请重新运行或人工核对。
+                  任务要求或引用资料已变化，该预审已过期，请先重新预审后再验收。
                 </p>
                 <p v-if="submission.precheck?.ai_error" class="precheck-error">
                   {{ submission.precheck.ai_error }}
@@ -1226,12 +1291,17 @@ watch(
                 <el-button
                   type="success"
                   size="small"
-                  :disabled="!!submissionsError || submissionsLoading"
+                  :disabled="
+                    !!submissionsError || submissionsLoading || passBlockedByStalePrecheck(submission)
+                  "
                   :loading="verifyLoading === member.user_id"
                   @click="handleVerifyMember(member, submission, true)"
                 >
                   通过
                 </el-button>
+                <span v-if="passBlockedByStalePrecheck(submission)" class="verify-hint">
+                  请先重新预审
+                </span>
                 <el-button
                   type="danger"
                   plain
@@ -1444,6 +1514,26 @@ watch(
             maxlength="1000"
             placeholder="可选，例如 https://example.com/final-post"
           />
+        </el-form-item>
+        <el-form-item label="成果文件（可选）">
+          <div class="file-picker">
+            <input
+              ref="fileInputRef"
+              type="file"
+              accept=".txt,.md,.pdf,.docx"
+              class="file-picker__input"
+              @change="onSubmitFileChange"
+            />
+            <el-button size="small" @click="triggerFilePick">选择文件</el-button>
+            <span v-if="submitFile" class="file-picker__name">
+              {{ submitFile.name }} · {{ fileSizeText(submitFile.size) }}
+            </span>
+            <el-button v-if="submitFile" size="small" text @click="clearSubmitFile">清除</el-button>
+          </div>
+          <p class="file-picker__hint">
+            TXT/Markdown/PDF/DOCX，≤10MB；PDF/DOCX 暂不解析正文，请补充文字说明。
+          </p>
+          <p v-if="submitFileError" class="file-picker__error">{{ submitFileError }}</p>
         </el-form-item>
         <el-alert
           type="info"
@@ -1966,8 +2056,14 @@ watch(
 .submission-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-top: 10px;
+}
+
+.verify-hint {
+  font-size: var(--app-font-aux-lg);
+  color: var(--el-color-warning);
 }
 
 .precheck-summary,
@@ -2108,5 +2204,34 @@ watch(
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+.file-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-2);
+  flex-wrap: wrap;
+}
+
+.file-picker__input {
+  display: none;
+}
+
+.file-picker__name {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-aux-lg);
+  overflow-wrap: anywhere;
+}
+
+.file-picker__hint {
+  margin: var(--app-space-1) 0 0;
+  color: var(--app-text-muted);
+  font-size: var(--app-font-aux);
+}
+
+.file-picker__error {
+  margin: var(--app-space-1) 0 0;
+  color: var(--el-color-danger);
+  font-size: var(--app-font-aux);
 }
 </style>

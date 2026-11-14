@@ -78,6 +78,34 @@ export function getTaskSubmissions(id: number): Promise<SubmissionListResult> {
   return request<SubmissionListResult>('GET', `/api/tasks/${id}/submissions`)
 }
 
+/** 读取文件为纯 base64（去掉 dataURL 前缀），供零依赖上传接口使用 */
+function readFileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      const comma = result.indexOf(',')
+      resolve(comma >= 0 ? result.slice(comma + 1) : result)
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('读取文件失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
+/** 上传成果文件（`C-SUBMISSION-FILE@1`）：TXT/Markdown/PDF/DOCX，≤10MB */
+export async function uploadSubmission(
+  id: number,
+  file: File,
+  content?: string | null
+): Promise<TaskItem> {
+  const file_base64 = await readFileBase64(file)
+  return request<TaskItem>('POST', `/api/tasks/${id}/submissions/upload`, {
+    file_name: file.name,
+    file_base64,
+    content: content || null
+  })
+}
+
 /** 预审单个成果版本（`C-PRECHECK@1`）：只写预审记录，不改变业务状态 */
 export function precheckSubmission(taskId: number, submissionId: number): Promise<PrecheckResult> {
   return request<PrecheckResult>(

@@ -408,13 +408,25 @@ class ActivityProgressOut(BaseModel):
     awaiting_owner_confirm: bool = False
 
 
+class ActivityAssigneeOut(BaseModel):
+    """任务执行成员的最小只读投影（契约 `C-ACT-TABLE-DTO@1`）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: int
+    name: str
+
+
 class ActivitySubtaskNode(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    activity_id: int | None = None
     title: str
     status: str
+    start_time: str | None = None
     deadline: str | None = None
+    assignees: list[ActivityAssigneeOut] = Field(default_factory=list)
     assignee_names: list[str] = Field(default_factory=list)
 
 
@@ -422,10 +434,15 @@ class ActivityTaskNode(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    activity_id: int | None = None
     title: str
     status: str
+    start_time: str | None = None
     deadline: str | None = None
+    assignees: list[ActivityAssigneeOut] = Field(default_factory=list)
     assignee_names: list[str] = Field(default_factory=list)
+    completed_children: int = 0
+    total_children: int = 0
     children: list[ActivitySubtaskNode] = Field(default_factory=list)
 
 
@@ -619,6 +636,8 @@ class NotificationOut(BaseModel):
     content: str
     is_read: int
     stale: int = 0
+    archived: int = 0
+    archived_at: str | None = None
     created_at: str
 
 
@@ -626,10 +645,19 @@ class NotificationListOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     unread: int
+    total: int = 0
     items: list[NotificationOut] = Field(default_factory=list)
 
 
 class ReadIn(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    ids: list[int] = Field(default_factory=list)
+
+
+class ArchiveIn(BaseModel):
+    """归档通知（`C-NOTICE-ARCHIVE@1`）：只处理当前用户未归档的记录。"""
+
     model_config = ConfigDict(from_attributes=True)
 
     ids: list[int] = Field(default_factory=list)
@@ -883,7 +911,7 @@ class AiUsageItem(BaseModel):
 
 
 class AiUsageOut(BaseModel):
-    """当日 AI 问答额度（`C-AI-USAGE@1`）：只统计本人 ``settled`` 记录。"""
+    """当日 AI 问答额度（`C-AI-USAGE@1`）：``used`` 统计本人 ``pending``/``settled``；``items`` 只列已结算。"""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -911,6 +939,8 @@ class AiConversationListOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     items: list[AiConversationSummary] = Field(default_factory=list)
+    # 同 owner（同 scope 过滤条件）的会话总数，供前端判断是否还有更旧记录。
+    total: int = 0
 
 
 class AiConversationDetailOut(BaseModel):
@@ -971,6 +1001,42 @@ class ResourceListOut(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Library 私有参考链接（契约 `C-LIBRARY@1`，设计 §9.2）
+# --------------------------------------------------------------------------- #
+
+
+class LibraryLinkOut(BaseModel):
+    """个人链接响应；``owner_id`` 不返回，所有者始终来自当前会话。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    url: str
+    note: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class LibraryLinkCreateIn(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    title: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=1000)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class LibraryLinkUpdateIn(BaseModel):
+    """PATCH 入参；缺省字段不变，``note: null`` 表示清空说明。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    title: str | None = Field(default=None, max_length=200)
+    url: str | None = Field(default=None, max_length=1000)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+# --------------------------------------------------------------------------- #
 # 成果版本与预审（契约 `C-SUBMISSION@1` / `C-PRECHECK@1`）
 # --------------------------------------------------------------------------- #
 
@@ -1003,6 +1069,16 @@ class PrecheckSuggestion(BaseModel):
     evidence: str | None = None
 
 
+class PrecheckResourceSnapshot(BaseModel):
+    """预审引用的资料版本快照（`C-PRECHECK-EVIDENCE@2`）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    version: int
+
+
 class PrecheckOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1012,13 +1088,14 @@ class PrecheckOut(BaseModel):
     verdict: Literal["pass", "fail", "unknown"]
     summary: str | None = None
     ai_suggestions: list[PrecheckSuggestion] = Field(default_factory=list)
+    resource_snapshot: list[PrecheckResourceSnapshot] = Field(default_factory=list)
     mock: bool = False
     ai_error: str | None = None
     created_at: str
 
 
 class PrecheckSummary(BaseModel):
-    """列表内展示的预审摘要；``stale`` 表示任务要求已变化。"""
+    """列表内展示的预审摘要；``stale`` 表示任务要求或引用资料已变化。"""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1032,6 +1109,16 @@ class PrecheckSummary(BaseModel):
     created_at: str
 
 
+class SubmissionFileIn(BaseModel):
+    """成果文件上传（`C-SUBMISSION-FILE@1`）：JSON + base64，不引入 multipart 依赖。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    file_name: str = Field(min_length=1, max_length=255)
+    file_base64: str = Field(min_length=1)
+    content: str | None = Field(default=None, max_length=5000)
+
+
 class SubmissionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1042,6 +1129,9 @@ class SubmissionOut(BaseModel):
     version: int
     content: str | None = None
     resource_url: str | None = None
+    file_name: str | None = None
+    file_size: int | None = None
+    file_mime: str | None = None
     created_at: str
     latest: bool = True
     precheck: PrecheckSummary | None = None
@@ -1080,6 +1170,7 @@ __all__ = [
     "TaskOut",
     "TaskDetailOut",
     "ActivityProgressOut",
+    "ActivityAssigneeOut",
     "ActivitySubtaskNode",
     "ActivityTaskNode",
     "ActivityOut",
@@ -1132,6 +1223,7 @@ __all__ = [
     "SubmitIn",
     "PrecheckItem",
     "PrecheckSuggestion",
+    "PrecheckResourceSnapshot",
     "PrecheckOut",
     "PrecheckSummary",
     "SubmissionOut",

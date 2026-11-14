@@ -200,17 +200,19 @@ def get_usage(
 
 @router.get("/conversations")
 def list_conversations(
+    offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=ai_service.MAX_CONVERSATION_LIST),
     scope_type: Literal["general", "activity", "task"] | None = Query(None),
     scope_id: int | None = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """当前用户最近的会话（按更新时间倒序）；可按会话作用域过滤。"""
+    """当前用户分页会话（按更新时间倒序）；可按会话作用域过滤，返回 total。"""
     return ok(
         ai_service.list_conversations(
             db,
             current_user,
+            offset=offset,
             limit=limit,
             scope_type=scope_type,
             scope_id=scope_id,

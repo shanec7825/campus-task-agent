@@ -9,13 +9,19 @@
  */
 import { defineStore } from 'pinia'
 
-import { listNotifications, readNotifications } from '../api/notifications'
+import { archiveNotifications, listNotifications, readNotifications } from '../api/notifications'
 import type { NotificationItem } from '../types/models'
 
 export const useNotificationsStore = defineStore('notifications', {
-  state: (): { unread: number; items: NotificationItem[]; connected: boolean } => ({
+  state: (): {
+    unread: number
+    items: NotificationItem[]
+    archivedItems: NotificationItem[]
+    connected: boolean
+  } => ({
     unread: 0,
     items: [],
+    archivedItems: [],
     connected: false
   }),
 
@@ -36,6 +42,23 @@ export const useNotificationsStore = defineStore('notifications', {
     /** `refresh` 的语义别名（任务说明中的命名） */
     fetchList(limit = 50): Promise<void> {
       return this.refresh(limit)
+    },
+
+    /** 拉取归档箱（`C-NOTICE-ARCHIVE@1`）：已处理通知只读列表 */
+    async loadArchived(limit = 50): Promise<void> {
+      const result = await listNotifications({ archived: true, limit })
+      this.archivedItems = result.items
+    },
+
+    /** 批量归档：先本地移除，再重拉未归档与归档箱，保证未读数一致 */
+    async archive(ids: number[]): Promise<number> {
+      if (ids.length === 0) return 0
+      const result = await archiveNotifications(ids)
+      const idSet = new Set(ids)
+      this.items = this.items.filter((item) => !idSet.has(item.id))
+      await this.refresh()
+      await this.loadArchived()
+      return result.updated
     },
 
     /** 批量标记已读并同步本地计数 */

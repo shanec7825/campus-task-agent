@@ -2,7 +2,8 @@
 /**
  * 发布者后台（计划 T6 / R3-AC5 / R3-AC8 / R5）。
  *
- * - 任务列表：桌面表格（宽表效率）与手机事务卡片双视图，字段与操作一一对应；
+ * - 任务列表：桌面复用共用任务表格（`C-ADMIN-TABLE-REUSE@1`，含活动筛选与所属活动列），
+ *   手机保留事务卡片双视图，字段与操作一一对应；
  * - 指派弹窗：候选来自任务中已出现的用户，后端无用户列表接口时允许手输用户 ID；
  * - 验收：仅 `publisher_id === 当前用户` 且状态为 `submitted` 时可见，先选择通过/驳回（驳回必填原因）；
  * - 催办规则：`ReminderRuleForm` 校验通过后通过 `PATCH /api/tasks/{id}` 保存。
@@ -11,18 +12,29 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+import { listActivities } from '../api/activities'
 import { decideApplication, listApplications } from '../api/applications'
 import { ApiError } from '../api/client'
-import { assignTask, getTaskChangeImpact, listTasks, patchTask, verifyTask } from '../api/tasks'
+import { assignTask, getTaskChangeImpact, getTaskSubmissions, listTasks, patchTask, verifyTask } from '../api/tasks'
 import AssignDialog, { type AssignCandidate } from '../components/admin/AssignDialog.vue'
 import ReminderRuleForm, { DEFAULT_REMINDER_RULE } from '../components/admin/ReminderRuleForm.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import LoadingState from '../components/common/LoadingState.vue'
+import ActivityTaskTable from '../components/task/ActivityTaskTable.vue'
 import StatusTag from '../components/task/StatusTag.vue'
 import { applicationStatusMeta, formatDeadline, memberStatusMeta } from '../components/task/TaskCard.vue'
 import { useUserStore } from '../stores/user'
-import type { ApplicationItem, ReminderRule, TaskChangeImpact, TaskItem, TaskMember } from '../types/models'
+import type {
+  Activity,
+  ActivitySubtaskNode,
+  ActivityTaskNode,
+  ApplicationItem,
+  ReminderRule,
+  TaskChangeImpact,
+  TaskItem,
+  TaskMember
+} from '../types/models'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -30,6 +42,13 @@ const userStore = useUserStore()
 const tasks = ref<TaskItem[]>([])
 const loading = ref(false)
 const error = ref('')
+
+/** 活动筛选：`all` / `standalone`（独立任务）/ 活动 id；只过滤已加载任务，不触发请求 */
+const activityFilter = ref<'all' | 'standalone' | number>('all')
+const activities = ref<Activity[]>([])
+const activitiesError = ref('')
+/** 共用表格的展开状态由本视图持有 */
+const expanded = ref<number[]>([])
 
 const assignVisible = ref(false)
 const assignTarget = ref<TaskItem | null>(null)
@@ -42,6 +61,15 @@ const verifyReason = ref('')
 const verifyLoading = ref(false)
 /** 本次验收的目标成员（`user_id`）：成员级验收必须逐人指定 */
 const verifyMemberId = ref<number | undefined>(undefined)
+/** 成员最新成果的预审是否已过期（按 `user_id`）；与任务详情页「通过」禁用口径一致 */
+const verifyStaleUsers = ref<number[]>([])
+const verifyStaleLoading = ref(false)
+const verifyStaleError = ref('')
+/** 只接受最后一次预审状态请求的响应，避免快速切换任务时旧响应覆盖新值 */
+let verifyStaleSeq = 0
+const verifyStaleCurrent = computed<boolean>(
+  () => verifyMemberId.value !== undefined && verifyStaleUsers.value.includes(verifyMemberId.value)
+)
 
 /** 截止时间编辑（R4：改期后可继续提交并按新时间提醒） */
 const deadlineVisible = ref(false)
@@ -85,6 +113,56 @@ const pendingApplications = computed<ApplicationItem[]>(() =>
 
 const currentUserId = computed<number | null>(() => userStore.user?.id ?? null)
 const isPublisher = computed<boolean>(() => userStore.isPublisher)
+
+/** 活动筛选只作用于已加载的 `tasks`，不改变权限判定与写操作 */
+const filteredTasks = computed<TaskItem[]>(() => {
+  const filter = activityFilter.value
+  if (filter === 'all') return tasks.value
+  if (filter === 'standalone') return tasks.value.filter((task) => task.activity_id === null)
+  return tasks.value.filter((task) => task.activity_id === filter)
+})
+
+/** 后台任务行：保留 `TaskItem` 写操作字段，同时满足共用表格的只读节点契约 */
+type AdminTableTask = TaskItem & ActivityTaskNode
+type AdminSubtaskRow = TaskItem & ActivitySubtaskNode
+
+function assigneeList(task: TaskItem): ActivityTaskNode['assignees'] {
+  return (task.members ?? []).map((member) => ({
+    user_id: member.user_id,
+    name: member.user_name
+  }))
+}
+
+/** 扁平列表中的子任务按 `parent_id` 归入父任务（表格内缩进展开）；父任务不在当前筛选集合时保持顶层 */
+const tableTasks = computed<AdminTableTask[]>(() => {
+  const ids = new Set(filteredTasks.value.map((task) => task.id))
+  const childrenByParent = new Map<number, AdminSubtaskRow[]>()
+  for (const task of filteredTasks.value) {
+    if (task.parent_id === null || !ids.has(task.parent_id)) continue
+    const siblings = childrenByParent.get(task.parent_id) ?? []
+    siblings.push({ ...task, assignees: assigneeList(task) })
+    childrenByParent.set(task.parent_id, siblings)
+  }
+  return filteredTasks.value
+    .filter((task) => task.parent_id === null || !ids.has(task.parent_id))
+    .map((task) => {
+      const children = childrenByParent.get(task.id) ?? []
+      return {
+        ...task,
+        assignees: assigneeList(task),
+        children,
+        completed_children: children.filter((child) => child.status === 'verified').length,
+        total_children: children.length
+      }
+    })
+})
+
+/** 所属活动标题映射；缺失的活动由表格回退显示 `#id` */
+const activityTitles = computed<Record<number, string>>(() => {
+  const titles: Record<number, string> = {}
+  for (const activity of activities.value) titles[activity.id] = activity.title
+  return titles
+})
 
 /** 指派候选：任务里出现过的负责人 / 发布者（去重，排除自己） */
 const candidates = computed<AssignCandidate[]>(() => {
@@ -133,6 +211,29 @@ async function load(): Promise<void> {
 
 function goDetail(id: number): void {
   void router.push({ name: 'detail', params: { id } })
+}
+
+/** 活动筛选选项：沿用 `scope=all`（服务端已叠可见性）；失败只提示，不阻塞任务列表 */
+async function loadActivities(): Promise<void> {
+  try {
+    const result = await listActivities({ scope: 'all' })
+    activities.value = result?.items ?? []
+    activitiesError.value = ''
+  } catch (err) {
+    activities.value = []
+    activitiesError.value = errorMessage(err)
+  }
+}
+
+function toggleExpanded(id: number): void {
+  expanded.value = expanded.value.includes(id)
+    ? expanded.value.filter((item) => item !== id)
+    : [...expanded.value, id]
+}
+
+/** 插槽回传只读节点；表格行由 `TaskItem` 展开而来，可安全还原为原始数据 */
+function asRow(task: ActivityTaskNode | ActivitySubtaskNode): TaskItem {
+  return task as unknown as TaskItem
 }
 
 function goPublish(): void {
@@ -201,6 +302,28 @@ function openVerify(task: TaskItem): void {
   const submitted = submittedMembers(task)
   verifyMemberId.value = submitted.length === 1 ? submitted[0].user_id : undefined
   verifyVisible.value = true
+  void loadVerifyStale(task)
+}
+
+/** 读取各成员最新成果的预审过期状态；失败不阻塞验收，后端仍会在通过时返回 4090 */
+async function loadVerifyStale(task: TaskItem): Promise<void> {
+  const seq = ++verifyStaleSeq
+  verifyStaleUsers.value = []
+  verifyStaleError.value = ''
+  verifyStaleLoading.value = true
+  try {
+    const list = await getTaskSubmissions(task.id)
+    if (seq !== verifyStaleSeq || verifyTarget.value?.id !== task.id) return
+    verifyStaleUsers.value = list.items
+      .filter((item) => item.latest && item.precheck?.stale)
+      .map((item) => item.user_id)
+  } catch {
+    if (seq !== verifyStaleSeq) return
+    verifyStaleUsers.value = []
+    verifyStaleError.value = '预审状态未加载，通过时仍会由服务端校验'
+  } finally {
+    if (seq === verifyStaleSeq) verifyStaleLoading.value = false
+  }
 }
 
 async function submitVerify(): Promise<void> {
@@ -208,6 +331,10 @@ async function submitVerify(): Promise<void> {
   if (!target) return
   if (verifyMemberId.value === undefined) {
     ElMessage.warning('请选择要验收的成员')
+    return
+  }
+  if (verifyChoice.value === 'pass' && verifyStaleCurrent.value) {
+    ElMessage.warning('该成员预审已过期，请成员重新预审后再验收通过；退回不受影响')
     return
   }
   const reason = verifyReason.value.trim()
@@ -364,6 +491,20 @@ function ruleSummary(task: TaskItem): string {
   return flags.join(' / ')
 }
 
+/** 表格 `meta` 摘要：分配方式 · 报名 · 积分 · 催办；空值不占位 */
+function metaSummary(task: ActivityTaskNode | ActivitySubtaskNode): string {
+  const row = asRow(task)
+  const parts: string[] = []
+  if (row.claim_type) parts.push(row.claim_type === 'assign' ? '指派' : '开放认领')
+  if (row.applied_count > 0 || row.approved_count > 0) {
+    const quota = row.quota === null ? '' : `（名额 ${row.quota}）`
+    parts.push(`报名 ${row.approved_count}/${row.applied_count}${quota}`)
+  }
+  if ((row.credit_reward ?? 0) > 0) parts.push(`积分 ${row.credit_reward}`)
+  if (row.reminder_rule) parts.push(`催办 ${ruleSummary(row)}`)
+  return parts.join(' · ')
+}
+
 /** 成员展示：`assignee_names` 全部 approved 成员（报名先后） */
 function memberNames(task: TaskItem): string {
   const names = task.assignee_names ?? []
@@ -445,7 +586,7 @@ onMounted(async () => {
       return
     }
   }
-  await load()
+  await Promise.all([load(), loadActivities()])
 })
 </script>
 
@@ -495,141 +636,96 @@ onMounted(async () => {
           description="在「发布任务」页创建任务后，即可在这里指派负责人、验收与配置催办。"
         />
         <template v-else>
+          <div class="activity-filter">
+            <span class="activity-filter__label app-muted">活动筛选</span>
+            <el-select
+              v-model="activityFilter"
+              size="small"
+              aria-label="活动筛选"
+              class="activity-filter__select"
+            >
+              <el-option label="全部活动" value="all" />
+              <el-option label="独立任务" value="standalone" />
+              <el-option
+                v-for="activity in activities"
+                :key="activity.id"
+                :label="activity.title"
+                :value="activity.id"
+              />
+            </el-select>
+            <span v-if="activitiesError" class="app-muted filter-hint">
+              活动选项加载失败：{{ activitiesError }}，仍可使用「全部活动 / 独立任务」
+            </span>
+          </div>
+
           <div class="app-desktop-table app-desktop-only">
-            <el-table :data="tasks" size="small" stripe class="task-table">
-              <el-table-column prop="id" label="ID" width="70" />
-              <el-table-column label="标题" min-width="200">
-                <template #default="scope">
-                  <el-link type="primary" :underline="false" @click="goDetail(scope.row.id)">
-                    {{ scope.row.title }}
-                  </el-link>
-                  <el-tag
-                    v-if="scope.row.parent_id !== null"
+            <ActivityTaskTable
+              :tasks="tableTasks"
+              :expanded="expanded"
+              :show-activity="true"
+              :activity-titles="activityTitles"
+              @toggle="toggleExpanded"
+            >
+              <template #meta="{ task }">
+                <span v-if="metaSummary(task)" class="task-table__meta">{{ metaSummary(task) }}</span>
+              </template>
+              <template #actions="{ task }">
+                <div class="row-actions">
+                  <el-button
+                    v-if="canAudit(asRow(task))"
                     size="small"
+                    text
                     type="warning"
-                    effect="plain"
-                    class="row-tag"
+                    @click="openAudit(asRow(task))"
                   >
-                    子任务
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="95">
-                <template #default="scope">
-                  <StatusTag :status="scope.row.status" size="small" />
-                </template>
-              </el-table-column>
-              <el-table-column label="分配" width="110">
-                <template #default="scope">
-                  <el-tag
+                    审核报名（{{ asRow(task).applied_count }}）
+                  </el-button>
+                  <el-button
+                    v-if="canAssign(asRow(task))"
                     size="small"
-                    effect="plain"
-                    :type="scope.row.claim_type === 'assign' ? 'info' : 'success'"
+                    text
+                    type="primary"
+                    @click="openAssign(asRow(task))"
                   >
-                    {{ scope.row.claim_type === 'assign' ? '指派' : '开放认领' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="成员" width="150">
-                <template #default="scope">
-                  <div class="member-cell">
-                    <span>{{ memberNames(scope.row) }}</span>
-                    <el-tag
-                      v-if="submittedMembers(scope.row).length > 0"
-                      size="small"
-                      type="warning"
-                      effect="plain"
-                    >
-                      待验收 {{ submittedMembers(scope.row).length }}
-                    </el-tag>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column label="报名" width="150">
-                <template #default="scope">
-                  <div class="apply-cell">
-                    <span class="rule-summary">{{ quotaSummary(scope.row) }}</span>
-                    <el-tag
-                      v-if="scope.row.applied_count > 0"
-                      size="small"
-                      type="warning"
-                      effect="plain"
-                    >
-                      待审批 {{ scope.row.applied_count }}
-                    </el-tag>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column label="截止" width="150">
-                <template #default="scope">{{ formatDeadline(scope.row.deadline) }}</template>
-              </el-table-column>
-              <el-table-column label="积分" width="80">
-                <template #default="scope">+{{ scope.row.credit_reward ?? 0 }}</template>
-              </el-table-column>
-              <el-table-column label="催办规则" min-width="170">
-                <template #default="scope">
-                  <span class="rule-summary">{{ ruleSummary(scope.row) }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="380" fixed="right">
-                <template #default="scope">
-                  <div class="row-actions">
-                    <el-button
-                      v-if="canAudit(scope.row)"
-                      size="small"
-                      text
-                      type="warning"
-                      @click="openAudit(scope.row)"
-                    >
-                      审核报名（{{ scope.row.applied_count }}）
-                    </el-button>
-                    <el-button
-                      v-if="canAssign(scope.row)"
-                      size="small"
-                      text
-                      type="primary"
-                      @click="openAssign(scope.row)"
-                    >
-                      指派
-                    </el-button>
-                    <el-button
-                      v-if="canVerify(scope.row)"
-                      size="small"
-                      text
-                      type="success"
-                      @click="openVerify(scope.row)"
-                    >
-                      验收（{{ submittedMembers(scope.row).length }}）
-                    </el-button>
-                    <el-button
-                      v-if="canEditDeadline(scope.row)"
-                      size="small"
-                      text
-                      @click="openDeadline(scope.row)"
-                    >
-                      改截止时间
-                    </el-button>
-                    <el-button size="small" text @click="openRule(scope.row)">催办规则</el-button>
-                    <el-button size="small" text @click="goDetail(scope.row.id)">详情</el-button>
-                    <el-button
-                      v-if="canCancel(scope.row)"
-                      size="small"
-                      text
-                      type="danger"
-                      :loading="cancelLoadingId === scope.row.id"
-                      @click="handleCancel(scope.row)"
-                    >
-                      取消任务
-                    </el-button>
-                  </div>
-                </template>
-              </el-table-column>
-            </el-table>
+                    指派
+                  </el-button>
+                  <el-button
+                    v-if="canVerify(asRow(task))"
+                    size="small"
+                    text
+                    type="success"
+                    @click="openVerify(asRow(task))"
+                  >
+                    验收（{{ submittedMembers(asRow(task)).length }}）
+                  </el-button>
+                  <el-button
+                    v-if="canEditDeadline(asRow(task))"
+                    size="small"
+                    text
+                    @click="openDeadline(asRow(task))"
+                  >
+                    改截止时间
+                  </el-button>
+                  <el-button size="small" text @click="openRule(asRow(task))">催办规则</el-button>
+                  <el-button size="small" text @click="goDetail(task.id)">详情</el-button>
+                  <el-button
+                    v-if="canCancel(asRow(task))"
+                    size="small"
+                    text
+                    type="danger"
+                    :loading="cancelLoadingId === task.id"
+                    @click="handleCancel(asRow(task))"
+                  >
+                    取消任务
+                  </el-button>
+                </div>
+              </template>
+            </ActivityTaskTable>
           </div>
 
           <div class="app-mobile-list app-mobile-only">
-            <ul class="mobile-list">
-              <li v-for="task in tasks" :key="task.id" class="mobile-card">
+            <ul v-if="filteredTasks.length > 0" class="mobile-list">
+              <li v-for="task in filteredTasks" :key="task.id" class="mobile-card">
                 <div class="mobile-card__head">
                   <el-link type="primary" :underline="false" @click="goDetail(task.id)">
                     {{ task.title }}
@@ -718,6 +814,7 @@ onMounted(async () => {
                 </div>
               </li>
             </ul>
+            <p v-else class="filter-empty app-muted">当前筛选下没有任务</p>
           </div>
         </template>
       </el-card>
@@ -754,11 +851,22 @@ onMounted(async () => {
                 >
                   {{ memberStatusMeta(member.status).text }}
                 </el-tag>
+                <el-tag
+                  v-if="verifyStaleUsers.includes(member.user_id)"
+                  type="warning"
+                  size="small"
+                  effect="plain"
+                  class="row-tag"
+                >
+                  预审已过期
+                </el-tag>
               </el-radio>
             </el-radio-group>
             <span v-if="verifyTarget && submittedMembers(verifyTarget).length === 0" class="verify-hint app-muted">
               当前没有待验收的成员
             </span>
+            <span v-else-if="verifyStaleLoading" class="verify-hint app-muted">正在读取最新成果的预审状态…</span>
+            <span v-else-if="verifyStaleError" class="verify-hint app-muted">{{ verifyStaleError }}</span>
           </el-form-item>
         </el-form>
 
@@ -777,7 +885,14 @@ onMounted(async () => {
         />
 
         <el-alert
-          v-if="verifyChoice === 'pass'"
+          v-if="verifyChoice === 'pass' && verifyStaleCurrent"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="该成员最新成果的预审已过期（任务要求或资料已变化）：请先重新预审再通过；退回不受影响"
+        />
+        <el-alert
+          v-else-if="verifyChoice === 'pass'"
           type="success"
           :closable="false"
           show-icon
@@ -794,7 +909,12 @@ onMounted(async () => {
 
       <template #footer>
         <el-button :disabled="verifyLoading" @click="verifyVisible = false">取消</el-button>
-        <el-button type="primary" :loading="verifyLoading" @click="submitVerify">
+        <el-button
+          type="primary"
+          :loading="verifyLoading"
+          :disabled="verifyChoice === 'pass' && (verifyStaleLoading || verifyStaleCurrent)"
+          @click="submitVerify"
+        >
           {{ verifyChoice === 'pass' ? '确认通过' : '确认退回' }}
         </el-button>
       </template>
@@ -1033,9 +1153,36 @@ onMounted(async () => {
   line-height: 1.6;
 }
 
-.task-table :deep(.el-table__cell) {
-  vertical-align: middle;
+.activity-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
 }
+
+.activity-filter__label {
+  font-size: 13px;
+}
+
+.activity-filter__select {
+  width: 220px;
+  max-width: 100%;
+}
+
+.filter-hint {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.filter-empty {
+  margin: 0;
+  padding: 12px;
+  text-align: center;
+  font-size: 13px;
+}
+
 
 .row-tag {
   margin-left: 6px;
@@ -1045,25 +1192,6 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 2px;
-}
-
-.rule-summary {
-  font-size: 13px;
-  color: var(--el-text-color-regular);
-}
-
-.apply-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-}
-
-.member-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
 }
 
 .member-picker {

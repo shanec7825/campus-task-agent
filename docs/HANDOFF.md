@@ -1,65 +1,87 @@
 # 当前开发交接
 
-> 更新日期：2026-11-14（Asia/Shanghai，stage28 / AIW-09 增量 r1 情境会话与作用域）。当前结论：AIW-00～08 的实现与 CI 已通过；stage28 完成 AIW-09 的会话作用域、归属校验与前端按目标隔离/乱序归属（r1），本地门禁、CLI 浏览器验证与三轮独立审查已收敛到 0 Critical / 0 Important；语音跨形态（r2）尚未开工，真实模型、真机与部署未验证，最终产品验收未完成。
+> 更新日期：2026-11-14（Asia/Shanghai）。当前计划 `2026-11-14-r3`，UI 增补 r4 已实施。**本轮已完成 AIW-14 r1/r2/r4、AIW-09 历史增量、AIW-12 额度并发**，全部为本地实现与验证；未提交、未推送、无新 CI、未部署。
+> AIW-10 可执行增量已完成（预审资料版本 + 过期验收拒绝）；附件上传/解析仍按 D-04 挂起。
+> stage38 已收口：侧栏初始化请求复测 25/25 正常；后台验收补过期预审标记与禁用，契约 38/38、浏览器 18/18。
+> stage39 已完成：全局壳层（图标折叠/最近活动·最近聊天/New chat 发布/右上搜索折叠）、AI 三栏右通知与归档箱、全局悬浮输入三态、成果文件上传/下载（TXT/MD/PDF/DOCX ≤10MB）、成就空窗；契约 43/43、浏览器 42/42、后端 run_all EXIT=0。
+> AIW-13 可执行部分已完成（视觉收口、门禁、角色与 1440/390 场景 24/24）；真机/真实模型/人工晚会链路按 D-06/D-07 保持待验收。
 
-## 1. 当前基线与本轮授权
+## 1. 当前事实与授权
 
-- 分支：`main`；本轮基线 `ca74de1bbcd5a67142cf8b8c0fcbc74787491495`（stage27 回填），与 `origin/main` 一致。
-- 工作区既有差异：`AGENTS.md` 的浏览器单步协议条款（stage26 用户要求保留在工作区，本轮未提交、未修改）。
-- 用户授权：每小时定时任务继续推进 AIW-07～AIW-13；本轮接续 AIW-09，只完成 r1 最小增量，未展开 r2。
-- 本轮记录编号：stage28；未修改业务 Prompt，无新 P 编号。平台显示模型 `deepseek-v4.1-flash-1017`，未独立核验。
+- 分支 `main`，HEAD `a4d2714f067ed0a819401a07434944878c6f9589`。工作区含本轮与上轮未提交改动（AIW-09 r2 语音、AIW-14、历史、额度）。
+- 本轮用户授权：按 r3 连续推进 AIW-14 → AIW-09 历史 → AIW-10 → AIW-12 → AIW-13，连续实施、验证、独立审查与留痕，不因单阶段结束停下询问。提交/推送/部署/付费/删除仍须当轮具体授权；本轮均未发生。
+- AIW-11 整个取消，不恢复、不转移其新增能力。
+- 缺 D-04（文件格式）、D-05（成就规则）、D-06（真机/真实模型）时只挂起直接相关子任务。
 
-## 2. 本轮产出与阅读顺序
+## 2. 先读这些实际文件
 
-1. [AGENTS.md](../AGENTS.md) 与 [开发记录规则](DEVELOPMENT_RECORDS.md)、[浏览器单步协议](BROWSER_VALIDATION.md)。
-2. 本地总计划 [roadmap.md](../.codeartsdoer/plans/ai-workbench/roadmap.md)、[需求覆盖表](../.codeartsdoer/plans/ai-workbench/requirements.md)、[共同约束](../.codeartsdoer/plans/ai-workbench/execution-contract.md)、[待确认决策](../.codeartsdoer/plans/ai-workbench/decisions.md)、[验收矩阵](../.codeartsdoer/plans/ai-workbench/acceptance-matrix.md)。
-3. 本阶段 [AIW-09 design.md](../.codeartsdoer/plans/aiw09-context-voice/design.md)、[task.md](../.codeartsdoer/plans/aiw09-context-voice/task.md) 与 r1 执行细化 [design-r1.md](../.codeartsdoer/plans/aiw09-context-voice/design-r1.md)。
-4. [stage28 过程记录](../codearts_proof/ai_dialogue/stage28_情境会话与语音.md) 与 [LOG](../codearts_proof/LOG.md)、[启动指令原文](../codearts_proof/prompts/agent_team_启动指令/2026-11-14_stage28_情境会话与语音_启动指令.md)。
-5. 浏览器证据：[主链路](../codearts_proof/reports/stage28_browser_evidence.json)、[晚到归属](../codearts_proof/reports/stage28_browser_late_response.json)、[401 换账号](../codearts_proof/reports/stage28_browser_account_switch.json)、[完整页作用域](../codearts_proof/reports/stage28_browser_full_page.json)；截图 `codearts_proof/screenshots/stage28/`。
+1. [AGENTS](../AGENTS.md)、[记录规则](DEVELOPMENT_RECORDS.md)、[浏览器单步协议](BROWSER_VALIDATION.md)。
+2. 本地 [roadmap](../.codeartsdoer/plans/ai-workbench/roadmap.md)、[需求](../.codeartsdoer/plans/ai-workbench/requirements.md)、[共同约束](../.codeartsdoer/plans/ai-workbench/execution-contract.md)、[决策](../.codeartsdoer/plans/ai-workbench/decisions.md)、[矩阵](../.codeartsdoer/plans/ai-workbench/acceptance-matrix.md)。
+3. 阶段计划：[AIW-14 design §8/§9](../.codeartsdoer/plans/aiw14-workbench-library-search/design.md)、[UI r4](../.codeartsdoer/plans/aiw14-workbench-library-search/ui-reference-r4.md)、[AIW-09 design §5](../.codeartsdoer/plans/aiw09-context-voice/design.md)、[AIW-12 design §4](../.codeartsdoer/plans/aiw12-assets-quota/design.md)、各自 `task.md`。
+4. 阶段记录：[stage32 AIW-14 实施](../codearts_proof/ai_dialogue/stage32_AIW-14浏览与Library实施.md)、[stage33 AIW-09 历史](../codearts_proof/ai_dialogue/stage33_AIW-09历史会话.md)、[stage34 AIW-12 额度](../codearts_proof/ai_dialogue/stage34_AIW-12额度并发.md)、[stage35 AIW-14 r4](../codearts_proof/ai_dialogue/stage35_AIW-14r4头像短卡与分工表.md)、[stage36 AIW-10 预审资料版本](../codearts_proof/ai_dialogue/stage36_AIW-10预审资料版本.md)、[stage37 AIW-13 产品级验收](../codearts_proof/ai_dialogue/stage37_AIW-13产品级验收.md)、[stage38 AIW-13 遗留缺陷收口](../codearts_proof/ai_dialogue/stage38_AIW-13遗留缺陷收口.md)、[stage39 全局壳层与成果文件](../codearts_proof/ai_dialogue/stage39_全局壳层AI三栏与成果文件.md)。
 
-详细计划仍被 `.codeartsdoer/` 忽略，仅本地保存，未远程备份。换电脑/worktree 缺计划时先补齐，摘要不能冒充完整契约。
+详细计划被 Git 忽略，仅本地。换机器/worktree 缺计划时报告，不用摘要冒充完整契约。
 
-## 3. 已有实现与历史验证
+## 3. 已完成与验证（本轮实跑）
 
-- AIW-00～06 对应 stage18～24：活动下发布与权限、统一 AI 入口/持久问答、网格/预览/共享助手、依赖时间图、资料与文本成果版本/预审、提醒失效/人工影响卡/问答额度、完整 API 验收链路。最近业务提交 `a728788`，CI run 43532974986 四 job success。
-- stage25 规划入库：`19eda9f` / CI `43553685701`；回填 `d1ceab2`。
-- stage26（AIW-07）：`f3fa0fb` / CI `43558695172`、回填 `0b325bd`；AC-01/03/09/14/15 与 AC-16 部分（mock）有 CLI 证据。
-- stage27（AIW-08）：`694a53b` / CI `43565975450`、回填 `ca74de1` / CI `43566318740`，均四 job success；未部署。
-- stage28（AIW-09 r1）提交 `b13a349` / CI run `43569210554` 四个 job 全 success；未部署。本地新增：`ai_conversations.scope_type/scope_id`、`parse_sessions.user_id`；`POST /api/agent/chat` 作用域入参、`GET /api/agent/conversations` 作用域过滤与逐条可见性复核；`authz` 驱动的对象可见性（不存在与不可见统一 4040）、撤权后拒绝且保留行；前端 `aiChat` 按 `general/activity:<id>/task:<id>` 隔离视图、晚到结果只回原作用域、401/登录/退出三路径清理；`AgentDock` 作用域入口、完整页目标展示与「回到通用助手」。CI 登记 `test_aiw09_context_scope.py`。
-- stage28 验证：新增 8 passed、既有会话隔离 11 passed；后端 `run_all` EXIT=0（23 表/6 脚本）；前端 `run_all` 两次 EXIT=0（构建 4/4、契约 25/25、语音 21/21）；CLI 浏览器四项 8/8、3/3、3/3、3/3；安全红线 12 通过 / 1 失败（B5b 忽略目录历史产物）；独立审查三轮 1 Critical+6 Important → 0/1 → 0/0。
-- 历史命令/审查/截图详情见 [stage27 过程](../codearts_proof/ai_dialogue/stage27_信息架构与角色页面.md)、[stage24 报告](../codearts_proof/reports/stage24_整体验收.md)；不把历史通过数字算作本轮测试。
-- 本地安全 B5b 因忽略目录运行产物失败，保留该事实；CI 干净检出成功不等于本地那次检查成功。不删证据或放宽门禁。
+1. **AIW-14 r1/r2（stage32）**
+   - 分组 SVG 图标侧栏、搜索入口、Library 路由与私有链接（GET/POST/PATCH，无 DELETE，owner 只按会话）、最近活动/任务、AI 历史真实列表。
+   - 大厅/我的任务双段胶囊 `?type=`、三列短卡、选中左 1 右 2 分栏、`selectedType/selectedId` 深链与滚动恢复、返回不堆历史。
+   - HoverPeek 联合区：8px 间隙桥接 + 120ms 关闭缓冲；真实浏览器先复现失败（2/5）后 16/16。
+   - mine 搜索（活动/任务分组、跨组织不返回）、`cta_search_return` 恢复关键词。
+   - 门禁：后端 `run_all` EXIT=0（1446 PASS，24 表）；前端 `run_all` EXIT=0（构建 4/4、契约 32/32、语音 21/21）。
+   - 浏览器：首轮 152 条 149 PASS；修复后 AC-18（侧栏叠压）与 AC-22（搜索返回）复验 PASS。
+   - 审查：r1 0 Critical/7 Important；r2 关闭 5/7；r3 0C/0 阻塞（N-6 在 r3 后修复，未开第四轮）。
+2. **AIW-09 历史（stage33）**
+   - 列表 `offset` 分页 + `total`；侧栏最近 5 条；AI 完整页历史抽屉（最近/全部/加载更多/失败重试）；旧会话续聊、新对话、`?conversation=` 刷新恢复；同 scope 多会话与晚到回包按 conversationKey+epoch 隔离；读历史不调模型/不扣额度。
+   - `test_aiw09_history.py` 通过；浏览器历史项通过，抽屉点击会话 URL 未写回缺陷已修，R3 定向复验 13/13 PASS。
+3. **AIW-12 额度并发（stage34）**
+   - `ai_usage_ledger` 增加 `pending` 预留，`BEGIN IMMEDIATE` 内原子统计+插入，模型调用不持锁；失败对称释放；同键异内容/异作用域 4090；超时只清本用户 10 分钟前的 pending；`used` 含 pending、`items` 只列 settled。
+   - 并发测试 6 passed；`test_aiw05_proactive_quota.py` 旧二次检查用例按授权改为「预留争用」，合并 18 passed；收口后后端 `run_all` 再跑 EXIT=0（1446 PASS）。
+   - 审查第 1 轮曾判不通过（1 Critical/4 Important），已全部处置（C-1 用例改写、I-1 重放校验、I-2 释放事务、I-3 口径）。
+4. **AIW-14 r4（stage35）**
+   - 浏览活动/任务卡改为柔和彩色短矩形 + 32px 头像主行；活动树节点补 `start_time/assignees/completed_children/total_children/activity_id`。
+   - 新增共用 `ActivityTaskTable`：活动详情、浏览右栏、发布者后台复用；父子展开、子任务徽标、`router-link` 进详情、`#meta` 摘要（后台恢复分配方式/报名/积分/催办）。
+   - 活动详情标题区切换器走 `router.assign` 等价的 `router.replace`，保留 `from/q`、切换清空展开与资料检索、晚到响应按 `requestSeq` 丢弃。
+   - 门禁：新测试 5 passed、活动回归 21 passed、后端 `run_all` EXIT=0、前端 `run_all` ALL PASS（构建 4/4、契约 37/37、语音 21/21）、`vue-tsc` 0 error；r4 浏览器 **41/41 PASS**（1440/390，含后台父子组装与筛选）。
+   - 独立审查 0 Critical / 3 Important 全部修复后复跑门禁；未开第二轮独立复审。
+5. **AIW-10 可执行增量（stage36）**
+   - 预审 digest 纳入被引用资料版本；`submission_prechecks.resource_snapshot` 幂等迁移（不回填）；资料视角固定为成果提交者。
+   - `pass=true` 时过期预审返回 4090，校验先于成员/积分/通知写入；退回与无预审保持兼容。
+   - 任务详情过期标签改「要求或资料已变化」，待验收「通过」在 stale 时 disabled。
+   - 门禁：`test_aiw10_precheck_version.py` **8 passed**、资料/整体验收回归 **15 passed / 1 skipped**、前端 ALL PASS、`vue-tsc` 0 error；后端 `run_all` EXIT=0 但不覆盖 pytest，不作为本条证据。
+   - 独立审查 0 Critical / 3 Important（I1 证据口径、I2/I3 回归缺口）全部处置；9 条 Suggestion 记录未处置。
+6. **AIW-13 可执行验收（stage37）**
+   - T13-00 两处令牌化：`UserAvatar` xs 字号回 `--app-font-aux`、`AppLayout` 徽标 `#fff` → `--el-color-white`。
+   - T13-04/05：未登录/成员/发布者角色、活动任务表与依赖图、表格链接应用内跳转与返回、搜索保留 `q`、深浅主题、390 四页无溢出、AI 额度 **24/24**；AC-09 过期预审 UI **15/15**；390 报名→审批→提交→退回→重提→验收链路 **15/15**；390 搜索/Library/历史与键盘 **11/11**。
+   - 安全红线 12 通过 / 1 失败（B5b 仅 `.codeartsdoer/temp` 工具日志残留），未放宽门禁。
+   - 待条件：真机（D-06）、真实模型评测（D-06）、人工晚会链路与录屏（T13-08）、提交/CI（T13-11）与部署（D-07）。
+7. **stage38 遗留缺陷收口**
+   - 「整页直连侧栏最近/AI 历史不请求」复测：5 路由 × 5 次整页直连 25/25 均发起（此前监听路径写错），当前不可复现。
+   - 后台验收对话框按成员最新成果 `precheck.stale` 显示「预审已过期」并禁用「确认通过」，加载中禁用、失败提示、迟到响应按 `verifyStaleSeq` 丢弃；退回不受影响。
+   - 门禁：契约 **38/38**（新增 ㊳，含空转防护）、前端 run_all **ALL PASS**、typecheck/build EXIT=0、浏览器 **18/18**。
+   - 独立审查 1 Critical/2 Important 全部关闭，第二轮复核「可提交」。
+8. **stage39 全局壳层 / AI 三栏 / 归档 / 成果文件**
+   - 壳层：折叠仅图标、右上搜索/折叠、New chat 发布、最近活动/最近聊天、归档通知导航；`/messages` 重定向 AI 页。
+   - AI：左问答 + 右通知/归档（`?panel=archive`）；归档幂等、未读数不含归档；删除「查看全部消息」。
+   - 全局悬浮输入：小条 → `^` 中框（部分问答）→ AI 页；任意页提问与语音；非 AI 页显示。
+   - 成果文件：JSON base64 上传（TXT/MD/PDF/DOCX ≤10MB）、提交者/审核者下载、TXT/MD 参与预审、PDF/DOCX 仅存储。
+   - 门禁：后端 3+4+15 passed、前端 ALL PASS（契约 43/43）、浏览器 **42/42**、后端 `run_all` EXIT=0（1446 PASS）。
+   - 首轮审查 3 Critical/15 Important 已修复并复跑；**第二轮复核请求后审查会话未返回新结论，最后一批修复未经独立复核**（如实登记）。移动端通知抽屉改为堆叠、MIME 非双检等登记未处置。
+   - 成就保持空窗（D-05 未确认）。
 
-## 4. 为什么不能再写“完整计划全部完成”
+## 4. 问题与待条件
 
-- 未完成验证：真实模型、真机、跨设备/深色之外的完整使用验收、部署。
-- 未落地主线：AIW-09 的语音跨形态（r2，`C-VOICE-COMPOSER@2`）、AIW-10 文件成果与正文证据、AIW-11 整体原子发布与受控动作、AIW-12 成就与额度并发、AIW-13 完整使用验收。
-- 已记录语义边界：未发送输入只在 SPA 内切目标时保留；整页刷新只恢复已持久化会话，不持久化未发送草稿（r1 设计边界）。「我的任务」仍沿用 `my_task_condition`，不含活动负责人代管的他人任务。
-- 待决定条件：最终自动验收、多级审批、扩大计量/真实收费、文件边界/依赖、成就规则、模型费用/设备条件、部署范围（D-01～D-07）。
+- **AIW-14 已完成 r1/r2/r4**；r4 的浏览器证据为模拟视口（1440/390），深色主题与真机未在 r4 重测。
+- **AIW-10 文件链路已实现（stage39）**：成果文件上传/下载与 TXT/MD 预审取文已落地；PDF/DOCX 只存储不解析；未引入解析依赖；Library 仍只存链接。
+- **AIW-12 成就空窗**：D-05 规则未确认；未新增规则、展示或发奖写路径。
+- **AIW-13 可执行部分完成**：令牌化、角色/模拟视口、过期预审 UI、390 完整成果链路、移动搜索/Library/历史与键盘焦点已验；真机语音/安全区/键盘、固定真实模型评测、人工晚会链路与录屏未验；部署/提交未授权。
+- 遗留观察：整页直连侧栏请求已复测 25/25 正常（原监听路径口径错误）；搜索前端分页 UI 数据量不足未验；关闭详情滚动恢复在数据不足时 N/A；`resetFilters` 未清选中（低）。
+- 未验证：后台验收在「预审状态加载失败/延迟」时退回可用的浏览器注入场景（仅表达式与提示断言）。
+- 安全红线本轮未重跑；历史 B5b 失败事实保留。真实模型、真机、部署均未验证。
 
-## 5. 下一步与执行边界
+## 5. 本轮交付状态与下一次最短步骤
 
-- 下一轮接续 stage28 的 **AIW-09 r2 语音跨形态**：先读 `aiw09-context-voice/design.md` 的 `C-VOICE-COMPOSER@2` 与 `task.md` T09-04，核对 `useVoiceComposer`、发布页 `AiPanel` 与 `aiChat` 的边界；目标是完整页/长条/微展开共用同一会话与草稿，语音定稿进当前输入，原发布页保留，不支持识别时文字兜底。真实语音/真机仍受设备与授权限制。
-- r1 遗留非阻断建议：`check_contracts.py` 尚未覆盖新增两条前端契约；完整页目标文案存在「当前目标：任务：场地准备」前缀重复；`ScopeView` 未保存 `historyError`；无作用域列表逐条查询的 N+1；失败回填分支无自动化。均不改变 r1 结论。
-- 每小时任务 `75f554a4` 当前为 active；不删除、不新建重复任务。仅当所有可自动执行的开发工作完成后再暂停。
-- 当前未部署。提交/推送/发布/付费/删除均按当轮明确授权处理；详细计划不强制提交，不改忽略规则。
-
-## 6. 新 Agent 的最短接手指令
-
-```text
-先读 AGENTS.md、docs/HANDOFF.md、docs/DEVELOPMENT_RECORDS.md、
-本地 ai-workbench/roadmap.md、需求覆盖/共同约束/决策/验收矩阵，
-再读本轮选定阶段的 design.md、design-r1.md 和 task.md，核对 Git 与实际实现。
-AIW-00～08 为历史阶段交付，AIW-09 只完成 r1（会话作用域），语音 r2 与 AIW-10～13 未完成；
-均不等于完整产品验收完成。
-本轮工作范围由用户明确指定；不得恢复定时任务或继承旧轮次提交授权。
-按需求逐项实现/验收并留真实证据；缺条件保持待验证，不静默缩小原目标。
-```
-
-## 7. stage28 断点与历史衔接（2026-11-14）
-
-- 本轮浏览器证据来自 `http://127.0.0.1:8030` + `outputs/aiw09/demo.db`（`scripts/seed_phase2_demo.py` 新建的隔离库，Git 忽略）。8000/8010/8091 仍是历史遗留进程，未终止；不得用旧进程结果判断 r1 功能。
-- 走查脚本位于 `work/aiw07/runner/aiw09_scope.mjs`、`aiw09_late.mjs`、`aiw09_account_switch.mjs`、`aiw09_full_page.mjs`（Git 忽略）；日志在 `outputs/aiw09/`。脚本用应用内导航或浏览器返回，避免整页 `goto` 重置 Pinia 内存缓存。
-- stage26 的 MCP doom loop 已停止使用；本轮全部浏览器结果为 Playwright CLI 产出，不写成 MCP 产出。
-- `AGENTS.md` 单步协议条款仍未提交，等待用户确认；不得随本阶段提交顺带带上。
-- 本轮业务提交 `b13a349` 已推送，CI run `43569210554` 四个 job 全 success；本文档回填提交的 CI 只核对结果，不再为回填自身反复生成新提交。
+- 本轮未提交/推送/部署；工作区保留全部可审阅改动与证据：`codearts_proof/reports/aiw14-browser.md`、`codearts_proof/screenshots/aiw14-*.png`、`codearts_proof/screenshots/aiw14-r4-*.png`、`codearts_proof/reviews/stage30_review_r{1,2,3}.md`、`stage31_quota_review.md`、`work/aiw14/browse/{verify-browse-r4.cjs,r4-report.json}`、`work/aiw14/backend-runall-aiw10-final.log`（本地忽略）。
+- 下一次最短可执行步骤：D-06 授权后做真机与固定真实模型评测；T13-08 人工晚会链路需真实操作与录屏；其余已确认代码范围无可自动执行的独立增量。
+- 提交前需用户当轮授权；提交信息应区分 AIW-14（r1/r2/r4）、AIW-09 历史、AIW-12 三组改动及各自验证证据。

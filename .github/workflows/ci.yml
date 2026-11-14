@@ -56,6 +56,12 @@ jobs:
         run: python -m pytest tests/backend/test_aiw08_navigation_scope.py -q
       - name: Run AIW-09 context scope suite
         run: python -m pytest tests/backend/test_aiw09_context_scope.py -q
+      - name: Run precheck evidence, activity table, notice archive and submission file suites
+        run: >-
+          python -m pytest tests/backend/test_aiw10_precheck_version.py
+          tests/backend/test_aiw14_activity_table.py
+          tests/backend/test_notice_archive.py
+          tests/backend/test_submission_file.py -q
 
   backend-integration:
     name: Backend API and SSE integration

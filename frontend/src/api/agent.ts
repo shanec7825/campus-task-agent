@@ -83,14 +83,19 @@ export function getUsage(limit = 20): Promise<AiUsage> {
 
 /**
  * 当前用户最近的会话；`scope` 省略时不按作用域过滤（旧调用行为）。
- * `general` 只传 `scope_type`，活动 / 任务同时传 `scope_id`。
+ * `general` 只传 `scope_type`，活动 / 任务同时传 `scope_id`；`offset` 用于分页取更旧记录。
  */
-export function listConversations(limit = 20, scope?: AiScope | null): Promise<AiConversationList> {
+export function listConversations(
+  limit = 20,
+  scope?: AiScope | null,
+  offset = 0
+): Promise<AiConversationList> {
   const query: Record<string, string | number | boolean | undefined> = { limit }
   if (scope) {
     query.scope_type = scope.type
     if (scope.type !== 'general' && scope.id !== null) query.scope_id = scope.id
   }
+  if (offset > 0) query.offset = offset
   return request<AiConversationList>('GET', '/api/agent/conversations', undefined, query)
 }
 

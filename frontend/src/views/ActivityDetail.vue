@@ -3,23 +3,24 @@
  * 活动详情（契约 C-SEMANTIC@1 / R5、R6）。
  *
  * 结构顺序固定：`header`（活动名 + 负责人/截止/组织/状态）→ 整体进度 →
- * 任务树（含展开全部/收起全部）→ 操作。整页可被浏览器助手直接阅读：
+ * 任务表格（含展开全部/收起全部）→ 图谱 → 资料 → 操作。整页可被浏览器助手直接阅读：
  * 根节点用 `section.app-page`（`AppLayout` 的 `main#main-content` 是全局唯一 `<main>`），
  * 加载态用 `aria-busy` 表达且不渲染空状态。
  */
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
-import { getActivity } from '../api/activities'
+import { getActivity, listActivities } from '../api/activities'
 import { ApiError } from '../api/client'
 import { createResource, listResources } from '../api/resources'
 import AgentDock from '../components/ai/AgentDock.vue'
 import ActivityInfoSection from '../components/activity/ActivityInfoSection.vue'
-import ActivityTaskTree from '../components/task/ActivityTaskTree.vue'
+import ActivityTaskTable from '../components/task/ActivityTaskTable.vue'
 import TaskGraph from '../components/task/TaskGraph.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import LoadingState from '../components/common/LoadingState.vue'
+import UserAvatar from '../components/common/UserAvatar.vue'
 import { useUserStore } from '../stores/user'
 import type { ActivityDetail as ActivityDetailModel, ResourceItem } from '../types/models'
 
@@ -30,8 +31,15 @@ const userStore = useUserStore()
 const activity = ref<ActivityDetailModel | null>(null)
 const loading = ref(false)
 const error = ref('')
-/** 当前展开的任务 id（子任务列表可见） */
+/** 当前展开的任务 id（子任务行可见） */
 const expanded = ref<number[]>([])
+
+/** 请求序号：切换活动后丢弃晚到的旧响应 */
+let requestSeq = 0
+
+/** 活动切换候选（`scope=all`，服务端已叠可见性） */
+const switchActivities = ref<{ id: number; title: string }[]>([])
+const switchLoading = ref(false)
 
 /** 活动资料（本活动） */
 const resources = ref<ResourceItem[]>([])
@@ -93,6 +101,45 @@ const allExpanded = computed<boolean>(
   () => expandableIds.value.length > 0 && expandableIds.value.every((id) => expanded.value.includes(id))
 )
 
+/**
+ * 切换器选项：最多 20 条，且当前活动必定在内。
+ * 当前活动不在服务端前 20 条时置顶补入，避免「切换后看不到自己」。
+ */
+const switchOptions = computed<{ id: number; title: string }[]>(() => {
+  const current = activity.value
+  const options = switchActivities.value
+  if (!current || options.some((option) => option.id === current.id)) return options
+  return [{ id: current.id, title: current.title }, ...options.slice(0, 19)]
+})
+
+async function loadSwitchActivities(): Promise<void> {
+  if (switchLoading.value) return
+  switchLoading.value = true
+  try {
+    const { items } = await listActivities({ scope: 'all' })
+    switchActivities.value = items.slice(0, 20).map((item) => ({ id: item.id, title: item.title }))
+  } catch {
+    // 选项加载失败只提示，不阻塞详情主体；此时只保留当前活动一个选项
+    ElMessage.warning('活动列表加载失败，稍后可再试切换')
+  } finally {
+    switchLoading.value = false
+  }
+}
+
+/** 保留 `from` / `q`，把当前活动替换为选中的活动 */
+function switchActivity(event: Event): void {
+  const target = event.target as HTMLSelectElement
+  const nextId = Number(target.value)
+  if (!Number.isFinite(nextId) || nextId === activityId.value) {
+    target.value = String(activityId.value)
+    return
+  }
+  const query: LocationQueryRaw = {}
+  if (route.query.from !== undefined) query.from = route.query.from
+  if (route.query.q !== undefined) query.q = route.query.q
+  void router.replace({ name: 'activity', params: { id: String(nextId) }, query })
+}
+
 
 function dateText(value: string | null): string {
   if (!value) return '未设置'
@@ -149,18 +196,20 @@ function publishUnderActivity(): void {
   void router.push({ name: 'publish', query: { activity: String(activityId.value) } })
 }
 
-async function loadResources(): Promise<void> {
+async function loadResources(seq?: number): Promise<void> {
   if (!activity.value) {
     resources.value = []
     return
   }
   resourcesLoading.value = true
   try {
-    resources.value = (await listResources({ activity_id: activity.value.id, limit: 50 })).items
+    const items = (await listResources({ activity_id: activity.value.id, limit: 50 })).items
+    if (seq !== undefined && seq !== requestSeq) return
+    resources.value = items
   } catch {
-    resources.value = []
+    if (seq === undefined || seq === requestSeq) resources.value = []
   } finally {
-    resourcesLoading.value = false
+    if (seq === undefined || seq === requestSeq) resourcesLoading.value = false
   }
 }
 
@@ -247,24 +296,29 @@ async function load(): Promise<void> {
     error.value = '活动编号无效'
     return
   }
+  const current = ++requestSeq
   loading.value = true
   error.value = ''
   try {
-    activity.value = await getActivity(activityId.value)
+    const result = await getActivity(activityId.value)
+    if (current !== requestSeq) return
+    activity.value = result
     const validIds = new Set(expandableIds.value)
     expanded.value = expanded.value.filter((id) => validIds.has(id))
-    await loadResources()
+    await loadResources(current)
   } catch (err) {
+    if (current !== requestSeq) return
     activity.value = null
     resources.value = []
     error.value = errorMessage(err)
   } finally {
-    loading.value = false
+    if (current === requestSeq) loading.value = false
   }
 }
 
 onMounted(() => {
   void load()
+  void loadSwitchActivities()
 })
 
 watch(
@@ -290,6 +344,27 @@ watch(
     />
 
     <template v-else-if="activity">
+      <!-- 标题区：当前活动负责人 + 活动切换（契约 `C-ACTIVITY-SWITCH@1`） -->
+      <div class="activity-detail__toolbar">
+        <div class="activity-detail__owner">
+          <UserAvatar :user-id="activity.owner_id" :name="activity.owner_name" size="md" />
+          <span class="activity-detail__owner-name">{{ activity.owner_name || '待分配' }}</span>
+        </div>
+        <label class="activity-detail__switch">
+          <span class="activity-detail__switch-label">切换活动</span>
+          <select
+            class="activity-detail__select"
+            :value="String(activityId)"
+            :disabled="switchLoading"
+            @change="switchActivity"
+          >
+            <option v-for="option in switchOptions" :key="option.id" :value="String(option.id)">
+              {{ option.title }}
+            </option>
+          </select>
+        </label>
+      </div>
+
       <!-- 与发布活动页共用字段区块（`C-NAV-SHARED-ACTIVITY@2`） -->
       <ActivityInfoSection :activity="activity" />
 
@@ -314,7 +389,9 @@ watch(
             {{ allExpanded ? '收起全部' : '展开全部' }}
           </button>
         </div>
-        <ActivityTaskTree :tasks="activity.tasks" :expanded="expanded" @toggle="toggleTask" />
+        <div class="activity-detail__table">
+          <ActivityTaskTable :tasks="activity.tasks" :expanded="expanded" @toggle="toggleTask" />
+        </div>
       </section>
 
       <section class="app-section-card" aria-labelledby="activity-graph-heading">
@@ -519,8 +596,60 @@ watch(
 }
 
 .activity-detail .section-title + .progress-text,
-.section-head + .activity-tree {
+.activity-detail__table {
   margin-top: 10px;
+}
+
+.activity-detail__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-2) var(--app-space-3);
+}
+
+.activity-detail__owner {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-2);
+  min-width: 0;
+}
+
+.activity-detail__owner-name {
+  font-size: var(--app-font-aux-lg);
+  color: var(--app-text-secondary);
+  word-break: break-word;
+}
+
+.activity-detail__switch {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-2);
+  min-width: 0;
+}
+
+.activity-detail__switch-label {
+  flex-shrink: 0;
+  font-size: var(--app-font-aux);
+  color: var(--app-text-muted);
+}
+
+.activity-detail__select {
+  min-width: 0;
+  max-width: 260px;
+  min-height: var(--app-touch);
+  padding: 0 var(--app-space-2);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-sunken);
+  color: var(--app-text);
+  font-family: inherit;
+  font-size: var(--app-font-aux-lg);
+}
+
+.activity-detail__select:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 1px;
 }
 
 .progress-text {
@@ -679,6 +808,15 @@ watch(
 @media (max-width: 768px) {
   .activity-detail {
     gap: 12px;
+  }
+
+  .activity-detail__switch {
+    width: 100%;
+  }
+
+  .activity-detail__select {
+    flex: 1 1 auto;
+    max-width: none;
   }
 
 

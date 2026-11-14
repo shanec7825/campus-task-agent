@@ -7,12 +7,14 @@
  * - 展开/收起不重置输入，不创建新会话；完整页入口继续当前目标的同一会话；
  * - 问答请求仍只读权限内事务，不执行写操作。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import { ApiError } from '../../api/client'
+import { useVoiceComposer } from '../../composables/useVoiceComposer'
 import { useAiChatStore } from '../../stores/aiChat'
+import AgentVoiceButton from './AgentVoiceButton.vue'
 
 const props = defineProps<{
   contextLabel?: string
@@ -23,10 +25,25 @@ const props = defineProps<{
 
 const router = useRouter()
 const aiChat = useAiChatStore()
+const voice = useVoiceComposer()
 const expanded = ref(false)
 
 const recent = computed(() => aiChat.recentMessages)
 const contextText = computed(() => props.contextLabel || '当前事务范围')
+// 录音中禁用文字输入：interim/定稿写回以录制基文为准，不能让手打被整体覆盖
+const voiceRecording = computed(() => voice.recording.value)
+
+// 目标变化（type/id）时停止本轮录音；标题标签异步加载不触发停止
+watch(
+  [() => props.scopeType, () => props.scopeId],
+  () => {
+    if (voice.recording.value) {
+      // 切目标必须显式停止：晚到尾片仍写回原作用域的 sink，文本保留在原目标
+      voice.stop()
+      ElMessage.info('已切换目标，录音已停止，文本保留在原目标')
+    }
+  }
+)
 
 watch(
   [() => props.scopeType, () => props.scopeId, () => props.contextLabel],
@@ -56,6 +73,8 @@ function shortTime(value: string | null): string {
 }
 
 async function send(): Promise<void> {
+  // 录音中不发送半句 interim；先停止录音再发送
+  if (voiceRecording.value) return
   if (aiChat.quotaExhausted) {
     ElMessage.warning('今日 AI 问答额度已用完；任务、通知与审批等协作功能仍可正常使用')
     return
@@ -80,6 +99,11 @@ onMounted(() => {
 
   if (!aiChat.usage) void aiChat.loadUsage()
 })
+
+onUnmounted(() => {
+  // 卸载时正常停止（不 abort）：尾片仍按本轮 sink 结算
+  if (voice.recording.value) voice.stop()
+})
 </script>
 
 <template>
@@ -99,16 +123,20 @@ onMounted(() => {
           :autosize="{ minRows: 1, maxRows: 3 }"
           maxlength="2000"
           resize="none"
-          :disabled="aiChat.sending || aiChat.quotaExhausted"
+          :disabled="aiChat.sending || aiChat.quotaExhausted || voiceRecording"
           placeholder="问 AI：这项事务接下来做什么？"
           aria-label="向情境助手提问"
           @keydown.enter.exact.prevent="send"
+        />
+        <AgentVoiceButton
+          class="dock-voice"
+          :disabled="!voiceRecording && (aiChat.sending || aiChat.quotaExhausted)"
         />
         <el-button
           class="dock-send"
           type="primary"
           :loading="aiChat.sending"
-          :disabled="aiChat.sending || aiChat.historyLoading || aiChat.quotaExhausted || aiChat.input.trim().length === 0"
+          :disabled="aiChat.sending || aiChat.historyLoading || aiChat.quotaExhausted || voiceRecording || aiChat.input.trim().length === 0"
           @click="send"
         >
           发送
@@ -211,6 +239,10 @@ onMounted(() => {
 .dock-input {
   flex: 1;
   min-width: 0;
+}
+
+.dock-voice {
+  flex-shrink: 0;
 }
 
 .dock-send {

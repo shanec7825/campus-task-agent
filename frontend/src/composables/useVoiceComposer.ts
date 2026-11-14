@@ -57,6 +57,21 @@ import {
 /** 不支持语音时的统一提示文案（VoiceButton 直接复用） */
 export const UNSUPPORTED_MESSAGE = '仅支持 Chrome / Edge 语音识别'
 
+/**
+ * 共享语音输出适配（契约 `C-VOICE-SINK@1`）。
+ *
+ * 发布页默认写入草稿 store；AI 完整页 / 长条 / 微展开写入当前作用域的问答输入。
+ * 本轮录音在 `start()` 时固定 sink，切页或切目标后晚到的尾片仍写回发起时的目标。
+ */
+export interface VoiceSink {
+  setLiveText(text: string): void
+  clearLiveText(): void
+  markRecording(): void
+  finishStreaming(): void
+  newSession(): string
+  applyStream(res: StreamParseResult, chunk: string): void
+}
+
 /** Edge 静默 `onend` 后自动续接的延迟（毫秒） */
 const RESTART_DELAY_MS = 250
 
@@ -167,6 +182,10 @@ const liveText = ref<string>('')
 interface QueuedChunk {
   chunk: string
   isFinal: boolean
+  /** 发起该切片的 sink：切页/切目标后仍写回原目标（C-VOICE-SINK@1） */
+  sink: VoiceSink
+  /** 发起该切片的录音轮次：缓冲清空与失败回滚只作用于当前轮 */
+  round: number
 }
 
 /** 串行发送队列：前一片未返回时后续切片在此排队 */
@@ -224,6 +243,44 @@ function getDraftStore(): ReturnType<typeof useDraftStore> {
   return sharedDraftStore
 }
 
+/** 发布页默认 sink（懒创建：方法内取 store，保持现有「唯一写入口」不变） */
+let draftSink: VoiceSink | null = null
+
+function getDraftSink(): VoiceSink {
+  if (!draftSink) {
+    draftSink = {
+      setLiveText: (text) => getDraftStore().setLiveText(text),
+      clearLiveText: () => getDraftStore().clearLiveText(),
+      markRecording: () => getDraftStore().markRecording(),
+      finishStreaming: () => getDraftStore().finishStreaming(),
+      newSession: () => getDraftStore().newSession(),
+      applyStream: (res, chunk) => getDraftStore().applyStream(res, chunk)
+    }
+  }
+  return draftSink
+}
+
+/** `useVoiceComposer(sink)` 注册的 sink；无参时保持发布页默认 */
+let configuredSink: VoiceSink | null = null
+/** 本轮录音固定的 sink：尾片结算、中止或故障停机后释放 */
+let sessionSink: VoiceSink | null = null
+/** 当前录音轮次：新建会话递增，Edge 自动续接沿用上一轮 */
+let roundId = 0
+
+/**
+ * 未开始录音时的写回目标。
+ *
+ * 不得复用 `sessionSink`：上一轮尾片尚在飞时切目标再开录，会因此把新语音写入旧目标。
+ */
+function currentSink(): VoiceSink {
+  return configuredSink ?? getDraftSink()
+}
+
+/** 当前轮次的写回目标（live 文本与切片入队使用）；无在途轮次时退回注册 sink */
+function activeSink(): VoiceSink {
+  return sessionSink ?? currentSink()
+}
+
 /* ==========================================================================
    「全部片段已发送」回调（C-VOICEUI@3 / B8）
    ========================================================================== */
@@ -271,6 +328,11 @@ function notifyAllChunksSent(): void {
 
 /** 尾片已受理、等待队列清空后统一收尾（保证「最后一次 review 看到的是完整草稿」） */
 let finalizePending = false
+/**
+ * 待收尾的发起轮 sink 队列：不能用单槽，
+ * 否则旧轮尾片晚到且新轮已有切片在队时，旧 sink 的 finishStreaming 会被新轮覆盖而永不调用。
+ */
+const finalizeSinks: VoiceSink[] = []
 
 /**
  * 本轮成功写回 store 的切片数：
@@ -322,7 +384,7 @@ function flushLiveText(now: number): void {
   if (text === liveText.value) return
   liveText.value = text
   try {
-    getDraftStore().setLiveText(text)
+    activeSink().setLiveText(text)
   } catch {
     // store 不可用（极端时序）时不影响识别主流程，下一帧会重试
   }
@@ -351,16 +413,26 @@ function pushLiveText(transcript: string): void {
   }
 }
 
-/** 清空 live 块（final 定稿 / 停止 / 中止 / 出错时调用） */
-function clearLiveText(): void {
+/**
+ * 清空指定 sink 的 live 块，同时清掉本地节流状态。
+ *
+ * 不能只调用 `sink.clearLiveText()`：这样会留下在飞的 `liveTimer`，
+ * 停止后定时器仍会用 activeSink 回写 interim（草稿 live 块回弹）。
+ */
+function clearLiveTextFor(sink: VoiceSink): void {
   pendingLiveSnapshot = ''
   clearLiveTimer()
   liveText.value = ''
   try {
-    getDraftStore().clearLiveText()
+    sink.clearLiveText()
   } catch {
-    // 同上：store 不可用时仅本地状态生效
+    // store 不可用时仅本地状态生效
   }
+}
+
+/** 清空当前轮 live 块（final 定稿 / 停止 / 中止 / 出错时调用） */
+function clearLiveText(): void {
+  clearLiveTextFor(activeSink())
 }
 
 /* ==========================================================================
@@ -549,12 +621,15 @@ function haltAfterError(): void {
   }
   const current = recognition
   recognition = null
+  // 先清发起轮 sink 的 live 文本，再释放 sessionSink（否则会落到切页后的新 sink）
+  clearLiveText()
+  sessionSink = null
+  finalizeSinks.length = 0
   try {
     current?.stop()
   } catch {
     // 识别实例可能已结束，忽略 InvalidStateError
   }
-  clearLiveText()
 }
 
 function handleRecognitionError(event: SpeechErrorEventLike): void {
@@ -590,35 +665,41 @@ function handleRecognitionError(event: SpeechErrorEventLike): void {
 function finalizeIfIdle(): void {
   if (!finalizePending || sending || queue.length > 0) return
   finalizePending = false
-  try {
-    getDraftStore().finishStreaming()
-  } catch (cause) {
-    // store 不可用（极端时序）不应阻断 review 回调，仅记录
-    console.warn('[useVoiceComposer] finishStreaming 调用失败', cause)
+  // 逐个结束各发起轮的 streaming 态：发布页录音后切到 AI 页停止也不能落到 AI sink
+  const sinks = finalizeSinks.splice(0, finalizeSinks.length)
+  for (const sink of new Set(sinks)) {
+    try {
+      sink.finishStreaming()
+    } catch (cause) {
+      // store 不可用（极端时序）不应阻断 review 回调，仅记录
+      console.warn('[useVoiceComposer] finishStreaming 调用失败', cause)
+    }
   }
   notifyAllChunksSent()
 }
 
-/** 入队并触发串行发送 */
-function enqueue(chunk: string, isFinal: boolean): void {
+/** 入队并触发串行发送；每个切片固定发起时的 sink 与轮次 */
+function enqueue(chunk: string, isFinal: boolean, sink: VoiceSink = activeSink()): void {
   if (!chunk) {
     // 尾句为空（用户没说出新内容）：结束 streaming 态；
     // 只有本轮确实有切片落地时才通知页面 review，避免「点开就停」触发空草稿审核
     if (isFinal) {
       if (sentChunks > 0) {
+        finalizeSinks.push(sink)
         finalizePending = true
       } else {
         try {
-          getDraftStore().finishStreaming()
+          sink.finishStreaming()
         } catch (cause) {
           console.warn('[useVoiceComposer] finishStreaming 调用失败', cause)
         }
       }
+      sessionSink = null
       void drain()
     }
     return
   }
-  queue.push({ chunk, isFinal })
+  queue.push({ chunk, isFinal, sink, round: roundId })
   void drain()
 }
 
@@ -639,16 +720,25 @@ async function drain(): Promise<void> {
         res = await streamParse(sessionId, item.chunk, item.isFinal)
       } catch (cause) {
         queue.shift()
-        if (item.isFinal) {
-          // 尾句失败：整段退回待发送区，保证草稿内容不丢
-          fullText.value = item.chunk
-          sentIndex.value = 0
-          dedupTail = ''
-        } else {
-          sentIndex.value = Math.max(0, sentIndex.value - item.chunk.length)
+        // 只回滚与丢弃失败轮次自己的缓冲/排队项：新轮已开始时不污染它的文本
+        if (item.round === roundId) {
+          if (item.isFinal) {
+            // 尾句失败：整段退回待发送区，保证草稿内容不丢
+            fullText.value = item.chunk
+            sentIndex.value = 0
+            dedupTail = ''
+          } else {
+            sentIndex.value = Math.max(0, sentIndex.value - item.chunk.length)
+          }
         }
-        queue.length = 0
-        finalizePending = false
+        // 该轮尾片失败：不把未完成收尾当成可 review 的完成态；移除该 sink 的所有待收尾项
+        for (let index = finalizeSinks.length - 1; index >= 0; index -= 1) {
+          if (finalizeSinks[index] === item.sink) finalizeSinks.splice(index, 1)
+        }
+        finalizePending = finalizeSinks.length > 0
+        for (let index = queue.length - 1; index >= 0; index -= 1) {
+          if (queue[index].round === item.round) queue.splice(index, 1)
+        }
         error.value = toErrorMessage(cause)
         break
       }
@@ -657,20 +747,25 @@ async function drain(): Promise<void> {
       lastResult.value = res
       error.value = null
 
-      const store = getDraftStore()
       try {
-        store.applyStream(res, item.chunk)
-        sentChunks += 1
+        // 每个切片写回发起时的 sink：晚到结果不落到切页后的新目标
+        item.sink.applyStream(res, item.chunk)
+        if (item.round === roundId) sentChunks += 1
       } catch (cause) {
         // 合并异常不阻塞后续切片，但要暴露给调用方
         error.value = toErrorMessage(cause)
       }
 
       if (item.isFinal) {
-        // 尾片已落地：等队列清空后再结束 streaming 态并通知页面 review
-        clearLiveText()
+        // 尾片已落地：等队列清空后再结束发起轮 sink 的 streaming 态并通知页面 review
+        clearLiveTextFor(item.sink)
+        finalizeSinks.push(item.sink)
         finalizePending = true
-        resetLocalBuffer()
+        // 缓冲清空与 sink 释放只作用于当前轮；旧轮尾片晚到时不得清掉新轮内容
+        if (item.round === roundId) {
+          resetLocalBuffer()
+          sessionSink = null
+        }
       }
     }
   } finally {
@@ -717,11 +812,52 @@ function detachRecognition(): void {
 function commitStoppedSession(): void {
   // 幂等守卫：onend 与 3s 兜底/finalizeTimer 任一将来时序变化都不允许双结算
   if (!stopping) return
+  // 先固定发起轮 sink：空尾片入队会释放 sessionSink，随后清 live 不能落到新目标
+  const sink = activeSink()
   const tail = pendingText.value
   sentIndex.value = fullText.value.length
   stopping = false
-  enqueue(tail, true)
-  clearLiveText()
+  enqueue(tail, true, sink)
+  clearLiveTextFor(sink)
+}
+
+/**
+ * 新建录音前强制结算上一轮尚未落地的尾片（Critical 修复）。
+ *
+ * 旧实现直接清掉 finalize/force 定时器，在「onend → 尾片请求」窗口内切目标再开录时，
+ * 上一轮尾句永远不会发送；同时 `sessionSink` 可能被新轮复用，导致语音串目标。
+ * 这里先摘掉旧识别回调、把待发文本作为尾片入队（sink/轮次随队列项固定），再清缓冲。
+ */
+function settlePreviousSession(): void {
+  // resumeTimer 也算未结算：Edge 静默 onend 已排期续接时，旧轮 pendingText 仍在缓冲
+  if (!stopping && !finalizeTimer && !forceFinalizeTimer && !resumeTimer) return
+  if (forceFinalizeTimer) {
+    clearTimeout(forceFinalizeTimer)
+    forceFinalizeTimer = null
+  }
+  if (finalizeTimer) {
+    clearTimeout(finalizeTimer)
+    finalizeTimer = null
+  }
+  if (resumeTimer) {
+    // 取消旧轮自动续接，避免它在切页后复用会话重开
+    clearTimeout(resumeTimer)
+    resumeTimer = null
+  }
+  detachRecognition()
+  if (stopping) {
+    // 用户已 stop：按既有收尾链入队尾片（sink 仍是旧轮 sessionSink）
+    commitStoppedSession()
+  } else {
+    // Edge 静默 onend 尚未结算：旧轮未发文本必须作为尾片写回旧 sink，
+    // 否则新轮会把它当作自己的首帧重发（同目标重复、跨目标串写）
+    const sink = activeSink()
+    const tail = pendingText.value
+    sentIndex.value = fullText.value.length
+    enqueue(tail, true, sink)
+    clearLiveTextFor(sink)
+  }
+  resetLocalBuffer()
 }
 
 /**
@@ -732,9 +868,16 @@ function start(options: StartOptions = {}): void {
   if (recording.value) return
   error.value = null
 
+  if (!options.keepSession) {
+    // 非续接：先结算上一轮尾片，再开启独立轮次（不复用旧 sessionSink）
+    settlePreviousSession()
+    roundId += 1
+  }
+
   // 上一轮遗留的尾句结算/静默/续接定时器必须先清掉：
   // 否则结算定时器会把新一轮录音的 pendingText 当作尾句误发并触发 review
-  finalizePending = false
+  // 已落地但尚未收尾的旧轮 sink 必须保留：清空会让其 finishStreaming 永不调用
+  finalizePending = finalizeSinks.length > 0
   sentChunks = 0
   stopping = false
   if (forceFinalizeTimer) {
@@ -764,7 +907,10 @@ function start(options: StartOptions = {}): void {
     return
   }
 
-  const store = getDraftStore()
+  // 本轮录音固定写回目标：切页/切目标后晚到的尾片仍写回发起时的 sink
+  // （Edge 自动续接属于同一轮，沿用已固定的 sink）
+  const sink = options.keepSession && sessionSink ? sessionSink : currentSink()
+  sessionSink = sink
   if (options.keepSession && sessionId) {
     // 续接：同一段话继续用同一个后端 parse_session。
     // 识别实例重启后浏览器可能重吐停顿前内容，这里进入「重吐裁剪」窗口（D3），
@@ -774,7 +920,7 @@ function start(options: StartOptions = {}): void {
     // 每次真正开始录音都新建会话：隔离后端 parse_sessions 的累计文本（newSession 不清空草稿）
     let created = ''
     try {
-      created = store.newSession()
+      created = sink.newSession()
     } catch {
       created = ''
     }
@@ -787,7 +933,7 @@ function start(options: StartOptions = {}): void {
 
   // 进入录音态（草稿唯一写入口：只调 action，不改 state）
   try {
-    store.markRecording()
+    sink.markRecording()
   } catch {
     // store 尚未提供 markRecording 时保持静默，不阻塞录音
   }
@@ -925,9 +1071,12 @@ function abort(): void {
   recognition = null
   recording.value = false
   queue.length = 0
+  // 先清发起轮 sink 的 live 文本，再释放 sessionSink
+  clearLiveText()
+  sessionSink = null
+  finalizeSinks.length = 0
   // 不提前释放 sending 锁：仍在飞的请求结束后由 drain 的 finally 统一释放，
   // 否则新入队的切片可能与旧请求并发，造成草稿乱序。
-  clearLiveText()
   resetLocalBuffer()
 }
 
@@ -941,7 +1090,7 @@ function toggle(): void {
  * @returns 契约 `C-VOICEUI@3 C` 要求的外部 API（P1 / P2 字段全部保留，
  *   `liveText` 为 P2 新增，`onAllChunksSent` 为第三轮新增：语音结束自动 review 的注册入口）。
  */
-export function useVoiceComposer(): {
+export function useVoiceComposer(sink?: VoiceSink): {
   supported: boolean
   recording: typeof recording
   pendingText: typeof pendingText
@@ -954,6 +1103,8 @@ export function useVoiceComposer(): {
   toggle: typeof toggle
   onAllChunksSent: typeof onAllChunksSent
 } {
+  // 无参时退回发布页默认 sink；AI 形态在开始录音前传入作用域 sink
+  configuredSink = sink ?? null
   // 在 setup 阶段完成 store 绑定，后续异步回调可直接使用
   getDraftStore()
   return {

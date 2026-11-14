@@ -21,8 +21,10 @@ from fastapi.responses import JSONResponse
 from app import routers
 from app.db import Base, init_db
 from app.routers import activities as activities_router
+from app.routers import library as library_router
 from app.routers import orgs as orgs_router
 from app.routers import registration as registration_router
+from app.routers import search as search_router
 from app.errors import ApiError, ok
 from app.services import notification_hub, reminder_scheduler
 
@@ -149,6 +151,9 @@ app.include_router(routers.resources.router)
 app.include_router(activities_router.router)
 app.include_router(orgs_router.router)
 app.include_router(registration_router.router)
+# AIW-14 r2：Library 私有链接与「我的活动/任务」搜索（`C-LIBRARY@1` / `C-MY-SEARCH@1`）
+app.include_router(library_router.router)
+app.include_router(search_router.router)
 
 # --------------------------------------------------------------------------- #
 # 生产形态静态托管（首屏加速）：dist 同源托管，避免经 1Mbps 隧道拉取数百个 ESM

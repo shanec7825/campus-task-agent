@@ -1,0 +1,54 @@
+{
+  "base": "http://127.0.0.1:8030",
+  "mode": "fake-speech-recognition",
+  "cases": [
+    {
+      "id": "V1-voice-into-input",
+      "ok": true,
+      "interim": "活动语音内容",
+      "final": "活动语音内容。",
+      "settled": "活动语音内容。"
+    },
+    {
+      "id": "V2-switch-target-keeps-original",
+      "ok": true,
+      "taskValue": "",
+      "backValue": "活动语音内容。活动语音保留。",
+      "taskLabel": "语音输入"
+    },
+    {
+      "id": "V5-no-duplicate-commit",
+      "ok": true,
+      "value": "活动语音内容。活动语音保留。第一段。第二段。",
+      "first": 1,
+      "second": 1
+    },
+    {
+      "id": "V3-unsupported-text-fallback",
+      "ok": true,
+      "disabled": true,
+      "hint": "仅支持 Chrome / Edge 语音识别，可改用文字输入",
+      "messageCount": 4
+    },
+    {
+      "id": "V4-mic-denied",
+      "ok": true,
+      "error": "麦克风权限被拒绝，请在浏览器中允许使用麦克风",
+      "value": "拒绝后仍可输入"
+    },
+    {
+      "id": "V6-network-failure",
+      "ok": true,
+      "error": "网络异常，请检查后端服务是否启动",
+      "value": "断网后文字可用"
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: net::ERR_FAILED",
+    "Failed to load resource: net::ERR_FAILED"
+  ],
+  "apiErrors": []
+}

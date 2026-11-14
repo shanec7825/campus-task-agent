@@ -2192,6 +2192,148 @@ def check_commit_guard(rel_path: str, src_dir: Path) -> str:
     )
 
 
+def check_voice_r2_sink(
+    rel_composer: str, rel_dock: str, rel_console: str, src_dir: Path
+) -> str:
+    """㉖ `C-VOICE-SINK@1` / `C-AI-VOICE@1` / `C-AI-VOICEUI@1`（AIW-09 r2）。
+
+    固定首轮审查修复后的行为：
+    - 新轮不得复用上一轮未释放的 `sessionSink`；
+    - 每个切片携带发起轮 sink/轮次，收尾落到发起轮 sink；
+    - 录音中 AI 输入框禁用，避免手打被 interim/定稿整体覆盖。
+    """
+    text = strip_ts_comments(load_text(src_dir / rel_composer))
+    problems: list[str] = []
+
+    current_body, current_line = function_body(text, "currentSink")
+    if "sessionSink" in current_body:
+        problems.append(
+            f"{render_location(rel_composer, current_line)} currentSink() 仍引用 sessionSink"
+            "（R2-C1：上一轮尾片未释放时会串目标）"
+        )
+    if "sessionSink ?? currentSink()" not in text:
+        problems.append(
+            f"{rel_composer} 缺少 `activeSink()` 的 `sessionSink ?? currentSink()` 回退"
+        )
+
+    queued = re.search(r"interface QueuedChunk\s*\{(.*?)\}", text, re.S)
+    if queued is None:
+        problems.append(f"{rel_composer} 缺少 `interface QueuedChunk`")
+    else:
+        for token in ("sink: VoiceSink", "round: number"):
+            if token not in queued.group(1):
+                problems.append(
+                    f"{rel_composer} QueuedChunk 缺少 `{token}`（R2-C1：队列项必须固定发起轮目标）"
+                )
+
+    start_body, start_line = function_body(text, "start")
+    if "if (!options.keepSession)" not in start_body or "settlePreviousSession()" not in start_body:
+        problems.append(
+            f"{render_location(rel_composer, start_line)} start() 非续接分支未先 "
+            "`settlePreviousSession()`（R2-C1：旧轮尾片窗口内再开录不得丢尾句）"
+        )
+    if "finalizeSinks.length = 0" in start_body:
+        problems.append(
+            f"{render_location(rel_composer, start_line)} start() 整批清空 finalizeSinks"
+            "（R2-I1：已落地旧轮 sink 的 finishStreaming 会被丢弃）"
+        )
+
+    drain_body, drain_line = function_body(text, "drain")
+    if "item.sink.applyStream" not in drain_body:
+        problems.append(
+            f"{render_location(rel_composer, drain_line)} drain() 未使用 `item.sink.applyStream`"
+            "（R2-I1：在飞切片必须写回发起轮目标）"
+        )
+    if "currentSink()" in drain_body:
+        problems.append(
+            f"{render_location(rel_composer, drain_line)} drain() 仍使用 currentSink()"
+        )
+
+    finalize_body, finalize_line = function_body(text, "finalizeIfIdle")
+    if "finalizeSinks" not in text or "finalizeSinks" not in finalize_body:
+        problems.append(
+            f"{render_location(rel_composer, finalize_line)} finalizeIfIdle() 未使用 finalizeSinks"
+            "（R2-I1：旧轮尾片晚到不得被新轮 sink 覆盖，finishStreaming 必须逐轮落地）"
+        )
+    commit_body, commit_line = function_body(text, "commitStoppedSession")
+    if "const sink = activeSink()" not in commit_body or "enqueue(tail, true, sink)" not in commit_body:
+        problems.append(
+            f"{render_location(rel_composer, commit_line)} commitStoppedSession() 未先固定发起轮 sink"
+            "（R2-I1：空尾片入队释放 sessionSink 后不能再用当前 sink 清 live）"
+        )
+    enqueue_body, enqueue_line = function_body(text, "enqueue")
+    if (
+        "function enqueue(chunk: string, isFinal: boolean, sink: VoiceSink = activeSink())"
+        not in text
+    ):
+        problems.append(
+            f"{render_location(rel_composer, enqueue_line)} enqueue() 签名未显式接收/固定 sink"
+            "（R2-I1：队列项必须携带发起轮目标）"
+        )
+    if "queue.push({ chunk, isFinal, sink, round: roundId })" not in enqueue_body:
+        problems.append(
+            f"{render_location(rel_composer, enqueue_line)} enqueue() 入队项未携带 sink/round"
+            "（R2-I1）"
+        )
+    settle_body, settle_line = function_body(text, "settlePreviousSession")
+    if "resumeTimer" not in settle_body:
+        problems.append(
+            f"{render_location(rel_composer, settle_line)} settlePreviousSession() 未清理 resumeTimer"
+            "（R2-C1：旧轮自动续接不得在新页面重开）"
+        )
+
+    page_expectations = {
+        rel_dock: ("dock-input", "dock-send", "dock-voice"),
+        rel_console: ("composer-input", "send-button", "composer-voice"),
+    }
+
+    def binding_of(page: str, class_name: str) -> str | None:
+        """取指定 class 元素上 `:disabled` 的真实表达式（240 字符内）。"""
+        match = re.search(
+            rf'class="{re.escape(class_name)}"[\s\S]{{0,240}}?:disabled="([^"]*)"', page
+        )
+        return match.group(1) if match else None
+
+    for rel_path, (input_class, send_class, voice_class) in page_expectations.items():
+        # 先剥离 TS 与 HTML 注释，注释里的伪绑定不能替代真实模板
+        page = strip_ts_comments(load_text(src_dir / rel_path))
+        page = re.sub(r"<!--.*?-->", "", page, flags=re.S)
+        if re.search(r"const voiceRecording = computed\(\(\) => voice\.recording\.value\)", page) is None:
+            problems.append(
+                f"{rel_path} 缺少 `const voiceRecording = computed(() => voice.recording.value)`"
+                "（R2-I2：录音态必须来自共享 composer）"
+            )
+        for class_name, label in ((input_class, "输入框"), (send_class, "发送按钮")):
+            expr = binding_of(page, class_name)
+            if expr is None or "voiceRecording" not in expr or "!voiceRecording" in expr:
+                problems.append(
+                    f"{rel_path} {label}（class=\"{class_name}\"）disabled 未绑定录音态（R2-I2）"
+                )
+        voice_expr = binding_of(page, voice_class)
+        if voice_expr is None or "!voiceRecording &&" not in voice_expr:
+            problems.append(
+                f"{rel_path} 语音按钮（class=\"{voice_class}\"）录音中必须可停止"
+                "（disabled 需为 `!voiceRecording && ...`）"
+            )
+
+    sink_text = load_text(src_dir / "composables/useAiVoiceSink.ts")
+    for token in ("createAiChatVoiceSink", "setInputForScope", "applyStream"):
+        if token not in sink_text:
+            problems.append(f"composables/useAiVoiceSink.ts 缺少 `{token}`（C-AI-VOICE@1）")
+    chat_text = load_text(src_dir / "stores/aiChat.ts")
+    if "setInputForScope(" not in chat_text:
+        problems.append("stores/aiChat.ts 缺少 `setInputForScope()`（C-AI-VOICE@1）")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_composer}：currentSink 不复用 sessionSink；QueuedChunk 固定 sink+round；"
+        "start 非续接先 settlePreviousSession（含 resumeTimer）；drain 用 item.sink；"
+        "finalize 用 finalizeSinks 多轮队列；commit/enqueue 固定发起轮 sink；"
+        f"{rel_dock}/{rel_console} 录音中禁用输入与发送；useAiVoiceSink/aiChat 写回接口齐备"
+    )
+
+
 # 追加到既有 21 项之后（第五轮契约检查；D1 / D2 / D3 / D4）
 CHECKS = CHECKS + (
     (
@@ -2212,7 +2354,1046 @@ CHECKS = CHECKS + (
         "㉕ C-VOICEUI@5 §4 commitStoppedSession 首行幂等守卫",
         lambda: check_commit_guard("composables/useVoiceComposer.ts", SRC_DIR),
     ),
+    (
+        "㉖ C-VOICE-SINK@1 / C-AI-VOICEUI@1 r2：发起轮 sink 归属 + 录音中禁用输入",
+        lambda: check_voice_r2_sink(
+            "composables/useVoiceComposer.ts",
+            "components/ai/AgentDock.vue",
+            "views/AiConsole.vue",
+            SRC_DIR,
+        ),
+    ),
 )
+
+
+# --------------------------------------------------------------------------- #
+# r1（AIW-14 C-NAV-GROUPS@3 / C-BROWSE-TABS@3 / C-BROWSE-SPLIT@1 / C-FE-PEEK@2）
+# --------------------------------------------------------------------------- #
+
+
+def _media_blocks(text: str, query_pattern: str) -> list[str]:
+    """收集 `@media (<query>) { ... }` 的块体（CSS 无嵌套，按花括号配对截取）。"""
+    blocks: list[str] = []
+    for match in re.finditer(r"@media\s*\(\s*" + query_pattern + r"\s*\)\s*\{", text):
+        blocks.append(extract_balanced_braces(text, text.index("{", match.start())))
+    return blocks
+
+
+def _require(
+    problems: list[str],
+    text: str,
+    token: str,
+    rel_path: str,
+    detail: str,
+) -> int:
+    """断言 `token` 出现；缺失时记录带文件行号的失败并返回 0。"""
+    line = find_line_number(text, re.escape(token))
+    if line == 0:
+        problems.append(f"{rel_path} 缺少 `{token}`（{detail}）")
+    return line
+
+
+def check_nav_groups(rel_layout: str, rel_icon: str, src_dir: Path) -> str:
+    """㉗ `C-NAV-GROUPS@3`：分组导航 + 本地内联 SVG + 折叠保留可访问名称。"""
+    layout = strip_ts_comments(load_text(src_dir / rel_layout))
+    icon = load_text(src_dir / rel_icon)
+    problems: list[str] = []
+
+    icon_import = _require(
+        problems, layout, "import NavIcon", rel_layout, "导航必须复用本地内联 SVG 图标"
+    )
+    _require(problems, layout, "import SearchOverlay", rel_layout, "顶部搜索入口")
+    if "<svg" not in icon:
+        problems.append(f"{rel_icon} 不含内联 `<svg>`（不引入图标依赖）")
+    for icon_name in ("library", "search", "new-chat", "recent", "history", "theme"):
+        if f"'{icon_name}'" not in icon:
+            problems.append(f"{rel_icon} NavIconName 缺少 `{icon_name}`")
+
+    for group_label, group_title in (
+        ("主导航", "顶部搜索按钮 + New chat 发布 + 主导航"),
+        ("管理", "管理者我发布活动 / 发布者后台"),
+        ("最近条目", "最近活动分组"),
+        ("最近聊天", "最近聊天分组"),
+        ("底部导航", "移动端底部导航保留主要入口"),
+    ):
+        _require(problems, layout, f'aria-label="{group_label}"', rel_layout, group_title)
+
+    layout_line = _require(
+        problems, layout, "icon: 'library'", rel_layout, "Library 必须进入主导航分组"
+    )
+    for token, detail in (
+        (':aria-label="item.label"', "折叠时保留 aria-label"),
+        (':title="item.label"', "折叠时保留 title"),
+        (
+            ":aria-current=\"isActive(item.name) ? 'page' : undefined\"",
+            "当前页 aria-current=\"page\"",
+        ),
+        ("<NavIcon :name=\"item.icon\" />", "折叠时仍渲染 SVG"),
+        ('<span v-if="!collapsed" class="nav-link__label">', "展开时显示文字"),
+    ):
+        _require(problems, layout, token, rel_layout, detail)
+
+    _require(problems, layout, '<span>最近活动</span>', rel_layout, "最近活动分组")
+    _require(problems, layout, '>最近聊天<', rel_layout, "最近聊天分组标题")
+    for token, detail in (
+        ('aria-label="搜索"', "顶部搜索按钮"),
+        ('aria-label="发布事务"', "New chat 发布入口"),
+        ('aria-label="退出登录"', "底部退出入口"),
+    ):
+        _require(problems, layout, token, rel_layout, detail)
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_layout}:{icon_import} 复用 {rel_icon} 内联 SVG；"
+        f"library 导航项在第 {layout_line} 行；分组为 主导航/管理/最近条目/最近聊天/底部导航；"
+        "折叠态保留 SVG + aria-label + title + aria-current=\"page\""
+    )
+
+
+def check_library_route(rel_router: str, rel_layout: str, rel_page: str, src_dir: Path) -> str:
+    """㉘ `C-NAV-GROUPS@3`：Library 路由与入口存在，页面组件可解析。"""
+    router_text = strip_ts_comments(load_text(src_dir / rel_router))
+    layout = strip_ts_comments(load_text(src_dir / rel_layout))
+    page = load_text(src_dir / rel_page)
+    problems: list[str] = []
+
+    route_match = re.search(
+        r"name:\s*'library'\s*,\s*path:\s*'/library'\s*,\s*"
+        r"component:\s*\(\)\s*=>\s*import\('\.\./views/LibraryPage\.vue'\)",
+        router_text,
+    )
+    route_line = 0
+    if route_match is None:
+        problems.append(
+            f"{rel_router} 缺少 Library 路由（name: 'library' + path: '/library' + "
+            "component: () => import('../views/LibraryPage.vue')）"
+        )
+    else:
+        route_line = router_text.count("\n", 0, route_match.start()) + 1
+
+    entry_line = _require(
+        problems,
+        layout,
+        "name: 'library', path: '/library', label: 'Library'",
+        rel_layout,
+        "主导航 Library 入口",
+    )
+    if '<h1 class="app-page-title">Library</h1>' not in page:
+        problems.append(f"{rel_page} 缺少页面标题 `Library`（入口落地页）")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_router}:{route_line} Library 路由 name/path/component 齐备；"
+        f"{rel_layout}:{entry_line} 主导航入口指向 /library；{rel_page} 标题为 Library"
+    )
+
+
+def check_ai_history(
+    rel_console: str, rel_layout: str, rel_entry: str, src_dir: Path
+) -> str:
+    """㉙ `C-AI-HISTORY@3`：完整页历史抽屉 + `?conversation=` 恢复 + 侧栏最近 5 条真实记录。"""
+    console = strip_ts_comments(load_text(src_dir / rel_console))
+    layout = strip_ts_comments(load_text(src_dir / rel_layout))
+    entry = strip_ts_comments(load_text(src_dir / rel_entry))
+    problems: list[str] = []
+
+    block_match = re.search(
+        r'<div class="sidebar-group sidebar-history"[^>]*>(.*?)</div>(?=\s*<div class="sidebar-foot")',
+        layout,
+        re.S,
+    )
+    if block_match is None:
+        problems.append(f"{rel_layout} 缺少 `sidebar-history` 分组")
+    else:
+        block = block_match.group(1)
+        block_line = layout.count("\n", 0, block_match.start()) + 1
+        if "历史即将接入" in layout:
+            problems.append(
+                f"{render_location(rel_layout, block_line)} AI 历史仍是「历史即将接入」占位"
+            )
+        for token, detail in (
+            ("<HistoryEntry", "历史条目复用 HistoryEntry 摘要"),
+            ('v-for="item in recentAiHistory"', "渲染真实最近会话"),
+            (':conversation="item"', "传入真实会话摘要"),
+            ('@select="goConversation"', "点击条目跳转会话"),
+            ("查看全部", "提供查看全部入口"),
+            ("/ai?history=1", "查看全部打开完整页历史抽屉"),
+        ):
+            _require(problems, block, token, rel_layout, detail)
+        if '<p v-if="recentAiHistory.length === 0" class="recent-empty">' not in block:
+            problems.append(
+                f"{render_location(rel_layout, block_line)} AI 历史空态未按真实列表长度判断"
+            )
+
+    _require(problems, layout, "import HistoryEntry", rel_layout, "复用单条摘要组件")
+    _require(problems, layout, "const RECENT_LIMIT = 5", rel_layout, "侧栏最近历史上限 5 条")
+    _require(problems, layout, "listConversations(RECENT_LIMIT)", rel_layout, "读取本人全部近期会话")
+    _require(problems, layout, "recentAiHistory.value = []", rel_layout, "加载失败只清空该组")
+    _require(
+        problems,
+        layout,
+        "query: { conversation: String(id) }",
+        rel_layout,
+        "条目跳转带 ?conversation=<id>",
+    )
+
+    _require(problems, console, "import HistoryEntry", rel_console, "抽屉复用单条摘要")
+    for token, detail in (
+        ("historyItems", "历史抽屉使用真实列表"),
+        ("historyTotal", "展示会话总数"),
+        ("historyHasMore", "按总数判断是否加载更多"),
+        ("loadConversationHistory(true, false)", "打开抽屉重载本人全部历史"),
+        ("loadConversationHistory(false", "加载更多追加下一页"),
+        ("historyError", "失败可重试且不清空已有条目"),
+        ("historyOpen", "抽屉状态来自 store"),
+        ("newConversation()", "新对话清空当前视图"),
+        ("route.query.conversation", "选中 ID 与 query 同步"),
+        ("openConversation(requested)", "按 ?conversation= 恢复选中会话"),
+        ("router.replace", "选中后更新 query"),
+        ("selectConversation", "前进后退按 query 恢复"),
+    ):
+        _require(problems, console, token, rel_console, detail)
+    if re.search(r"post\s*\(\s*['\"]/api/agent/chat|ai_usage_ledger", console, re.I):
+        problems.append(f"{rel_console} 加载历史/切换会话不得调用问答接口或写用量")
+
+    for token, detail in (
+        ("conversation.title", "单条摘要显示标题"),
+        ("conversation.updated_at", "单条摘要显示更新时间"),
+        ("scope_type", "单条摘要显示作用对象"),
+        ("/ai?conversation=", "摘要链接带会话 ID"),
+        ("emit('select', conversation.id)", "点击回传会话 ID"),
+    ):
+        _require(problems, entry, token, rel_entry, detail)
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_layout} AI 历史渲染最近 5 条真实会话并可跳 /ai?conversation=；"
+        f"{rel_console} 抽屉分页/失败重试与 ?conversation= 恢复齐备；"
+        f"{rel_entry} 摘要含标题、时间与作用对象"
+    )
+
+
+def check_browse_tabs(rel_tabs: str, rel_hall: str, src_dir: Path) -> str:
+    """㉚ `C-BROWSE-TABS@3`：胶囊 tab 语义 + `?type=` 缺省与持久化键。"""
+    tabs = strip_ts_comments(load_text(src_dir / rel_tabs))
+    hall = strip_ts_comments(load_text(src_dir / rel_hall))
+    problems: list[str] = []
+
+    tablist_line = _require(problems, tabs, 'role="tablist"', rel_tabs, "容器语义")
+    _require(problems, tabs, 'role="tab"', rel_tabs, "每个胶囊按钮为 tab")
+    selected_line = _require(problems, tabs, ":aria-selected=", rel_tabs, "选中态可读")
+    _require(problems, tabs, ":tabindex=\"modelValue === tab.value ? 0 : -1\"", rel_tabs, "roving tabindex")
+    for key in ("ArrowRight", "ArrowLeft"):
+        _require(problems, tabs, key, rel_tabs, "左右方向键切换")
+    if not re.search(r":aria-selected=\"modelValue === tab\.value \? 'true' : 'false'\"", tabs):
+        problems.append(f"{rel_tabs} `aria-selected` 未由 `modelValue` 决定")
+
+    _require(problems, hall, "import HallTabs", rel_hall, "consumers 复用胶囊 tab")
+    _require(problems, hall, "<HallTabs", rel_hall, "模板渲染胶囊 tab")
+    type_line = _require(problems, hall, "route.query.type", rel_hall, "选择状态来自 query")
+    if "route.query.type === 'task' ? 'task' : 'activity'" not in hall:
+        problems.append(
+            f"{rel_hall} `activeType` 缺省值不是 `activity`（契约缺省 activity）"
+        )
+    for view_key in (
+        "cta_hall_view_activity",
+        "cta_hall_view_task",
+        "cta_my_tasks_view_activity",
+        "cta_my_tasks_view_task",
+    ):
+        _require(problems, hall, view_key, rel_hall, "两类集合各自持久化筛选")
+    if "delete query.selectedType" not in hall or "delete query.selectedId" not in hall:
+        problems.append(
+            f"{rel_hall} 切换集合时未清除不匹配的 `selectedType/selectedId`（契约切换副作用）"
+        )
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_tabs}:{tablist_line} role=tablist/tab + aria-selected（第 {selected_line} 行）；"
+        f"左右方向键切换；{rel_hall}:{type_line} 缺省 activity，"
+        "四个持久化键齐备，切换时清除不匹配选中态"
+    )
+
+
+def check_browse_split(
+    rel_hall: str, rel_panel: str, src_dir: Path
+) -> str:
+    """㉛ `C-BROWSE-SPLIT@1`：三列/分栏断点 + `selectedType/selectedId` 晚到丢弃。"""
+    hall = strip_ts_comments(load_text(src_dir / rel_hall))
+    panel = strip_ts_comments(load_text(src_dir / rel_panel))
+    problems: list[str] = []
+
+    wide_block = _media_blocks(hall, r"min-width:\s*1200px")
+    if not wide_block or "repeat(3" not in "".join(wide_block):
+        problems.append(
+            f"{rel_hall} 缺少 `@media (min-width: 1200px)` 三列短卡片（C-BROWSE-SPLIT@1）"
+        )
+    split_block = _media_blocks(hall, r"min-width:\s*768px")
+    split_css = "".join(split_block)
+    if ".hall-results--split" not in split_css:
+        problems.append(f"{rel_hall} 缺少 `@media (min-width: 768px)` 分栏布局")
+    if "minmax(0, 1fr) minmax(0, 2fr)" not in split_css:
+        problems.append(f"{rel_hall} 分栏不是「左单列 + 右侧占原两列」")
+    narrow_block = _media_blocks(hall, r"max-width:\s*767px")
+    if not narrow_block or "grid-template-columns: minmax(0, 1fr)" not in "".join(narrow_block):
+        problems.append(f"{rel_hall} 缺少 `<768px` 单列断点")
+
+    selected_type_line = _require(
+        problems, hall, "route.query.selectedType", rel_hall, "选中类型来自 query"
+    )
+    _require(problems, hall, "route.query.selectedId", rel_hall, "选中 ID 来自 query")
+    _require(problems, hall, "selectedType: type", rel_hall, "写回 selectedType")
+    _require(problems, hall, "selectedId: String(id)", rel_hall, "写回 selectedId")
+    _require(problems, hall, "window.innerWidth < 768", rel_hall, "移动端不启用分栏")
+    _require(problems, hall, "import BrowseDetailPanel", rel_hall, "分栏详情组件")
+
+    seq_line = _require(
+        problems, panel, "let requestSeq", rel_panel, "请求序号丢弃晚到响应"
+    )
+    if panel.count("if (current !== requestSeq || disposed) return") < 2:
+        problems.append(
+            f"{rel_panel} 未在活动/任务两条请求路径都按 `current !== requestSeq` 丢弃晚到响应"
+        )
+    _require(problems, panel, "(e: 'close'): void", rel_panel, "关闭恢复原列表")
+    _require(problems, panel, 'role="region"', rel_panel, "右侧详情语义")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_hall}:{selected_type_line} 三列≥1200px / 两列 768–1199px / 单列<768px；"
+        f"query 键 selectedType+selectedId 读写齐备；{rel_panel}:{seq_line} "
+        "按 requestSeq 丢弃 A 晚到响应，关闭事件回到原列表"
+    )
+
+
+def check_hover_peek(rel_peek: str, rel_hall: str, src_dir: Path) -> str:
+    """㉜ `C-FE-PEEK@2`：8px 间隙桥接 + 120ms 关闭缓冲 + 精确指针启用。"""
+    peek = strip_ts_comments(load_text(src_dir / rel_peek))
+    hall = strip_ts_comments(load_text(src_dir / rel_hall))
+    problems: list[str] = []
+
+    buffer_line = _require(
+        problems, peek, "const CLOSE_BUFFER_MS = 120", rel_peek, "120ms 关闭缓冲"
+    )
+    _require(problems, peek, "bottom: -8px", rel_peek, "8px 伪元素命中桥接")
+    _require(problems, peek, "height: 8px", rel_peek, "间隙高度与视觉间距一致")
+    _require(problems, peek, "top: calc(100% + 8px)", rel_peek, "面板紧邻 8px 间隙")
+    _require(
+        problems,
+        peek,
+        "window.matchMedia('(hover: hover) and (pointer: fine)')",
+        rel_peek,
+        "仅精确指针 + hover 启用",
+    )
+    _require(problems, peek, "event.key === 'Escape'", rel_peek, "Esc 关闭")
+    _require(problems, peek, "isJointHovered()", rel_peek, "移入面板不关闭")
+    _require(problems, peek, "hasInnerFocus()", rel_peek, "内部有焦点不关闭")
+    if "@media (hover: none), (pointer: coarse)" not in peek:
+        problems.append(f"{rel_peek} 缺少触摸设备禁用预览的媒体查询")
+    if ".hover-peek__panel" not in peek or "display: none" not in peek:
+        problems.append(f"{rel_peek} 触摸设备未隐藏预览面板（点击进入详情）")
+
+    hall_line = _require(problems, hall, "import HoverPeek", rel_hall, "consumers 使用悬浮预览")
+    _require(problems, hall, "<HoverPeek", rel_hall, "卡片包裹在联合区根内")
+    _require(problems, hall, "#preview", rel_hall, "预览面板插槽")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_peek}:{buffer_line} `::before` bottom:-8px/height:8px 桥接间隙；"
+        "面板 top: calc(100% + 8px)；离开联合区后 120ms 关闭，移回或内部焦点取消；"
+        f"Esc 关闭；触摸禁用；{rel_hall}:{hall_line} 使用 HoverPeek + #preview"
+    )
+
+
+# 追加到既有 26 项之后（AIW-14 r1 三条前端契约）
+CHECKS = CHECKS + (
+    (
+        "㉗ C-NAV-GROUPS@3 分组导航 + 本地内联 SVG + 折叠保留可访问名称",
+        lambda: check_nav_groups(
+            "layouts/AppLayout.vue", "components/nav/NavIcon.vue", SRC_DIR
+        ),
+    ),
+    (
+        "㉘ C-NAV-GROUPS@3 Library 路由与主导航入口存在",
+        lambda: check_library_route(
+            "router/index.ts",
+            "layouts/AppLayout.vue",
+            "views/LibraryPage.vue",
+            SRC_DIR,
+        ),
+    ),
+    (
+        "㉙ C-AI-HISTORY@3 历史抽屉 + ?conversation= 恢复 + 侧栏最近 5 条",
+        lambda: check_ai_history(
+            "views/AiConsole.vue",
+            "layouts/AppLayout.vue",
+            "components/nav/HistoryEntry.vue",
+            SRC_DIR,
+        ),
+    ),
+    (
+        "㉚ C-BROWSE-TABS@3 胶囊 tab 语义 + ?type= 缺省与持久化键",
+        lambda: check_browse_tabs(
+            "components/browse/HallTabs.vue", "views/TaskHall.vue", SRC_DIR
+        ),
+    ),
+    (
+        "㉛ C-BROWSE-SPLIT@1 三列/分栏断点 + selectedType/selectedId 晚到丢弃",
+        lambda: check_browse_split(
+            "views/TaskHall.vue", "components/browse/BrowseDetailPanel.vue", SRC_DIR
+        ),
+    ),
+    (
+        "㉜ C-FE-PEEK@2 HoverPeek 8px 间隙桥接 + 120ms 关闭缓冲",
+        lambda: check_hover_peek(
+            "components/common/HoverPeek.vue", "views/TaskHall.vue", SRC_DIR
+        ),
+    ),
+)
+
+
+# --------------------------------------------------------------------------- #
+# r4（AIW-14 §10 C-USER-AVATAR@1 / C-BROWSE-CARD@2 / C-ACTIVITY-TABLE@1 /
+#     C-ACTIVITY-SWITCH@1 / C-ADMIN-TABLE-REUSE@1）
+# --------------------------------------------------------------------------- #
+
+#: 契约禁止在卡片/头像内新增裸十六进制色值（颜色只能来自主题变量组合）
+_BARE_HEX_COLOR: re.Pattern[str] = re.compile(r"#[0-9A-Fa-f]{3,8}\b")
+
+
+def check_user_avatar(
+    rel_avatar: str,
+    rel_activity_card: str,
+    rel_task_card: str,
+    rel_table: str,
+    src_dir: Path,
+) -> str:
+    """㉝ `C-USER-AVATAR@1`：按 `userId` 稳定的四组色调 + 中性待分配形象。"""
+    avatar = strip_ts_comments(load_text(src_dir / rel_avatar))
+    cards = (
+        (rel_activity_card, strip_ts_comments(load_text(src_dir / rel_activity_card))),
+        (rel_task_card, strip_ts_comments(load_text(src_dir / rel_task_card))),
+    )
+    table = strip_ts_comments(load_text(src_dir / rel_table))
+    problems: list[str] = []
+
+    props_line = _require(
+        problems, avatar, "userId: number | null", rel_avatar, "props.userId 允许待分配"
+    )
+    for token, detail in (
+        ("name: string", "props.name"),
+        ("size?: UserAvatarSize", "props.size 可选 xs|md"),
+        ("{ size: 'xs' }", "默认 size 为 xs"),
+        ("Math.abs(props.userId ?? 0) % 4", "按 userId 稳定取模取色"),
+        ("+ 1}`", "tone 落到 1..4"),
+        ("avatar--vacant", "userId === null 使用中性待分配形象"),
+        (':title="displayName"', "title 为姓名"),
+        (':aria-label="displayName"', "aria-label 为姓名"),
+        ('aria-hidden="true"', "装饰字母不重复朗读"),
+        ("'待分配'", "空名回退「待分配」"),
+        ("\\u4e00-\\u9fa5", "中文取首字，其余取首字母"),
+    ):
+        _require(problems, avatar, token, rel_avatar, detail)
+
+    for tone in ("avatar--tone-1", "avatar--tone-2", "avatar--tone-3", "avatar--tone-4"):
+        _require(problems, avatar, f".{tone}", rel_avatar, "四组柔和色")
+    for pixel in ("width: 18px", "width: 32px"):
+        _require(problems, avatar, pixel, rel_avatar, "xs 18px / md 32px")
+    if _BARE_HEX_COLOR.search(avatar):
+        problems.append(f"{rel_avatar} 出现裸十六进制色值（颜色须组合主题变量）")
+    if re.search(r"https?://|<img\b", avatar):
+        problems.append(f"{rel_avatar} 请求了外部头像（契约要求本地生成）")
+
+    for rel_card, card in cards:
+        _require(problems, card, "import UserAvatar", rel_card, "卡片主行复用统一头像")
+        _require(problems, card, "<UserAvatar", rel_card, "渲染头像")
+        _require(problems, card, 'size="md"', rel_card, "卡片主行使用 md 32px")
+    _require(problems, table, "import UserAvatar", rel_table, "表格成员列复用统一头像")
+    _require(problems, table, 'size="xs"', rel_table, "表格使用 xs 18px")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_avatar}:{props_line} props userId/name/size 与四组 tone + vacant 齐备；"
+        f"两张卡片 size=\"md\"，{rel_table} size=\"xs\""
+    )
+
+
+def check_browse_card(rel_activity_card: str, rel_task_card: str, src_dir: Path) -> str:
+    """㉞ `C-BROWSE-CARD@2`：整卡柔和色底 + 头像主行 + `aria-pressed` 交互面。"""
+    problems: list[str] = []
+    texts: dict[str, str] = {}
+    tone_lines: dict[str, int] = {}
+    for rel_card, id_field in (
+        (rel_activity_card, "activity"),
+        (rel_task_card, "task"),
+    ):
+        card = strip_ts_comments(load_text(src_dir / rel_card))
+        texts[rel_card] = card
+
+        tone_match = re.search(
+            r"`browse-card--tone-\$\{props\." + id_field + r"\.id\s*%\s*4\}`", card
+        )
+        if tone_match is None:
+            problems.append(
+                f"{rel_card} 缺少 `browse-card--tone-${{{id_field}.id % 4}}`（整卡柔和色底）"
+            )
+        else:
+            tone_lines[rel_card] = card.count("\n", 0, tone_match.start()) + 1
+
+        for token, detail in (
+            ('role="button"', "整卡即主操作"),
+            ('tabindex="0"', "键盘可达"),
+            (':aria-pressed="selected"', "选中态可读"),
+            ('@keydown.enter.prevent="handleSelect"', "Enter 选中"),
+            ('@keydown.space.prevent="handleSelect"', "Space 选中"),
+            ("import UserAvatar", "头像主行"),
+            ('size="md"', "主行头像 32px"),
+            ("padding: var(--app-space-4)", "内边距 16px"),
+            ("border-radius: var(--app-radius-sm)", "圆角 8px"),
+            ("background: var(--browse-tone-bg", "底色来自主题变量组合"),
+            ("font-size: var(--app-font-card-title, 16px)", "标题 16px 令牌"),
+            ("font-weight: 400", "标题常规字重"),
+            ("-webkit-line-clamp: 2", "标题最多两行"),
+        ):
+            _require(problems, card, token, rel_card, detail)
+
+        for tone in (
+            "browse-card--tone-0",
+            "browse-card--tone-1",
+            "browse-card--tone-2",
+            "browse-card--tone-3",
+        ):
+            _require(problems, card, f".{tone}", rel_card, "四组主题色组合")
+        _require(
+            problems,
+            card,
+            "border-color: var(--el-color-primary)",
+            rel_card,
+            "选中只叠加主色描边",
+        )
+        if _BARE_HEX_COLOR.search(card):
+            problems.append(f"{rel_card} 出现裸十六进制色值（不新增颜色字面量）")
+        if "transform:" in card:
+            problems.append(f"{rel_card} hover/focus 含位移变换（契约禁止位移动画）")
+
+    activity_card = texts[rel_activity_card]
+    for token, detail in (
+        ("时间待定", "开始时间空值回退"),
+        ("地点待定", "地点空值回退"),
+        ("activity.owner_name", "负责人"),
+        ("activity.progress.completed_tasks", "已完成任务数"),
+        ("activity.progress.total_tasks", "任务总数"),
+    ):
+        _require(problems, activity_card, token, rel_activity_card, detail)
+
+    task_card = texts[rel_task_card]
+    for token, detail in (
+        ("props.task.members.slice(0, 3)", "最多 3 枚成员头像"),
+        ("leadMembers", "成员头像组"),
+        ('avatar-extra', "溢出 +n"),
+        (':user-id="null"', "无成员时显示待分配形象"),
+        ("activityTitle", "所属活动"),
+        ("statusText", "状态"),
+        ("quotaText", "名额/逐人验收"),
+        ("formatDeadline", "截止时间"),
+    ):
+        _require(problems, task_card, token, rel_task_card, detail)
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_activity_card}:{tone_lines.get(rel_activity_card, 0)} / "
+        f"{rel_task_card}:{tone_lines.get(rel_task_card, 0)} 整卡主题柔和色底 + md 头像主行，"
+        "四组 tone-0..3 齐备，选中仅换主色描边；角色/键盘/aria-pressed 保留"
+    )
+
+
+def check_activity_table(rel_table: str, src_dir: Path) -> str:
+    """㉟ `C-ACTIVITY-TABLE@1`：列顺序 + `aria-expanded`/`aria-controls` + 只读投影。"""
+    table = strip_ts_comments(load_text(src_dir / rel_table))
+    problems: list[str] = []
+
+    props_line = _require(problems, table, "tasks: ActivityTaskNode[]", rel_table, "props.tasks")
+    for token, detail in (
+        ("expanded: number[]", "props.expanded 由父视图持有"),
+        ("showActivity?: boolean", "可选所属活动列"),
+        ("activityTitles?: Record<number, string>", "活动标题映射"),
+        ("showActivity: false", "showActivity 默认 false"),
+        ("(e: 'toggle', id: number): void", "emit toggle"),
+        ('<div v-else class="task-table__scroll">', "横向滚动容器"),
+        ('<table class="task-table">', "表格根"),
+        ('<slot name="actions" :task="task" />', "actions 插槽仅后台传入"),
+        ("overflow-x: auto", "容器横向滚动"),
+        ('aria-expanded="', "展开态可读"),
+        ("isExpanded(task.id) ? 'true' : 'false'", "aria-expanded 由展开状态决定"),
+        (':aria-controls="`task-table-subtasks-${task.id}`"', "aria-controls 指向本人子行容器"),
+        (':id="`task-table-subtasks-${task.id}`"', "子行容器 id 稳定"),
+        ('class="task-table__toggle"', "父任务首列展开按钮"),
+        ('v-show="isExpanded(task.id)"', "子任务跟随父行展开"),
+        ('v-for="child in task.children"', "子任务只随父任务渲染一次"),
+        ("padding-left: var(--app-space-5)", "子任务缩进"),
+        ('<StatusTag :status="task.status" size="small" />', "状态复用 StatusTag"),
+        ('size="xs"', "成员列头像 18px"),
+        ("VISIBLE_ASSIGNEES = 2", "成员列最多 2 枚头像"),
+        ("'—'", "开始/截止空值显示 —"),
+        ("/${task.total_children} 子任务", "完成情况显示 completed/total"),
+        ("task.completed_children", "完成数来自只读投影"),
+        ("`#${task.activity_id}`", "缺活动标题回退 #id"),
+        ("'独立任务'", "activity_id 为空显示独立任务"),
+        ("statusText", "无子任务时显示状态文案"),
+    ):
+        _require(problems, table, token, rel_table, detail)
+
+    headers = [name.strip() for name in re.findall(r"<th[^>]*>([^<]+)</th>", table)]
+    expected_columns = (
+        "任务",
+        "所属活动",
+        "状态",
+        "执行成员",
+        "开始时间",
+        "截止时间",
+        "完成情况",
+        "操作",
+    )
+    if tuple(headers) != expected_columns:
+        problems.append(
+            f"{rel_table} 列顺序不符：期望 {'/'.join(expected_columns)}，"
+            f"实际 {'/'.join(headers) or '（未解析到列头）'}"
+        )
+    for conditional in ("所属活动", "操作"):
+        if f'<th v-if="showActivity" scope="col">{conditional}</th>' not in table and not (
+            conditional == "操作" and '<th v-if="slots.actions" scope="col">操作</th>' in table
+        ):
+            problems.append(f"{rel_table} 可选列 `{conditional}` 缺 v-if 条件")
+
+    detail_link = re.search(
+        r"<router-link[^>]*:to=\"\{ name: 'detail', params: \{ id: task\.id \} \}\"", table
+    )
+    link_line = 0
+    if detail_link is None:
+        problems.append(
+            rel_table
+            + " 任务标题未用 `<router-link :to=\"{ name: 'detail', ... }\">`"
+            "（契约要求站内跳转、不整页刷新）"
+        )
+    else:
+        link_line = table.count("\n", 0, detail_link.start()) + 1
+    _require(problems, table, "task-table__link", rel_table, "任务链接样式类")
+    _require(problems, table, "slots.meta", rel_table, "`meta` 作用域插槽缺省不渲染")
+    _require(
+        problems,
+        table,
+        '<slot name="meta" :task="task" />',
+        rel_table,
+        "`#meta` 作用域插槽透传 `{ task }`",
+    )
+    _require(problems, table, "task-table__meta", rel_table, "meta 摘要类 `.task-table__meta`")
+    _require(problems, table, "task-table__badge", rel_table, "子任务行角标")
+    if re.search(r"task-table__badge[^>]*>\s*子任务", table) is None:
+        problems.append(f"{rel_table} 子任务行 `.task-table__badge` 未标注「子任务」")
+    if re.search(r"fetch\s*\(|/api/|axios\.", table):
+        problems.append(f"{rel_table} 为只读组件，不得发起请求或新增写入路径")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_table}:{props_line} props tasks/expanded/showActivity/activityTitles + "
+        "emit toggle + actions 插槽；列顺序精确为 任务/所属活动/状态/执行成员/开始时间/"
+        f"截止时间/完成情况/操作；标题 router-link 第 {link_line} 行 + `#meta` 摘要 + "
+        "子任务 badge；aria-expanded + aria-controls 指向 task-table-subtasks-<id>"
+    )
+
+
+def check_activity_switch(rel_detail: str, src_dir: Path) -> str:
+    """㊱ `C-ACTIVITY-SWITCH@1`：标题区切换器走 `router.replace` 并保留 from/q。"""
+    detail = strip_ts_comments(load_text(src_dir / rel_detail))
+    problems: list[str] = []
+
+    replace_line = _require(
+        problems,
+        detail,
+        "void router.replace({ name: 'activity', params: { id: String(nextId) }, query })",
+        rel_detail,
+        "切换用 router.replace 且保留 query",
+    )
+    for token, detail_text in (
+        ("scope: 'all'", "数据来源为可见活动列表"),
+        ("items.slice(0, 20)", "选项最多 20 条"),
+        ("switchOptions", "当前活动必要时置顶补入"),
+        ("route.query.from !== undefined", "保留 from"),
+        ("route.query.q !== undefined", "保留 q"),
+        (">切换活动<", "标题区切换器标签"),
+        ("<select", "切换器"),
+        ('@change="switchActivity"', "切换事件"),
+        ('expanded.value = []', "切换后清空展开"),
+        ("clearResourceSearch()", "切换后清空资料检索"),
+        ("if (current !== requestSeq) return", "丢弃晚到旧响应"),
+        ("活动列表加载失败", "选项失败只提示不阻塞主体"),
+        ("import ActivityTaskTable", "任务树替换为共用表格"),
+        (
+            '<ActivityTaskTable :tasks="activity.tasks" :expanded="expanded" '
+            '@toggle="toggleTask" />',
+            "表格接入",
+        ),
+        ("allExpanded", "保留展开全部/收起全部"),
+        ("TaskGraph", "保留图谱"),
+    ):
+        _require(problems, detail, token, rel_detail, detail_text)
+
+    watch_match = re.search(
+        r"watch\(\s*\(\) => route\.params\.id,\s*\(\) => \{(.*?)\}\s*\)", detail, re.S
+    )
+    if watch_match is None or "expanded.value = []" not in watch_match.group(1):
+        problems.append(f"{rel_detail} 未在活动 id 变化时清空 expanded 并重新加载")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_detail}:{replace_line} 切换器走 `router.replace` 保留 from/q，"
+        "选项 ≤20 且包含当前活动；切换清空 expanded/资料检索并按序号丢弃旧响应；"
+        "任务区由 ActivityTaskTable 承担"
+    )
+
+
+def check_admin_table_reuse(rel_admin: str, src_dir: Path) -> str:
+    """㊲ `C-ADMIN-TABLE-REUSE@1`：桌面复用共用表格 + 只过滤已加载任务的活动筛选。"""
+    admin = strip_ts_comments(load_text(src_dir / rel_admin))
+    problems: list[str] = []
+
+    import_line = _require(
+        problems, admin, "import ActivityTaskTable", rel_admin, "桌面任务区复用共用表格"
+    )
+    for token, detail in (
+        ("app-desktop-table app-desktop-only", "表格仅在桌面端"),
+        (":tasks=\"tableTasks\"", "传入已加载任务"),
+        (":expanded=\"expanded\"", "展开状态由页面持有"),
+        (':show-activity="true"', "显示所属活动列"),
+        (':activity-titles="activityTitles"', "活动标题映射"),
+        ('@toggle="toggleExpanded"', "展开事件"),
+        ('<template #actions="{ task }">', "操作列插槽"),
+        ("canAssign(asRow(task))", "保留指派判定"),
+        ("canVerify(asRow(task))", "保留验收判定"),
+        ("openAssign(asRow(task))", "保留指派 handler"),
+        ("openVerify(asRow(task))", "保留验收 handler"),
+        ("activityTitles = computed<Record<number, string>>", "标题映射由已加载活动构建"),
+        ("activities.value", "标题来源为活动列表"),
+        ("app-mobile-list app-mobile-only", "移动端保留原卡片列表"),
+        ('aria-label="活动筛选"', "筛选器可读名称"),
+        ('label="全部活动" value="all"', "全部活动选项"),
+        ('label="独立任务" value="standalone"', "独立任务选项"),
+        (
+            "const activityFilter = ref<'all' | 'standalone' | number>('all')",
+            "筛选状态与默认值",
+        ),
+    ):
+        _require(problems, admin, token, rel_admin, detail)
+
+    filter_start = admin.find("const filteredTasks = computed")
+    filter_block = ""
+    if filter_start >= 0:
+        brace = admin.find("{", filter_start)
+        if brace >= 0:
+            filter_block = extract_balanced_braces(admin, brace)
+    if not filter_block:
+        problems.append(f"{rel_admin} 缺少 `filteredTasks` 计算属性（活动筛选）")
+    else:
+        filter_line = admin.count("\n", 0, filter_start) + 1
+        for token, detail in (
+            ("filter === 'all'", "全部活动不过滤"),
+            ("filter === 'standalone'", "独立任务只匹配 activity_id === null"),
+            ("task.activity_id === filter", "具体活动按 activity_id 匹配"),
+        ):
+            if token not in filter_block:
+                problems.append(
+                    f"{render_location(rel_admin, filter_line)} 活动筛选缺少 `{token}`（{detail}）"
+                )
+        if re.search(r"await|listTasks|fetch\s*\(|/api/", filter_block):
+            problems.append(f"{rel_admin} 活动筛选不得新增请求（只过滤已加载 tasks）")
+
+    # 契约补充：桌面表格须保留原 el-table 只读信息（parent_id 组装 + meta 摘要）
+    table_match = re.search(
+        r"^const tableTasks\b.*?^(?=const |function |export )", admin, re.S | re.M
+    )
+    if table_match is None:
+        problems.append(f"{rel_admin} 缺少 `tableTasks` 计算属性（后台表格投影）")
+    else:
+        table_block = table_match.group(0)
+        table_line = admin.count("\n", 0, table_match.start()) + 1
+        if "parent_id" not in table_block:
+            problems.append(
+                f"{render_location(rel_admin, table_line)} "
+                "`tableTasks` 未按 `parent_id` 识别并组装子任务"
+            )
+        if re.search(r"children\s*,|children\s*:|children\.push|\.children\s*=", table_block) is None:
+            problems.append(
+                f"{render_location(rel_admin, table_line)} "
+                "`tableTasks` 未把子任务挂到父任务 `children`"
+            )
+
+    meta_marker = '#meta="{ task }"'
+    if meta_marker not in admin:
+        problems.append(f"{rel_admin} 缺少 `{meta_marker}` 摘要插槽（后台只读信息）")
+    else:
+        meta_line = admin.count("\n", 0, admin.find(meta_marker)) + 1
+        if "metaSummary(task)" not in admin:
+            problems.append(
+                f"{render_location(rel_admin, meta_line)} "
+                "`#meta` 槽未调用 `metaSummary(task)` 输出摘要"
+            )
+        try:
+            summary_body, summary_line = function_body(admin, "metaSummary")
+        except ContractError:
+            problems.append(f"{rel_admin} 缺少 `metaSummary()` 摘要函数")
+            summary_body, summary_line = "", meta_line
+        for field in (
+            "claim_type",
+            "quota",
+            "applied_count",
+            "approved_count",
+            "credit_reward",
+            "reminder_rule",
+        ):
+            if field not in summary_body:
+                problems.append(
+                    f"{render_location(rel_admin, summary_line)} "
+                    f"`metaSummary()` 摘要缺少 `{field}`"
+                )
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_admin}:{import_line} 桌面任务区复用 ActivityTaskTable（showActivity + "
+        "activityTitles + actions 插槽保留指派/验收）；活动筛选只过滤已加载 tasks；"
+        "tableTasks 按 parent_id 组装 children + `#meta` 摘要；移动端保留原卡片列表"
+    )
+
+
+# 追加到既有 32 项之后（AIW-14 r4 五条前端契约）
+CHECKS = CHECKS + (
+    (
+        "㉝ C-USER-AVATAR@1 统一头像 props/四组 tone/待分配形象",
+        lambda: check_user_avatar(
+            "components/common/UserAvatar.vue",
+            "components/browse/ActivityBrowseCard.vue",
+            "components/browse/TaskBrowseCard.vue",
+            "components/task/ActivityTaskTable.vue",
+            SRC_DIR,
+        ),
+    ),
+    (
+        "㉞ C-BROWSE-CARD@2 头像彩色短卡 + aria-pressed 交互面",
+        lambda: check_browse_card(
+            "components/browse/ActivityBrowseCard.vue",
+            "components/browse/TaskBrowseCard.vue",
+            SRC_DIR,
+        ),
+    ),
+    (
+        "㉟ C-ACTIVITY-TABLE@1 共用任务表格列/展开/只读投影",
+        lambda: check_activity_table("components/task/ActivityTaskTable.vue", SRC_DIR),
+    ),
+    (
+        "㊱ C-ACTIVITY-SWITCH@1 活动详情切换 router.replace + 状态清理",
+        lambda: check_activity_switch("views/ActivityDetail.vue", SRC_DIR),
+    ),
+    (
+        "㊲ C-ADMIN-TABLE-REUSE@1 后台复用表格 + 活动筛选",
+        lambda: check_admin_table_reuse("views/AdminConsole.vue", SRC_DIR),
+    ),
+    (
+        "㊳ C-PRECHECK-EVIDENCE@2 后台验收过期预审标记与禁用",
+        lambda: check_admin_verify_stale("views/AdminConsole.vue", SRC_DIR),
+    ),
+    (
+        "㊴ C-SHELL-ACTIONS@1 图标折叠/最近分组/New chat 发布/归档导航",
+        lambda: check_shell_actions("layouts/AppLayout.vue", SRC_DIR),
+    ),
+    (
+        "㊵ C-GLOBAL-COMPOSER@1 三态悬浮输入与任意页提问",
+        lambda: check_global_composer(
+            "components/shell/GlobalComposer.vue", "layouts/AppLayout.vue", SRC_DIR
+        ),
+    ),
+    (
+        "㊶ C-AI-THREE-PANE@1 左问答 + 右通知/归档，移除消息入口",
+        lambda: check_ai_three_pane("views/AiConsole.vue", "router/index.ts", SRC_DIR),
+    ),
+    (
+        "㊷ C-SUBMISSION-FILE@1 成果文件上传接线与下载入口",
+        lambda: check_submission_file_ui("api/tasks.ts", "views/TaskDetail.vue", SRC_DIR),
+    ),
+    (
+        "㊸ C-AI-THREE-PANE@1 个人页只保留未读数，通知正文仅在 AI 页",
+        lambda: check_profile_notice_entry("views/Profile.vue", SRC_DIR),
+    ),
+)
+
+
+def check_admin_verify_stale(rel_admin: str, src_dir: Path) -> str:
+    """㊳ `C-PRECHECK-EVIDENCE@2`：后台验收对话框展示过期预审并禁用「确认通过」。"""
+    admin = strip_ts_comments(load_text(src_dir / rel_admin))
+    problems: list[str] = []
+    for token, detail in (
+        ("import { assignTask, getTaskChangeImpact, getTaskSubmissions", "读取成果列表判断预审新鲜度"),
+        ("const verifyStaleUsers", "按 user_id 记录过期预审"),
+        ("const verifyStaleCurrent", "当前选中成员是否过期"),
+        ("void loadVerifyStale(task)", "打开验收对话框触发只读加载"),
+        ("item.latest && item.precheck?.stale", "只取最新成果的过期预审"),
+        ("verifyStaleUsers.includes(member.user_id)", "成员项展示过期标记"),
+        ("预审已过期", "过期标记/预警文案"),
+        ("请先重新预审", "过期预警文案"),
+        ("verifyChoice === 'pass' && verifyStaleCurrent", "通过时禁用确认按钮"),
+        ("verifyChoice === 'pass' && (verifyStaleLoading || verifyStaleCurrent)", "加载中也不允许确认通过，退回不受影响"),
+        ("退回（回到进行中）", "退回选项保留"),
+        ("退回不受影响", "退回不受过期预审影响"),
+        ("verifyStaleSeq", "迟到响应按序号丢弃"),
+    ):
+        _require(problems, admin, token, rel_admin, detail)
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_admin} 后台验收按成果最新预审 stale 展示并禁用确认通过（含加载中）；"
+        "退回不受影响，迟到响应按序号丢弃，后端 4090 兜底不变"
+    )
+
+
+
+def check_shell_actions(rel_layout: str, src_dir: Path) -> str:
+    """㊴ `C-SHELL-ACTIONS@1`：图标折叠、最近分组、New chat 发布、归档通知导航。"""
+    text = strip_ts_comments(load_text(src_dir / rel_layout))
+    problems: list[str] = []
+    for token, detail in (
+        ("sidebar-head__actions", "搜索/折叠置于侧栏右上"),
+        ("panel-left", "展开态折叠图标"),
+        ("panel-right", "折叠态展开图标"),
+        ("new-chat-button", "发布入口为 New chat 样式"),
+        ("最近聊天", "最近分组标题改为最近聊天"),
+        ("归档通知", "左侧导航归档入口"),
+        ("icon: 'archive'", "归档图标"),
+    ):
+        _require(problems, text, token, rel_layout, detail)
+    for forbidden, detail in (
+        ("sidebar-quick", "旧的搜索/新对话双列"),
+        ("最近任务", "最近任务分组"),
+        (">最近<", "最近总标题"),
+        ("label: '消息'", "消息导航项"),
+        (">展开<", "折叠按钮文字"),
+        (">收起<", "折叠按钮文字"),
+    ):
+        if forbidden in text:
+            problems.append(f"{rel_layout} 仍包含已移除的{detail}：{forbidden}")
+    if problems:
+        raise ContractError("；".join(problems))
+    return f"{rel_layout} 侧栏为图标折叠 + 右上搜索/折叠 + New chat 发布 + 最近活动/最近聊天 + 归档通知"
+
+
+def check_global_composer(rel_comp: str, rel_layout: str, src_dir: Path) -> str:
+    """㊵ `C-GLOBAL-COMPOSER@1`：三态悬浮输入 + 任意页发送 + 语音复用。"""
+    text = strip_ts_comments(load_text(src_dir / rel_comp))
+    layout = strip_ts_comments(load_text(src_dir / rel_layout))
+    problems: list[str] = []
+    for token, detail in (
+        ("const expanded = ref(false)", "小条/中框两态"),
+        ("is-expanded", "展开态样式"),
+        ("AgentVoiceButton", "语音入口复用"),
+        ("aiChat.send()", "发送复用既有 AI 通道"),
+        ("route.name !== 'ai'", "非 AI 页显示"),
+        ("position: fixed", "底部悬浮"),
+        ("max-width: 768px", "窄屏适配"),
+        ("打开 AI 页面", "第三态入口"),
+    ):
+        _require(problems, text, token, rel_comp, detail)
+    _require(problems, layout, "<GlobalComposer />", rel_layout, "壳层挂载")
+    if problems:
+        raise ContractError("；".join(problems))
+    return f"{rel_comp} 三态悬浮输入（小条/中框/AI 页）+ 语音与发送复用 aiChat；{rel_layout} 挂载"
+
+
+def check_ai_three_pane(rel_ai: str, rel_router: str, src_dir: Path) -> str:
+    """㊶ `C-AI-THREE-PANE@1`：左问答 + 右通知/归档，移除独立消息入口。"""
+    text = strip_ts_comments(load_text(src_dir / rel_ai))
+    router = strip_ts_comments(load_text(src_dir / rel_router))
+    problems: list[str] = []
+    for token, detail in (
+        ("ai-three-pane", "三栏容器"),
+        ("grid-template-columns: minmax(0, 1fr) 320px", "左问答右通知宽度"),
+        ("ai-notice-pane", "右栏通知面板"),
+        ("switchNoticePanel", "待处理/归档切换"),
+        ("archiveNotice", "通知归档动作"),
+        ("archivedItems", "归档箱数据"),
+        ("noticePanel === 'archive'", "归档视图分支"),
+        ("<aside", "右栏语义"),
+        ("has-collapsed-notice", "右栏折叠态"),
+        ("noticeCollapsed", "右栏折叠状态"),
+        ("cta_ai_notice_panel", "折叠状态持久化"),
+        ("markAllNoticesRead", "全部已读"),
+        ("全部已读", "全部已读按钮"),
+    ):
+        _require(problems, text, token, rel_ai, detail)
+    for forbidden in ("openMessages", "查看全部消息"):
+        if forbidden in text:
+            problems.append(f"{rel_ai} 仍保留已移除的消息入口：{forbidden}")
+    _require(problems, router, "redirect: { name: 'ai', query: { panel: 'inbox' } }", rel_router, "旧 /messages 兼容重定向")
+    if problems:
+        raise ContractError("；".join(problems))
+    return f"{rel_ai} 左问答 + 右通知/归档，归档动作与面板切换齐全；{rel_router} 旧消息路由重定向"
+
+
+def check_submission_file_ui(rel_api: str, rel_view: str, src_dir: Path) -> str:
+    """㊷ `C-SUBMISSION-FILE@1`（前端）：上传接线、格式/大小提示、下载入口。"""
+    api = strip_ts_comments(load_text(src_dir / rel_api))
+    view = strip_ts_comments(load_text(src_dir / rel_view))
+    problems: list[str] = []
+    for token, detail in (
+        ("export async function uploadSubmission", "上传 API"),
+        ("file_base64", "base64 上传载荷"),
+        ("request<TaskItem>('POST', `/api/tasks/${id}/submissions/upload`", "上传端点"),
+    ):
+        _require(problems, api, token, rel_api, detail)
+    for token, detail in (
+        ("submitFile", "文件状态"),
+        ("fileInputRef", "文件选择"),
+        ("FILE_MAX_BYTES", "大小上限"),
+        ("FILE_EXTS", "格式白名单"),
+        ("uploadSubmission(task.value.id, submitFile.value", "选文件时走上传"),
+        ("下载附件", "成果文件下载入口"),
+    ):
+        _require(problems, view, token, rel_view, detail)
+    if problems:
+        raise ContractError("；".join(problems))
+    return f"{rel_api} 提供 base64 上传；{rel_view} 支持选择/校验/上传/下载"
+
+
+
+
+
+def check_profile_notice_entry(rel_view: str, src_dir: Path) -> str:
+    """㊸ `C-AI-THREE-PANE@1`：个人页只保留未读数入口，通知正文只在 AI 页。"""
+    text = strip_ts_comments(load_text(src_dir / rel_view))
+    problems: list[str] = []
+    for forbidden, detail in (
+        ('id="notifications"', "通知中心区块"),
+        ("通知中心", "通知中心标题"),
+        ("markAllRead", "个人页全部已读"),
+    ):
+        if forbidden in text:
+            problems.append(f"{rel_view} 仍保留已移除的{detail}：{forbidden}")
+    for token, detail in (
+        ("const unreadCount", "保留未读数"),
+        ("openAiNotices", "点击去 AI 页通知"),
+        ("query: { panel: 'inbox' }", "只保留 AI 页通知"),
+    ):
+        _require(problems, text, token, rel_view, detail)
+    if problems:
+        raise ContractError("；".join(problems))
+    return f"{rel_view} 通知中心已移除，未读数入口跳到 AI 页 `panel=inbox`"
+
 
 
 if __name__ == "__main__":

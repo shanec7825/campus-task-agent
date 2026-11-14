@@ -7,7 +7,7 @@
  * 2. 当前任务分组：我发布的 / 我认领的；
  * 3. 积分流水、签到记录：桌面表格 + 手机卡片双视图（`C-MOBILELIST@1`）；
  * 4. 我的报名：锚点 `id="my-applications"`；
- * 5. 通知中心：锚点 `id="notifications"`（顶栏红点跳 `/profile#notifications`）。
+ * 5. 通知只保留未读数入口：点击跳 AI 页右栏（`C-AI-THREE-PANE@1`），本页不渲染通知正文。
  *
  * 所有列表请求都持有 loading / error 两个 ref，并在 `finally` 中复位。
  */
@@ -107,23 +107,8 @@ function myMemberMeta(task: TaskItem) {
   return memberStatusMeta(task.my_member_status)
 }
 
-const noticeItems = computed<NotificationItem[]>(() => notificationsStore.items)
+/** 只保留未读数：通知正文只在 AI 页右栏展示 */
 const unreadCount = computed<number>(() => notificationsStore.unread)
-const unreadIds = computed<number[]>(() =>
-  noticeItems.value.filter((item) => item.is_read === 0 && item.stale === 0).map((item) => item.id)
-)
-
-/** 通知级别文案（通知 level 与任务状态是两套枚举，故在本页内映射） */
-const NOTIFY_LEVELS: Record<string, { text: string; type: 'info' | 'warning' | 'danger' | 'success' }> = {
-  info: { text: '通知', type: 'info' },
-  warning: { text: '提醒', type: 'warning' },
-  urgent: { text: '紧急', type: 'danger' },
-  overdue: { text: '逾期', type: 'danger' }
-}
-
-function levelMeta(level: string): { text: string; type: 'info' | 'warning' | 'danger' | 'success' } {
-  return NOTIFY_LEVELS[level] ?? NOTIFY_LEVELS.info
-}
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -202,18 +187,6 @@ async function loadApplications(): Promise<void> {
   }
 }
 
-async function loadNotices(): Promise<void> {
-  noticesLoading.value = true
-  noticesError.value = ''
-  try {
-    await notificationsStore.refresh()
-  } catch (err) {
-    noticesError.value = errorMessage(err)
-  } finally {
-    noticesLoading.value = false
-  }
-}
-
 async function loadAiUsage(): Promise<void> {
   aiUsageLoading.value = true
   aiUsageError.value = ''
@@ -233,7 +206,6 @@ function refreshAll(): void {
     loadCredits(),
     loadCheckins(),
     loadApplications(),
-    loadNotices(),
     loadAiUsage()
   ])
 }
@@ -243,22 +215,9 @@ function openTask(taskId: number | null): void {
   void router.push({ name: 'detail', params: { id: taskId } })
 }
 
-async function markRead(id: number): Promise<void> {
-  try {
-    await notificationsStore.markRead([id])
-  } catch (err) {
-    ElMessage.error(errorMessage(err))
-  }
-}
-
-async function markAllRead(): Promise<void> {
-  if (unreadIds.value.length === 0) return
-  try {
-    await notificationsStore.markRead([...unreadIds.value])
-    ElMessage.success('已全部标记为已读')
-  } catch (err) {
-    ElMessage.error(errorMessage(err))
-  }
+/** 未读通知统一去 AI 页右栏处理（`C-AI-THREE-PANE@1`） */
+function openAiNotices(): void {
+  void router.push({ name: 'ai', query: { panel: 'inbox' } })
 }
 
 /** 固定顶栏高度（含安全间距）：锚点滚动必须落在 header 之下 */
@@ -275,11 +234,6 @@ function scrollToSection(id: string): void {
   window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' })
 }
 
-/** 顶栏红点跳 `/profile#notifications` 时滚动到通知中心 */
-function scrollToAnchor(): void {
-  if (route.hash !== '#notifications') return
-  scrollToSection('notifications')
-}
 
 onMounted(async () => {
   await Promise.allSettled([
@@ -287,21 +241,11 @@ onMounted(async () => {
     loadCredits(),
     loadCheckins(),
     loadApplications(),
-    loadNotices(),
     loadAiUsage()
   ])
-  await nextTick()
-  scrollToAnchor()
 })
 
-// 同一路由内再次点击红点（hash 变化但组件复用）时仍需滚动
-watch(
-  () => route.hash,
-  async () => {
-    await nextTick()
-    scrollToAnchor()
-  }
-)
+// 同一路由内再次点击红点时不需要滚动：通知入口已迁到 AI 页
 </script>
 
 <template>
@@ -309,7 +253,7 @@ watch(
     <header class="app-page-header">
       <div>
         <h2 class="app-page-title">个人中心</h2>
-        <p class="app-page-subtitle">我的任务、积分流水、签到记录、我的报名与通知中心</p>
+        <p class="app-page-subtitle">我的任务、积分流水、签到记录与我的报名</p>
       </div>
       <div class="app-actions">
         <el-button @click="refreshAll">刷新全部</el-button>
@@ -346,7 +290,7 @@ watch(
           </button>
         </li>
         <li>
-          <button type="button" class="stat-item" @click="scrollToSection('notifications')">
+          <button type="button" class="stat-item" @click="openAiNotices">
             <span class="stat-value">{{ unreadCount }}</span>
             <span class="stat-label">未读通知</span>
           </button>
@@ -650,74 +594,6 @@ watch(
       </template>
     </section>
 
-    <section id="notifications" class="app-section-card section notice-card">
-      <header class="section-head">
-        <span class="card-title">
-          通知中心
-          <el-badge v-if="unreadCount > 0" :value="unreadCount" :max="99" class="notice-badge" />
-        </span>
-        <div class="header-actions">
-          <el-button size="small" :disabled="unreadIds.length === 0" @click="markAllRead">
-            全部标为已读
-          </el-button>
-          <el-button size="small" :loading="noticesLoading" @click="loadNotices">刷新</el-button>
-        </div>
-      </header>
-
-      <LoadingState v-if="noticesLoading" :rows="3" />
-      <ErrorState
-        v-else-if="noticesError"
-        :message="noticesError"
-        detail="通知列表加载失败，请稍后重试。"
-        retryable
-        @retry="loadNotices"
-      />
-      <template v-else>
-        <EmptyState
-          v-if="noticeItems.length === 0"
-          title="暂无通知"
-          description="任务被认领、提交、验收或临近截止时，这里会收到提醒。"
-        />
-        <ul v-else class="notice-list">
-          <li
-            v-for="item in noticeItems"
-            :key="item.id"
-            class="notice-item"
-            :class="{ unread: item.is_read === 0, stale: item.stale === 1 }"
-          >
-            <div class="notice-head">
-              <el-tag :type="levelMeta(item.level).type" size="small" effect="light">
-                {{ levelMeta(item.level).text }}
-              </el-tag>
-              <span class="notice-title">{{ item.title }}</span>
-              <el-tag v-if="item.stale === 1" type="info" size="small" effect="plain">已失效</el-tag>
-              <span v-if="item.is_read === 0 && item.stale === 0" class="unread-flag">未读</span>
-              <span class="notice-time">{{ shortTime(item.created_at) }}</span>
-            </div>
-            <p class="notice-content">{{ item.content }}</p>
-            <div class="notice-actions">
-              <el-button
-                v-if="item.task_id !== null"
-                size="small"
-                text
-                type="primary"
-                @click="openTask(item.task_id)"
-              >
-                查看任务 #{{ item.task_id }}
-              </el-button>
-              <el-button
-                v-if="item.is_read === 0 && item.stale === 0"
-                size="small"
-                text
-                @click="markRead(item.id)"
-              >
-                标记已读
-              </el-button>
-            </div>
-          </li>
-        </ul>
-      </template>
-    </section>
   </section>
 </template>
 

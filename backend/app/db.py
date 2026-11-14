@@ -69,6 +69,11 @@ _ADD_NOTIFICATIONS_DEDUPE_KEY = "ALTER TABLE notifications ADD COLUMN dedupe_key
 _ADD_NOTIFICATIONS_STALE = (
     "ALTER TABLE notifications ADD COLUMN stale INTEGER NOT NULL DEFAULT 0"
 )
+# 归档（`C-NOTICE-ARCHIVE@1`）：只加列，旧行默认未归档。
+_ADD_NOTIFICATIONS_ARCHIVED = (
+    "ALTER TABLE notifications ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+)
+_ADD_NOTIFICATIONS_ARCHIVED_AT = "ALTER TABLE notifications ADD COLUMN archived_at TEXT"
 
 _CREATE_DEDUPE_INDEX = (
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_notifications_dedupe_key "
@@ -172,6 +177,24 @@ _AI_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
+# AIW-10（`C-PRECHECK-EVIDENCE@2`）：旧库补齐预审引用的资料版本快照。
+# 只加列、不回填旧行；旧预审摘要按 ``[]`` 读取（服务层 ``or []``）。
+_PRECHECK_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    (
+        "submission_prechecks",
+        "resource_snapshot",
+        "ALTER TABLE submission_prechecks ADD COLUMN resource_snapshot TEXT",
+    ),
+)
+
+# 成果文件（`C-SUBMISSION-FILE@1`）：只加列，旧成果行保持无文件。
+_SUBMISSION_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("task_submissions", "file_name", "ALTER TABLE task_submissions ADD COLUMN file_name TEXT"),
+    ("task_submissions", "file_size", "ALTER TABLE task_submissions ADD COLUMN file_size INTEGER"),
+    ("task_submissions", "file_mime", "ALTER TABLE task_submissions ADD COLUMN file_mime TEXT"),
+    ("task_submissions", "file_path", "ALTER TABLE task_submissions ADD COLUMN file_path TEXT"),
+)
+
 
 def _migrate(conn) -> None:
     """幂等增量迁移（契约 `C-MIGRATION@1`）：只加列 / 加索引 / 补行，不删列不删行。"""
@@ -179,6 +202,10 @@ def _migrate(conn) -> None:
         conn.exec_driver_sql(_ADD_NOTIFICATIONS_DEDUPE_KEY)
     if _table_exists(conn, "notifications") and "stale" not in _column_names(conn, "notifications"):
         conn.exec_driver_sql(_ADD_NOTIFICATIONS_STALE)
+    if _table_exists(conn, "notifications") and "archived" not in _column_names(conn, "notifications"):
+        conn.exec_driver_sql(_ADD_NOTIFICATIONS_ARCHIVED)
+    if _table_exists(conn, "notifications") and "archived_at" not in _column_names(conn, "notifications"):
+        conn.exec_driver_sql(_ADD_NOTIFICATIONS_ARCHIVED_AT)
     if _table_exists(conn, "notifications"):
         conn.exec_driver_sql(_CREATE_DEDUPE_INDEX)
 
@@ -221,6 +248,15 @@ def _migrate(conn) -> None:
         if _table_exists(conn, table) and column not in _column_names(conn, table):
             conn.exec_driver_sql(statement)
 
+    # ---- AIW-10：预审引用的资料版本快照 --------------------------------
+    for table, column, statement in _PRECHECK_ADDED_COLUMNS:
+        if _table_exists(conn, table) and column not in _column_names(conn, table):
+            conn.exec_driver_sql(statement)
+
+    for table, column, statement in _SUBMISSION_ADDED_COLUMNS:
+        if _table_exists(conn, table) and column not in _column_names(conn, table):
+            conn.exec_driver_sql(statement)
+
 
 def init_db() -> None:
     """建表 + 幂等迁移（可重复调用）。调用前必须先 import app.models 以注册全部表。
@@ -235,7 +271,8 @@ def init_db() -> None:
     ``tasks.activity_id``，以及阶段 2 的 ``users`` 认证列、``tasks`` /
     ``activities`` 的 ``org_id`` 与组织相关索引，并把无密码旧账号标记为
     ``legacy_unclaimed``，以及 AIW-09 的 ``ai_conversations.scope_type`` /
-    ``scope_id`` 与 ``parse_sessions.user_id``。AI 会话表只新增、不修改既有表；
+    ``scope_id`` 与 ``parse_sessions.user_id``、AIW-10 的
+    ``submission_prechecks.resource_snapshot``。AI 会话表只新增、不修改既有表；
     全程不使用 DROP / 删列 / 删行，重复执行不会产生重复数据。
     """
     from app import models  # noqa: F401  （注册 ORM 映射，避免循环导入）

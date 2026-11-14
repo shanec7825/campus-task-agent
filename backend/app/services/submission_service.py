@@ -1,10 +1,11 @@
-"""成果版本与预审服务（契约 `C-SUBMISSION@1` / `C-PRECHECK@1`）。
+"""成果版本与预审服务（契约 `C-SUBMISSION@1` / `C-PRECHECK-EVIDENCE@2`）。
 
 边界：
 
 * 每次成员从 ``in_progress|rejected`` 进入 ``submitted`` 时新增一条版本；
 * 版本号由服务层在事务内计算，旧版本保留；
 * 预审只写 ``submission_prechecks``，不改变任务、成员、积分或通知；
+* 预审摘要绑定任务/活动要求与引用资料版本，任一变化后旧预审过期；
 * 规则预审决定 ``verdict``，模型建议只作补充；模型失败写 ``ai_error``，不冒充通过。
 """
 
@@ -14,8 +15,11 @@ import hashlib
 import json
 import logging
 import re
+import uuid
 from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
@@ -27,6 +31,7 @@ from app.models import Activity, SubmissionPrecheck, Task, TaskSubmission, User
 from app.schemas import (
     PrecheckItem,
     PrecheckOut,
+    PrecheckResourceSnapshot,
     PrecheckSuggestion,
     PrecheckSummary,
     SubmissionOut,
@@ -37,6 +42,19 @@ logger = logging.getLogger(__name__)
 
 ERR_NOT_FOUND = 4040
 ERR_FORBIDDEN = 4030
+ERR_CONFLICT = 4090
+ERR_INVALID_PARAM = 4001
+
+# 成果文件（`C-SUBMISSION-FILE@1`）：格式白名单与大小上限；不做第三方正文解析。
+SUBMISSION_UPLOAD_ROOT = Path(__file__).resolve().parents[2] / "uploads" / "submissions"
+MAX_FILE_BYTES = 10 * 1024 * 1024
+ALLOWED_FILE_EXTS = {
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+PARSEABLE_FILE_EXTS = frozenset({".txt", ".md"})
 
 STATUS_PASS = "pass"
 STATUS_FAIL = "fail"
@@ -87,6 +105,10 @@ def create_submission(
     *,
     content: str | None,
     resource_url: str | None,
+    file_name: str | None = None,
+    file_size: int | None = None,
+    file_mime: str | None = None,
+    file_path: str | None = None,
 ) -> TaskSubmission:
     """新增一条成果版本（只 flush，不 commit）。"""
     text = (content or "").strip() or None
@@ -97,10 +119,59 @@ def create_submission(
         version=next_version(db, int(task.id), int(user_id)),
         content=text,
         resource_url=url,
+        file_name=file_name,
+        file_size=file_size,
+        file_mime=file_mime,
+        file_path=file_path,
     )
     db.add(row)
     db.flush()
     return row
+
+
+def validate_submission_file(filename: str, payload: bytes) -> str:
+    """校验格式、空文件与大小上限，返回原始文件名（不写盘）。"""
+    original = Path(filename or "").name.strip()
+    ext = Path(original).suffix.lower()
+    if not original or ext not in ALLOWED_FILE_EXTS:
+        raise ApiError(ERR_INVALID_PARAM, "仅支持 TXT/Markdown/PDF/DOCX")
+    if not payload:
+        raise ApiError(ERR_INVALID_PARAM, "文件内容为空")
+    if len(payload) > MAX_FILE_BYTES:
+        raise ApiError(ERR_INVALID_PARAM, "文件不能超过 10MB")
+    return original
+
+
+def save_submission_file(task_id: int, filename: str, payload: bytes) -> dict[str, object]:
+    """校验并保存成果文件；返回可直接展开为字段的原始信息与相对路径。"""
+    original = validate_submission_file(filename, payload)
+    ext = Path(original).suffix.lower()
+    relative_dir = str(int(task_id))
+    target_dir = SUBMISSION_UPLOAD_ROOT / relative_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stored = f"{uuid.uuid4().hex}{ext}"
+    (target_dir / stored).write_bytes(payload)
+    return {
+        "file_name": original[:255],
+        "file_size": len(payload),
+        "file_mime": ALLOWED_FILE_EXTS[ext],
+        "file_path": f"{relative_dir}/{stored}",
+    }
+
+
+def file_text_for_precheck(row: TaskSubmission) -> str | None:
+    """TXT/Markdown 读取前 8000 字符供规则/模型预审；PDF/DOCX 不解析。"""
+    if not row.file_path:
+        return None
+    ext = Path(row.file_path).suffix.lower()
+    if ext not in PARSEABLE_FILE_EXTS:
+        return None
+    try:
+        return (SUBMISSION_UPLOAD_ROOT / row.file_path).read_text(
+            encoding="utf-8", errors="replace"
+        )[:8000]
+    except OSError:
+        return None
 
 
 def latest_submission(db: Session, task_id: int, user_id: int) -> TaskSubmission | None:
@@ -154,7 +225,7 @@ def require_submission_access(db: Session, user: User, task: Task, row: TaskSubm
     raise ApiError(ERR_FORBIDDEN, "无权查看该成果版本", 403)
 
 
-def _requirement_digest(task: Task, activity: Activity | None) -> str:
+def _requirement_digest(task: Task, activity: Activity | None, resources: Sequence) -> str:
     payload = {
         "task": {key: getattr(task, key, None) for key in _REQUIREMENT_KEYS},
         "activity": {
@@ -163,9 +234,31 @@ def _requirement_digest(task: Task, activity: Activity | None) -> str:
             "start_time": activity.start_time if activity is not None else None,
             "deadline": activity.deadline if activity is not None else None,
         },
+        "resources": [
+            {"id": int(item.id), "version": int(item.version)} for item in resources
+        ],
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _resource_snapshot(resources: Sequence) -> list[dict]:
+    """预审引用资料的可读快照（`C-PRECHECK-EVIDENCE@2`）：服务端存 id/标题/版本。"""
+    return [
+        {"id": int(item.id), "title": item.title, "version": int(item.version)}
+        for item in resources
+    ]
+
+
+def _current_digest(db: Session, user: User, task: Task) -> str:
+    """当前任务要求 + 资料版本的摘要。
+
+    资源视角唯一化（`C-PRECHECK-EVIDENCE@2`）：``user`` 必须是**成果提交者**，
+    预审、成果列表 stale 与验收校验三处共用该视角；审核者视角只用于权限判定。
+    """
+    activity = db.get(Activity, int(task.activity_id)) if task.activity_id is not None else None
+    resources = resource_service.latest_resource_versions(db, user, task, limit=5)
+    return _requirement_digest(task, activity, resources)
 
 
 def _parse_dates(value: str | None) -> set[tuple[int, int, int]]:
@@ -431,9 +524,23 @@ def precheck(db: Session, user: User, task: Task, submission_id: int) -> Prechec
     require_submission_access(db, user, task, submission)
 
     activity = db.get(Activity, int(task.activity_id)) if task.activity_id is not None else None
-    digest = _requirement_digest(task, activity)
-    resources = resource_service.latest_resource_versions(db, user, task, limit=5)
-    checks = _rule_checks(task, activity, submission, resources)
+    # 资源视角唯一化：预审摘要固定按成果提交者可见的资料版本计算，与验收端一致。
+    submitter = db.get(User, int(submission.user_id))
+    resources = (
+        resource_service.latest_resource_versions(db, submitter, task, limit=5)
+        if submitter is not None
+        else []
+    )
+    digest = _requirement_digest(task, activity, resources)
+    # TXT/Markdown 文件正文在无文字说明时参与规则/模型预审；PDF/DOCX 不解析正文。
+    file_text = file_text_for_precheck(submission)
+    has_text = bool((submission.content or "").strip())
+    checks_view = (
+        SimpleNamespace(content=file_text, resource_url=submission.resource_url)
+        if file_text and not has_text
+        else submission
+    )
+    checks = _rule_checks(task, activity, checks_view, resources)
     verdict = _verdict(checks)
 
     # 模型调用前把 ORM 行转成纯值快照并结束读事务，避免长时间持有 SQLite 读锁，
@@ -441,11 +548,20 @@ def precheck(db: Session, user: User, task: Task, submission_id: int) -> Prechec
     task_snapshot = _task_snapshot(task)
     activity_snapshot = _activity_snapshot(activity)
     submission_snapshot = _submission_snapshot(submission)
+    if file_text and not has_text:
+        submission_snapshot["content"] = file_text
     db.rollback()
 
     ai_summary, suggestions, mock, ai_error = _ai_suggestions(
         task_snapshot, activity_snapshot, submission_snapshot, resources
     )
+    if (
+        ai_error is None
+        and submission.file_path
+        and Path(submission.file_path).suffix.lower() not in PARSEABLE_FILE_EXTS
+        and not has_text
+    ):
+        ai_error = "PDF/DOCX 暂不解析正文，请补充文字说明"
     summary = ai_summary or _mock_summary(checks)
 
     row = SubmissionPrecheck(
@@ -455,6 +571,7 @@ def precheck(db: Session, user: User, task: Task, submission_id: int) -> Prechec
         verdict=verdict,
         summary=summary,
         ai_suggestions=[item.model_dump() for item in suggestions],
+        resource_snapshot=_resource_snapshot(resources),
         mock=1 if mock else 0,
         ai_error=ai_error,
         created_at=_now_text(),
@@ -473,6 +590,9 @@ def precheck(db: Session, user: User, task: Task, submission_id: int) -> Prechec
         verdict=row.verdict,
         summary=row.summary,
         ai_suggestions=[PrecheckSuggestion(**item) for item in (row.ai_suggestions or [])],
+        resource_snapshot=[
+            PrecheckResourceSnapshot(**item) for item in (row.resource_snapshot or [])
+        ],
         mock=bool(row.mock),
         ai_error=row.ai_error,
         created_at=row.created_at,
@@ -548,8 +668,24 @@ def list_submissions(db: Session, task: Task, viewer: User) -> list[SubmissionOu
     ).scalars().all():
         prechecks.setdefault(int(item.submission_id), item)
 
+
     activity = db.get(Activity, int(task.activity_id)) if task.activity_id is not None else None
-    digest = _requirement_digest(task, activity)
+    digests: dict[int, str] = {}
+
+    def _submitter_digest(user_id: int) -> str:
+        """stale 对比固定按成果提交者视角（`C-PRECHECK-EVIDENCE@2`），审核者视角不参与。"""
+        cached = digests.get(user_id)
+        if cached is not None:
+            return cached
+        submitter = db.get(User, int(user_id))
+        value = (
+            _requirement_digest(task, activity, [])
+            if submitter is None
+            else _current_digest(db, submitter, task)
+        )
+        digests[user_id] = value
+        return value
+
     return [
         SubmissionOut(
             id=int(row.id),
@@ -559,12 +695,52 @@ def list_submissions(db: Session, task: Task, viewer: User) -> list[SubmissionOu
             version=int(row.version),
             content=row.content,
             resource_url=row.resource_url,
+            file_name=row.file_name,
+            file_size=row.file_size,
+            file_mime=row.file_mime,
             created_at=row.created_at,
             latest=int(row.version) == latest_versions.get(int(row.user_id)),
-            precheck=_precheck_summary(prechecks.get(int(row.id)), digest),
+            precheck=_precheck_summary(
+                prechecks.get(int(row.id)), _submitter_digest(int(row.user_id))
+            ),
         )
         for row in rows
     ]
+
+
+def latest_precheck(db: Session, submission_id: int) -> SubmissionPrecheck | None:
+    """取某个成果版本的最新预审；旧的预审行保留，不回写。"""
+    return db.execute(
+        select(SubmissionPrecheck)
+        .where(SubmissionPrecheck.submission_id == int(submission_id))
+        .order_by(SubmissionPrecheck.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def require_fresh_precheck(db: Session, task: Task, user_ids: Sequence[int]) -> None:
+    """验收通过前校验最新预审是否过期（`C-PRECHECK-EVIDENCE@2`）。
+
+    只检查每个目标成员最新成果版本的最新预审；没有成果或没有预审视为未检查，
+    不阻断。digest 固定按该成员本人（成果提交者）的资料视角计算，与预审和成果
+    列表 stale 一致；账号不存在时无法复原其视角，按无资料处理且不阻断。
+    任一预审不一致即整体拒绝，需在写库前调用。
+    """
+    for user_id in user_ids:
+        submission = latest_submission(db, int(task.id), int(user_id))
+        if submission is None:
+            continue
+        row = latest_precheck(db, int(submission.id))
+        if row is None:
+            continue
+        submitter = db.get(User, int(user_id))
+        if submitter is None:
+            continue
+        if row.requirement_digest != _current_digest(db, submitter, task):
+            raise ApiError(
+                ERR_CONFLICT,
+                "预审已过期（任务要求或引用资料已变化），请重新预审",
+            )
 
 
 def _precheck_summary(row: SubmissionPrecheck | None, current_digest: str) -> PrecheckSummary | None:
@@ -585,11 +761,13 @@ def _precheck_summary(row: SubmissionPrecheck | None, current_digest: str) -> Pr
 __all__ = [
     "create_submission",
     "get_submission",
+    "latest_precheck",
     "latest_submission",
     "list_submissions",
     "next_version",
     "precheck",
     "can_review_task",
+    "require_fresh_precheck",
     "require_task_review",
     "require_submission_access",
 ]

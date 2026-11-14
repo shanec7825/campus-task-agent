@@ -1,63 +1,125 @@
 <script setup lang="ts">
 /**
- * 悬浮预览容器（契约 `C-FE-PEEK@1`）。
+ * 悬浮预览容器（契约 `C-FE-PEEK@2`）。
  *
- * - 只在精确指针且支持 hover 的设备启用；触摸设备不注册预览；
+ * - 只在精确指针且支持 hover 的设备启用；触摸不注册预览，点击进入详情；
  * - 停留默认 200ms 后显示，快速划过不弹出；
- * - 离开容器立即关闭；预览面板是容器子元素，移入预览不会关闭；
- * - 键盘焦点可打开，Esc 关闭；间隙不触发（事件只绑定容器）。
+ * - 卡片、8px 视觉间隙与面板同属一个联合区：间隙由 `::before` 命中桥接覆盖，
+ *   离开联合区后再等 120ms 关闭，移回卡片或面板即取消关闭；
+ * - 面板内滚动/点击不关闭；Esc 立即关闭；焦点离开联合区才关闭；
+ * - 面板是非模态 `dialog`（`aria-modal="false"`，无焦点陷阱），自身 `tabindex="0"`
+ *   以便键盘进入并滚动；可访问名称来自 `label`，不再使用只能描述静态文案的 tooltip 语义。
  */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-const props = withDefaults(defineProps<{ delay?: number }>(), { delay: 200 })
+const CLOSE_BUFFER_MS = 120
+
+const props = withDefaults(defineProps<{ delay?: number; label?: string }>(), {
+  delay: 200,
+  label: '卡片预览',
+})
 
 const open = ref(false)
 const canHover = ref(false)
-let timer: number | null = null
+const rootEl = ref<HTMLElement | null>(null)
+let openTimer: number | null = null
+let closeTimer: number | null = null
 let hoverQuery: MediaQueryList | null = null
 
 function updateCapability(): void {
   canHover.value = hoverQuery?.matches === true
-  if (!canHover.value) open.value = false
+  if (!canHover.value) closeNow()
 }
 
-function clearTimer(): void {
-  if (timer !== null) {
-    window.clearTimeout(timer)
-    timer = null
+function clearOpenTimer(): void {
+  if (openTimer !== null) {
+    window.clearTimeout(openTimer)
+    openTimer = null
+  }
+}
+
+function clearCloseTimer(): void {
+  if (closeTimer !== null) {
+    window.clearTimeout(closeTimer)
+    closeTimer = null
   }
 }
 
 function schedule(): void {
   if (!canHover.value) return
-  clearTimer()
-  timer = window.setTimeout(() => {
+  clearOpenTimer()
+  clearCloseTimer()
+  openTimer = window.setTimeout(() => {
     open.value = true
-    timer = null
+    openTimer = null
   }, Math.max(0, props.delay))
 }
 
-function close(): void {
-  clearTimer()
+function closeNow(): void {
+  clearOpenTimer()
+  clearCloseTimer()
   open.value = false
 }
 
-function handleFocusIn(): void {
-  if (canHover.value) {
-    clearTimer()
-    open.value = true
+function isJointHovered(): boolean {
+  return rootEl.value?.matches(':hover') === true
+}
+
+function hasInnerFocus(): boolean {
+  const root = rootEl.value
+  const active = typeof document === 'undefined' ? null : (document.activeElement as HTMLElement | null)
+  if (!root || !active || !root.contains(active)) return false
+  // 只有键盘焦点才阻止关闭；指针点击面板留下的焦点不应让预览“粘住”
+  try {
+    return active.matches(':focus-visible')
+  } catch {
+    return true
   }
+}
+
+function scheduleClose(): void {
+  clearOpenTimer()
+  clearCloseTimer()
+  closeTimer = window.setTimeout(() => {
+    closeTimer = null
+    // 缓冲期内移回联合区或焦点仍在内，则保持打开
+    if (isJointHovered() || hasInnerFocus()) return
+    open.value = false
+  }, CLOSE_BUFFER_MS)
+}
+
+function handleMouseLeave(): void {
+  if (!open.value) {
+    // 尚未打开：取消待开的停留计时，避免划过后面板迟到
+    clearOpenTimer()
+    return
+  }
+  scheduleClose()
+}
+
+function handleMouseEnter(): void {
+  clearCloseTimer()
+  if (open.value) return
+  schedule()
+}
+
+function handleFocusIn(): void {
+  if (!canHover.value) return
+  clearOpenTimer()
+  clearCloseTimer()
+  open.value = true
 }
 
 function handleFocusOut(event: FocusEvent): void {
   const next = event.relatedTarget as Node | null
-  const current = event.currentTarget as HTMLElement | null
-  if (next && current?.contains(next)) return
-  close()
+  const root = rootEl.value
+  if (next && root?.contains(next)) return
+  if (isJointHovered()) return
+  closeNow()
 }
 
 function handleEsc(event: KeyboardEvent): void {
-  if (event.key === 'Escape') close()
+  if (event.key === 'Escape') closeNow()
 }
 
 watch(open, (value) => {
@@ -74,23 +136,34 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  clearTimer()
+  closeNow()
   if (typeof document !== 'undefined') document.removeEventListener('keydown', handleEsc)
   hoverQuery?.removeEventListener?.('change', updateCapability)
 })
+
+defineExpose({ close: closeNow })
 </script>
 
 <template>
   <div
+    ref="rootEl"
     class="hover-peek"
-    @mouseenter="schedule"
-    @mouseleave="close"
+    :class="{ 'hover-peek--open': open }"
+    @mouseenter="handleMouseEnter"
+    @mouseleave="handleMouseLeave"
     @focusin="handleFocusIn"
     @focusout="handleFocusOut"
-    @keydown.esc="close"
+    @keydown.esc="handleEsc"
   >
     <slot />
-    <div v-if="open" class="hover-peek__panel" role="tooltip">
+    <div
+      v-if="open"
+      class="hover-peek__panel"
+      role="dialog"
+      aria-modal="false"
+      :aria-label="props.label"
+      tabindex="0"
+    >
       <slot name="preview" />
     </div>
   </div>
@@ -101,6 +174,17 @@ onBeforeUnmount(() => {
   position: relative;
   min-width: 0;
   height: 100%;
+}
+
+/* 命中桥接：面板打开时用 8px 伪元素覆盖视觉间隙，鼠标经过间隙仍算在联合区内 */
+.hover-peek--open::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -8px;
+  height: 8px;
+  z-index: 29;
 }
 
 .hover-peek__panel {
@@ -123,6 +207,10 @@ onBeforeUnmount(() => {
 }
 
 @media (hover: none), (pointer: coarse) {
+  .hover-peek--open::before {
+    display: none;
+  }
+
   .hover-peek__panel {
     display: none;
   }

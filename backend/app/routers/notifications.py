@@ -26,11 +26,13 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from datetime import datetime
+
 from app.db import get_db
 from app.deps import get_current_user, get_sse_current_user, require_csrf
-from app.errors import ok
+from app.errors import ApiError, ok
 from app.models import Notification, Task, User
-from app.schemas import NotificationListOut, NotificationOut, ReadIn
+from app.schemas import ArchiveIn, NotificationListOut, NotificationOut, ReadIn
 from app.services import authz, notification_hub
 
 logger = logging.getLogger(__name__)
@@ -62,25 +64,37 @@ def _heartbeat_seconds() -> float:
 @router.get("")
 def list_notifications(
     unread_only: bool = Query(default=False),
+    archived: bool = Query(default=False),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=DEFAULT_LIST_LIMIT, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """通知列表：``unread`` 只统计有效未读（不含已失效提醒），``items`` 按时间倒序取 ``limit`` 条。"""
+    """通知列表：``unread`` 只统计未归档的有效未读；``archived`` 切换归档箱。"""
     unread = (
         db.query(Notification)
         .filter(
             Notification.user_id == current_user.id,
+            Notification.archived == 0,
             Notification.is_read == 0,
             Notification.stale == 0,
         )
         .count()
     )
 
-    query = db.query(Notification).filter(Notification.user_id == current_user.id)
+    query = db.query(Notification).filter(
+        Notification.user_id == current_user.id,
+        Notification.archived == (1 if archived else 0),
+    )
     if unread_only:
         query = query.filter(Notification.is_read == 0, Notification.stale == 0)
-    rows = query.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(limit).all()
+    total = query.count()
+    rows = (
+        query.order_by(Notification.created_at.desc(), Notification.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
     # 关联任务不可见时只保留标题与 task_id，不回吐任务正文（`C-OTHER-AUTH@1`）
     task_ids = {int(row.task_id) for row in rows if row.task_id is not None}
@@ -98,7 +112,7 @@ def list_notifications(
             item.content = ""
         items.append(item)
 
-    data = NotificationListOut(unread=int(unread), items=items).model_dump()
+    data = NotificationListOut(unread=int(unread), total=int(total), items=items).model_dump()
     return ok(data)
 
 
@@ -122,6 +136,34 @@ def read_notifications(
             Notification.stale == 0,
         )
         .update({Notification.is_read: 1}, synchronize_session=False)
+    )
+    db.commit()
+    return ok({"updated": int(updated or 0)})
+
+
+@router.post("/archive")
+def archive_notifications(
+    payload: ArchiveIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """归档通知（`C-NOTICE-ARCHIVE@1`）：只处理本人未归档记录，重复调用幂等。"""
+    ids = [int(item) for item in payload.ids]
+    if not ids:
+        raise ApiError(4001, "请选择要归档的通知")
+
+    archived_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    updated = (
+        db.query(Notification)
+        .filter(
+            Notification.id.in_(ids),
+            Notification.user_id == current_user.id,
+            Notification.archived == 0,
+        )
+        .update(
+            {Notification.archived: 1, Notification.archived_at: archived_at},
+            synchronize_session=False,
+        )
     )
     db.commit()
     return ok({"updated": int(updated or 0)})

@@ -1,0 +1,369 @@
+{
+  "stage": 31,
+  "date": "2026-11-14",
+  "timezone": "Asia/Shanghai",
+  "cwd": "D:\\Users\\Lenovo\\Downloads\\campus-task-agent-delivery\\campus-task-agent",
+  "command": "PowerShell here-string | python -X utf8 -",
+  "baseline": "a4d2714f067ed0a819401a07434944878c6f9589",
+  "status": "fail",
+  "passed": 51,
+  "failed": 2,
+  "markdown_links_checked": 90,
+  "owned_document_paths": [
+    ".codeartsdoer/plans/ai-workbench/roadmap.md",
+    ".codeartsdoer/plans/ai-workbench/requirements.md",
+    ".codeartsdoer/plans/ai-workbench/decisions.md",
+    ".codeartsdoer/plans/ai-workbench/acceptance-matrix.md",
+    ".codeartsdoer/plans/aiw14-workbench-library-search/design.md",
+    ".codeartsdoer/plans/aiw14-workbench-library-search/task.md",
+    "docs/HANDOFF.md",
+    "codearts_proof/LOG.md",
+    ".codeartsdoer/plans/aiw14-workbench-library-search/ui-reference-r4.md",
+    "codearts_proof/prompts/agent_team_启动指令/2026-11-14_stage31_表格与头像卡片_用户原文.md",
+    "codearts_proof/ai_dialogue/stage31_表格与头像卡片方案增补.md",
+    "codearts_proof/reports/stage31_表格与头像卡片方案摘要.md"
+  ],
+  "source_files_changed_since_baseline": [
+    "frontend/src/api/library.ts",
+    "frontend/src/components/nav/SearchOverlay.vue",
+    "frontend/src/components/common/HoverPeek.vue",
+    "frontend/src/layouts/AppLayout.vue",
+    "frontend/src/views/TaskHall.vue"
+  ],
+  "business_build_tests_browser_review": "not run; documentation-only task",
+  "html_render": {
+    "command": "node C:/Users/Lenovo/.codex/skills/answer-me-with-html/scripts/am.mjs render C:/Users/Lenovo/.codex/visualizations/2026/11/14/01a1d940-718f-7992-81ff-9ab4238a560f/campus-ui-r4.md --no-open",
+    "exit_code": 0,
+    "panels": 7,
+    "flow_diagrams": 1,
+    "style_warnings": 0,
+    "path": "C:\\Users\\Lenovo\\.answer-me-with-html\\pages\\两种视图-同一套活动与任务-20261114-165939.html"
+  },
+  "commit_push_ci_deployment": "not performed in this turn",
+  "checks": [
+    {
+      "name": "HEAD unchanged",
+      "pass": true
+    },
+    {
+      "name": "180 baseline source/config files retain original hashes",
+      "pass": false,
+      "detail": {
+        "checked": 180,
+        "changed": [
+          "frontend/src/api/library.ts",
+          "frontend/src/components/nav/SearchOverlay.vue",
+          "frontend/src/components/common/HoverPeek.vue",
+          "frontend/src/layouts/AppLayout.vue",
+          "frontend/src/views/TaskHall.vue"
+        ]
+      }
+    },
+    {
+      "name": "no new business/source files",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "owned changes are documentation only",
+      "pass": true
+    },
+    {
+      "name": "local plan remains ignored: .codeartsdoer/plans/ai-workbench/roadmap.md",
+      "pass": true
+    },
+    {
+      "name": "local plan remains ignored: .codeartsdoer/plans/ai-workbench/requirements.md",
+      "pass": true
+    },
+    {
+      "name": "local plan remains ignored: .codeartsdoer/plans/ai-workbench/decisions.md",
+      "pass": true
+    },
+    {
+      "name": "local plan remains ignored: .codeartsdoer/plans/ai-workbench/acceptance-matrix.md",
+      "pass": true
+    },
+    {
+      "name": "local plan remains ignored: .codeartsdoer/plans/aiw14-workbench-library-search/design.md",
+      "pass": true
+    },
+    {
+      "name": "local plan remains ignored: .codeartsdoer/plans/aiw14-workbench-library-search/task.md",
+      "pass": true
+    },
+    {
+      "name": "local plan remains ignored: .codeartsdoer/plans/aiw14-workbench-library-search/ui-reference-r4.md",
+      "pass": true
+    },
+    {
+      "name": "R rows complete and unique",
+      "pass": true,
+      "detail": {
+        "actual": [
+          "R-01",
+          "R-02",
+          "R-03",
+          "R-04",
+          "R-05",
+          "R-06",
+          "R-07",
+          "R-08",
+          "R-09",
+          "R-10",
+          "R-11",
+          "R-12",
+          "R-13",
+          "R-14",
+          "R-15",
+          "R-16",
+          "R-17",
+          "R-18",
+          "R-19",
+          "R-20",
+          "R-21",
+          "R-22",
+          "R-23",
+          "R-24",
+          "R-25",
+          "R-26",
+          "R-27",
+          "R-28",
+          "R-29",
+          "R-30"
+        ]
+      }
+    },
+    {
+      "name": "AC rows complete and unique",
+      "pass": true,
+      "detail": {
+        "actual": [
+          "AC-01",
+          "AC-02",
+          "AC-03",
+          "AC-04",
+          "AC-05",
+          "AC-06",
+          "AC-07",
+          "AC-08",
+          "AC-09",
+          "AC-10",
+          "AC-11",
+          "AC-12",
+          "AC-13",
+          "AC-14",
+          "AC-15",
+          "AC-16",
+          "AC-17",
+          "AC-18",
+          "AC-19",
+          "AC-20",
+          "AC-21",
+          "AC-22",
+          "AC-23",
+          "AC-24",
+          "AC-25",
+          "AC-26"
+        ]
+      }
+    },
+    {
+      "name": "D rows complete and unique",
+      "pass": true,
+      "detail": {
+        "actual": [
+          "D-01",
+          "D-02",
+          "D-03",
+          "D-04",
+          "D-05",
+          "D-06",
+          "D-07",
+          "D-08",
+          "D-09",
+          "D-10",
+          "D-11"
+        ]
+      }
+    },
+    {
+      "name": "r4 linked at entry: .codeartsdoer/plans/ai-workbench/roadmap.md",
+      "pass": true
+    },
+    {
+      "name": "r4 linked at entry: .codeartsdoer/plans/aiw14-workbench-library-search/design.md",
+      "pass": true
+    },
+    {
+      "name": "r4 linked at entry: .codeartsdoer/plans/aiw14-workbench-library-search/task.md",
+      "pass": true
+    },
+    {
+      "name": "r4 linked at entry: docs/HANDOFF.md",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains C-BROWSE-CARD@2",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains C-ACTIVITY-TABLE@1",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains C-ACTIVITY-SWITCH@1",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains C-USER-AVATAR@1",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains T14-R4-01",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains T14-R4-05",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains 先做 authz",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains 独立任务",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains 不新增截图中的 blocked",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains #FEC6B7",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains #B7E0FE",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains #F1BADF",
+      "pass": true
+    },
+    {
+      "name": "r4 contract contains #BFF2FD",
+      "pass": true
+    },
+    {
+      "name": "R-10 cancellation retained",
+      "pass": true
+    },
+    {
+      "name": "R-15 cancellation retained",
+      "pass": true
+    },
+    {
+      "name": "AC-07 cancellation retained",
+      "pass": true
+    },
+    {
+      "name": "AC-10 cancellation retained",
+      "pass": true
+    },
+    {
+      "name": "AC-12 cancellation retained",
+      "pass": true
+    },
+    {
+      "name": "stage31 LOG row unique",
+      "pass": true
+    },
+    {
+      "name": "stage30 history preserved",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: .codeartsdoer/plans/ai-workbench/roadmap.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: .codeartsdoer/plans/ai-workbench/requirements.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: .codeartsdoer/plans/ai-workbench/decisions.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: .codeartsdoer/plans/ai-workbench/acceptance-matrix.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: .codeartsdoer/plans/aiw14-workbench-library-search/design.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: .codeartsdoer/plans/aiw14-workbench-library-search/task.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: docs/HANDOFF.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: codearts_proof/LOG.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: .codeartsdoer/plans/aiw14-workbench-library-search/ui-reference-r4.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: codearts_proof/prompts/agent_team_启动指令/2026-11-14_stage31_表格与头像卡片_用户原文.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: codearts_proof/ai_dialogue/stage31_表格与头像卡片方案增补.md",
+      "pass": true
+    },
+    {
+      "name": "UTF-8 valid: codearts_proof/reports/stage31_表格与头像卡片方案摘要.md",
+      "pass": true
+    },
+    {
+      "name": "all checked local Markdown links resolve",
+      "pass": false,
+      "detail": {
+        "checked": 90,
+        "broken": [
+          {
+            "source": "codearts_proof/LOG.md",
+            "target": "reports/stage31_plan_document_check.json"
+          },
+          {
+            "source": "codearts_proof/ai_dialogue/stage31_表格与头像卡片方案增补.md",
+            "target": "../reports/stage31_plan_document_check.json"
+          }
+        ]
+      }
+    },
+    {
+      "name": "explanation HTML generated with two embedded reference images",
+      "pass": true,
+      "detail": {
+        "path": "C:\\Users\\Lenovo\\.answer-me-with-html\\pages\\两种视图-同一套活动与任务-20261114-165939.html",
+        "bytes": 720784,
+        "embedded_images": 2
+      }
+    },
+    {
+      "name": "git diff --check",
+      "pass": true,
+      "detail": {
+        "exit_code": 0,
+        "output": "warning: in the working copy of 'AGENTS.md', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'frontend/src/composables/useVoiceComposer.ts', LF will be replaced by CRLF the next time Git touches it\n"
+      }
+    }
+  ]
+}

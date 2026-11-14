@@ -4,9 +4,10 @@
 import { request } from './client'
 import type { NotificationList } from '../types/models'
 
-/** 通知列表（仅当前用户，按创建时间倒序） */
+/** 通知列表（仅当前用户，按创建时间倒序；`archived` 切换归档箱） */
 export function listNotifications(p?: {
   unread_only?: boolean
+  archived?: boolean
   limit?: number
 }): Promise<NotificationList> {
   return request<NotificationList>('GET', '/api/notifications', undefined, p)
@@ -15,6 +16,11 @@ export function listNotifications(p?: {
 /** 批量标记已读（不存在的 id 由后端静默忽略） */
 export function readNotifications(ids: number[]): Promise<{ updated: number }> {
   return request<{ updated: number }>('POST', '/api/notifications/read', { ids })
+}
+
+/** 批量归档（`C-NOTICE-ARCHIVE@1`）：只处理本人未归档记录，重复调用幂等 */
+export function archiveNotifications(ids: number[]): Promise<{ updated: number }> {
+  return request<{ updated: number }>('POST', '/api/notifications/archive', { ids })
 }
 
 /**

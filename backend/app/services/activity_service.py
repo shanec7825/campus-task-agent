@@ -149,17 +149,24 @@ def build_activity_tree(db: Session, activity: Activity) -> list[dict]:
     """``ActivityTaskNode`` 可直读的任务树：一层任务按创建顺序，子任务同序挂载。"""
     tasks = _activity_tasks(db, int(activity.id))
     names_by_task = application_service.approved_users_bulk(db, tasks)
+    activity_id = int(activity.id)
 
     top_tasks = [task for task in tasks if task.parent_id is None]
     nodes: dict[int, dict] = {}
     for task in top_tasks:
         task_id = int(task.id)
+        rows = names_by_task.get(task_id, [])
         nodes[task_id] = {
             "id": task_id,
+            "activity_id": activity_id,
             "title": str(task.title),
             "status": str(task.status),
+            "start_time": task.start_time,
             "deadline": task.deadline,
-            "assignee_names": [name for _, name in names_by_task.get(task_id, [])],
+            "assignees": _assignees_payload(rows),
+            "assignee_names": [name for _, name in rows],
+            "completed_children": 0,
+            "total_children": 0,
             "children": [],
         }
 
@@ -170,17 +177,31 @@ def build_activity_tree(db: Session, activity: Activity) -> list[dict]:
         if parent_node is None:
             continue
         subtask_id = int(subtask.id)
+        rows = names_by_task.get(subtask_id, [])
         parent_node["children"].append(
             {
                 "id": subtask_id,
+                "activity_id": activity_id,
                 "title": str(subtask.title),
                 "status": str(subtask.status),
+                "start_time": subtask.start_time,
                 "deadline": subtask.deadline,
-                "assignee_names": [name for _, name in names_by_task.get(subtask_id, [])],
+                "assignees": _assignees_payload(rows),
+                "assignee_names": [name for _, name in rows],
             }
         )
 
+    for node in nodes.values():
+        children = node["children"]
+        node["total_children"] = len(children)
+        node["completed_children"] = sum(1 for child in children if child["status"] == "verified")
+
     return [nodes[int(task.id)] for task in top_tasks]
+
+
+def _assignees_payload(rows: list[tuple[int, str]]) -> list[dict]:
+    """``(user_id, name)`` → ``ActivityAssigneeOut`` 字典，顺序与 ``assignee_names`` 一致。"""
+    return [{"user_id": int(user_id), "name": name} for user_id, name in rows]
 
 
 __all__ = [

@@ -218,13 +218,24 @@ export interface ActivityProgress {
   awaiting_owner_confirm: boolean
 }
 
+/** 活动任务成员（`ActivityAssigneeOut`，契约 `C-ACT-TABLE-DTO@1`） */
+export interface ActivityAssignee {
+  user_id: number
+  name: string
+}
+
 /** 活动任务树中的子任务节点 */
 export interface ActivitySubtaskNode {
   id: number
   title: string
   status: string
+  /** 所在活动 id；与父节点同值（后端已返回，可选以兼容旧响应） */
+  activity_id?: number | null
+  start_time: string | null
   deadline: string | null
   assignee_names: string[]
+  /** 与 `assignee_names` 同源同顺序的成员标识 */
+  assignees: ActivityAssignee[]
 }
 
 /** 活动任务树中的第一层任务节点 */
@@ -232,9 +243,20 @@ export interface ActivityTaskNode {
   id: number
   title: string
   status: string
+  /**
+   * 所在活动 id，服务端已返回（契约 `C-ACT-TABLE-DTO@1`）；可选仅为兼容旧响应，
+   * 缺省时「所属活动」列显示「独立任务」。
+   */
+  activity_id?: number | null
+  start_time: string | null
   deadline: string | null
   assignee_names: string[]
+  /** 与 `assignee_names` 同源同顺序的成员标识 */
+  assignees: ActivityAssignee[]
   children: ActivitySubtaskNode[]
+  /** `children` 中状态为 verified 的数量（cancelled 只计入分母） */
+  completed_children: number
+  total_children: number
 }
 
 /** 活动（`ActivityOut`） */
@@ -394,6 +416,9 @@ export interface NotificationItem {
   is_read: number
   /** 改期/取消后失效的旧提醒（`C-REMINDER-STALE@1`）：历史保留，不计未读 */
   stale: number
+  /** 已归档（`C-NOTICE-ARCHIVE@1`）：从默认列表移入归档箱，不删除、不改已读 */
+  archived: number
+  archived_at: string | null
   created_at: string
 }
 
@@ -594,6 +619,8 @@ export interface AiConversationSummary {
 /** 会话列表（`AiConversationListOut`） */
 export interface AiConversationList {
   items: AiConversationSummary[]
+  /** 同 owner、同过滤条件的会话总数，供前端判断是否还有更旧记录 */
+  total: number
 }
 
 /** 会话详情（`AiConversationDetailOut`） */
@@ -725,7 +752,7 @@ export interface PrecheckResult {
   created_at: string
 }
 
-/** 版本列表中的预审摘要；`stale` 表示任务要求已变化 */
+/** 版本列表中的预审摘要；`stale` 表示任务要求或引用资料已变化 */
 export interface PrecheckSummary {
   id: number
   verdict: PrecheckVerdict
@@ -746,6 +773,10 @@ export interface SubmissionItem {
   version: number
   content: string | null
   resource_url: string | null
+  /** 成果文件（`C-SUBMISSION-FILE@1`）：文件名/大小/MIME；下载走同源接口 */
+  file_name: string | null
+  file_size: number | null
+  file_mime: string | null
   created_at: string
   latest: boolean
   precheck: PrecheckSummary | null
