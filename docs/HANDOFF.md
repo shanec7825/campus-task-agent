@@ -1,6 +1,6 @@
 # 当前开发交接
 
-> 更新日期：2026-11-14（Asia/Shanghai）。当前计划 `2026-11-14-r3`，UI 增补 r4 已实施。**本轮已完成 AIW-14 r1/r2/r4、AIW-09 历史增量、AIW-12 额度并发**，全部为本地实现与验证；未提交、未推送、无新 CI、未部署。
+> 更新日期：2026-11-14（Asia/Shanghai）。当前计划 `2026-11-14-r3`，UI 增补 r4 与 stage39 已实施。**本轮已完成 AIW-14 r1/r2/r4、AIW-09 历史增量、AIW-10 文件与预审、AIW-12 额度并发、AIW-13 收口**；已提交 `15e7e48` 并推送 origin/main，对应 CI `43592712459` 四 job success；未部署。
 > AIW-10 可执行增量已完成（预审资料版本 + 过期验收拒绝）；附件上传/解析仍按 D-04 挂起。
 > stage38 已收口：侧栏初始化请求复测 25/25 正常；后台验收补过期预审标记与禁用，契约 38/38、浏览器 18/18。
 > stage39 已完成：全局壳层（图标折叠/最近活动·最近聊天/New chat 发布/右上搜索折叠）、AI 三栏右通知与归档箱、全局悬浮输入三态、成果文件上传/下载（TXT/MD/PDF/DOCX ≤10MB）、成就空窗；契约 43/43、浏览器 42/42、后端 run_all EXIT=0。
@@ -8,7 +8,7 @@
 
 ## 1. 当前事实与授权
 
-- 分支 `main`，HEAD `a4d2714f067ed0a819401a07434944878c6f9589`。工作区含本轮与上轮未提交改动（AIW-09 r2 语音、AIW-14、历史、额度）。
+- 分支 `main`，HEAD `15e7e48895068a339776143955c8469c91429327`（提交并推送；工作区已清空）。对应 CI run `43592712459`：Frontend/Backend Windows/Backend Ubuntu/Integration 四 job success。
 - 本轮用户授权：按 r3 连续推进 AIW-14 → AIW-09 历史 → AIW-10 → AIW-12 → AIW-13，连续实施、验证、独立审查与留痕，不因单阶段结束停下询问。提交/推送/部署/付费/删除仍须当轮具体授权；本轮均未发生。
 - AIW-11 整个取消，不恢复、不转移其新增能力。
 - 缺 D-04（文件格式）、D-05（成就规则）、D-06（真机/真实模型）时只挂起直接相关子任务。
@@ -82,6 +82,7 @@
 
 ## 5. 本轮交付状态与下一次最短步骤
 
-- 本轮未提交/推送/部署；工作区保留全部可审阅改动与证据：`codearts_proof/reports/aiw14-browser.md`、`codearts_proof/screenshots/aiw14-*.png`、`codearts_proof/screenshots/aiw14-r4-*.png`、`codearts_proof/reviews/stage30_review_r{1,2,3}.md`、`stage31_quota_review.md`、`work/aiw14/browse/{verify-browse-r4.cjs,r4-report.json}`、`work/aiw14/backend-runall-aiw10-final.log`（本地忽略）。
+- 已提交 `15e7e48` 并推送 origin/main；CI `43592712459` 四 job success；未部署。证据：`codearts_proof/reports/aiw14-browser.md`、`codearts_proof/screenshots/aiw14-*.png`、`codearts_proof/screenshots/aiw14-r4-*.png`、`codearts_proof/reviews/stage30_review_r{1,2,3}.md`、`stage31_quota_review.md`、`work/aiw14/browse/{verify-browse-r4.cjs,r4-report.json}`、`work/aiw14/backend-runall-aiw10-final.log`（本地忽略）。
 - 下一次最短可执行步骤：D-06 授权后做真机与固定真实模型评测；T13-08 人工晚会链路需真实操作与录屏；其余已确认代码范围无可自动执行的独立增量。
-- 提交前需用户当轮授权；提交信息应区分 AIW-14（r1/r2/r4）、AIW-09 历史、AIW-12 三组改动及各自验证证据。
+- 本地运行：后端 `python -m uvicorn app.main:app --port 8000`（`backend/`），前端 `npm run dev`（`frontend/`，5173）；当前两端口均在运行，迁移列已补齐。
+- 回填提交只更新交接/记录，不改变代码；其自身 CI 另行跟踪。

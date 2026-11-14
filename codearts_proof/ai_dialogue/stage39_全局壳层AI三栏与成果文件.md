@@ -77,4 +77,5 @@
 - 复核：已向同一审查会话提交修复清单请求第二轮复核，但该会话结束时未返回新的复核结论；因此**本轮最后一批修复未经独立第二轮复核**。为避免把自查冒充复核，本条如实登记。首轮 Critical/Important 的修复均有可复跑门禁或浏览器证据。
 - 额外实测：`work/aiw13/verify-composer-send.cjs` 在非 AI 页小条输入并回车，实测落到 `/ai?conversation=5`、消息列表出现该问题、输入框清空（未丢发）。
 - 未验证：PDF/DOCX 正文解析（无依赖，明确只存储）、真实模型、真机、人工晚会链路、深色主题复测、部署；成就保持空窗；移动端通知抽屉按设计改为堆叠、MIME 非双检。
-- 本轮未提交、未推送、无新 CI、未部署。
+- 已提交 `15e7e48`（133 files）并推送 origin/main；CI `43592712459` 四 job success（Frontend、Backend Windows、Backend Ubuntu、Integration）；未部署。
+- 本地运行：后端 8000 + 前端 5173，迁移列已补齐。
