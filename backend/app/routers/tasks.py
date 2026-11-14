@@ -31,6 +31,7 @@ from app.deps import get_current_user, require_csrf
 from app.errors import ApiError, ok
 from app.models import Activity, ProgressLog, Task, TaskApplication, TaskDependency, User
 from app.schemas import (
+    ACCEPTANCE_KEY,
     AssignIn,
     Draft,
     ProgressIn,
@@ -47,6 +48,7 @@ from app.schemas import (
     TaskUpdate,
     VerifyIn,
     VerifyOut,
+    normalize_acceptance,
 )
 from app.services import activity_service
 from app.services import application_service
@@ -448,6 +450,9 @@ def create_task(
     if payload.credit_reward is not None and payload.credit_reward < 0:
         raise ApiError(ERR_INVALID_PARAM, "完成奖励积分不能为负数")
 
+    # 成果提交策略（`C-SUBMISSION-POLICY@1`）：写库前校验，非法 4001 且无写入
+    extras = normalize_acceptance(payload.extras)
+
     # 子任务：发布者必须与父任务一致（`2.2.4` 发布规则）
     parent: Task | None = None
     if payload.parent_id is not None:
@@ -518,7 +523,7 @@ def create_task(
         depends_on=dependency_ids[0] if dependency_ids else None,
         sop_guide=payload.sop_guide,
         style_note=payload.style_note,
-        extras=payload.extras,
+        extras=extras,
         reminder_rule=reminder_rule,
         credit_reward=payload.credit_reward,
     )
@@ -716,7 +721,11 @@ def patch_task(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """修改任务：省略字段 = 不修改；显式 ``null`` = 清空该列；``extras={}`` = 清空对象。"""
+    """修改任务：省略字段 = 不修改；显式 ``null`` = 清空该列。
+
+    ``extras`` 为合并语义：请求中的键值覆盖同名字段、其它键保留（``extras={}`` 不再
+    清空对象）；``acceptance`` 显式传 ``null`` 时删除该键、其它键保留。
+    """
     task = _get_task_or_404(db, task_id)
     authz.require_task_view(db, current_user, task)
     authz.require_task_manage(db, current_user, task)
@@ -832,9 +841,14 @@ def patch_task(
             continue
         setattr(task, field, value)
 
-    # extras：{} 表示清空对象；null 视为不修改（`2.2.4` 修改语义 + 实现要点 4）
+    # extras：合并语义（键值覆盖、其它键保留）；null 视为不修改。
+    # 成果提交策略（`C-SUBMISSION-POLICY@1`）在写库前校验，非法 4001 且不落库。
     if "extras" in provided and payload.extras is not None:
-        task.extras = payload.extras
+        incoming = normalize_acceptance(payload.extras)
+        merged = {**(task.extras or {}), **incoming}
+        if ACCEPTANCE_KEY in payload.extras and payload.extras[ACCEPTANCE_KEY] is None:
+            merged.pop(ACCEPTANCE_KEY, None)
+        task.extras = merged
 
     # reminder_rule：显式 null 表示清空为 null
     if "reminder_rule" in provided:
@@ -1060,6 +1074,13 @@ def submit_task(
     if str(task.status) == "cancelled":
         raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
 
+    # 成果提交策略（`C-SUBMISSION-POLICY@1`）：先于 record_submit，失败不改成员状态、不新增版本
+    submission_service.enforce_submit_policy(
+        task,
+        payload.content if payload is not None else None,
+        payload.resource_url if payload is not None else None,
+    )
+
     member, changed = member_service.record_submit(db, task, int(current_user.id))
     if changed:
         submission_service.create_submission(
@@ -1110,6 +1131,9 @@ def upload_submission(
         raise ApiError(ERR_FORBIDDEN, "只有任务成员可以提交完成")
     if str(task.status) == "cancelled":
         raise ApiError(ERR_CONFLICT, "任务当前状态不允许该操作")
+
+    # 成果提交策略（`C-SUBMISSION-POLICY@1`）：通道与扩展名先校验，失败不落盘、不改成员状态
+    submission_service.validate_upload_against_policy(task, payload.file_name)
 
     # base64 体积上限先于解码，避免超大请求进入内存解码（10MB 文件的 base64 约 13.4MB）
     if len(payload.file_base64) > 14 * 1024 * 1024:

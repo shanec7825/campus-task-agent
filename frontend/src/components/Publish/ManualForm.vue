@@ -17,6 +17,13 @@ import { ElMessage } from 'element-plus'
 import { ApiError } from '../../api/client'
 import { findSimilar } from '../../api/kb'
 import { createTask, getTask, listTasks } from '../../api/tasks'
+import {
+  parseSubmissionAcceptance,
+  SUBMISSION_FILE_EXTS,
+  SUBMISSION_MODE_LABELS,
+  SUBMISSION_MODES,
+  submissionFileLabel
+} from '../../types/models'
 import type { SimilarItem, TaskCreatePayload, TaskItem } from '../../types/models'
 import TaskContentSections from '../task/TaskContentSections.vue'
 import SimilarTip from './SimilarTip.vue'
@@ -29,8 +36,21 @@ interface ExtraRow {
   value: string
 }
 
+/** 成果要求草稿：`modes` 用 `string[]` 兼容 el-checkbox-group 的 v-model 类型 */
+interface AcceptanceDraft {
+  modes: string[]
+  allowed_exts: string[]
+  ai_precheck: boolean
+}
+
+/** `extras` 中的成果要求保留键，动态键值对不得占用 */
+const ACCEPTANCE_EXTRA_KEY = 'acceptance'
+
 /** 由活动详情进入发布页时携带的活动归属；`null` 表示创建独立任务 */
-const props = withDefaults(defineProps<{ activityId?: number | null }>(), { activityId: null })
+const props = withDefaults(
+  defineProps<{ activityId?: number | null; task?: TaskItem | null }>(),
+  { activityId: null, task: null }
+)
 
 const router = useRouter()
 
@@ -50,6 +70,36 @@ const form = reactive({
 
 const extras = ref<ExtraRow[]>([])
 const submitting = ref(false)
+
+/** 成果要求（`C-SUBMISSION-POLICY@1`）：写入 `extras.acceptance`，默认三种方式全允许 */
+const acceptance = reactive<AcceptanceDraft>({
+  modes: [...SUBMISSION_MODES],
+  allowed_exts: [...SUBMISSION_FILE_EXTS],
+  ai_precheck: false
+})
+
+/** 仅勾选「文件上传」时才要求选择允许的文件类型 */
+const fileModeEnabled = computed<boolean>(() => acceptance.modes.includes('file'))
+
+function resetAcceptance(): void {
+  acceptance.modes = [...SUBMISSION_MODES]
+  acceptance.allowed_exts = [...SUBMISSION_FILE_EXTS]
+  acceptance.ai_precheck = false
+}
+
+/** 编辑既有任务时回显成果要求；未配置或结构非法时回到「三种方式全允许」 */
+function hydrateAcceptance(source: TaskItem | null): void {
+  const stored = parseSubmissionAcceptance(source?.extras ?? null)
+  if (!stored) {
+    resetAcceptance()
+    return
+  }
+  acceptance.modes = [...stored.modes]
+  acceptance.allowed_exts = [...stored.allowed_exts]
+  acceptance.ai_precheck = stored.ai_precheck
+}
+
+watch(() => props.task, (value) => hydrateAcceptance(value ?? null), { immediate: true })
 
 /** 同活动前置任务（仅活动入口下加载；加载失败不阻塞发布） */
 const dependencyOptions = ref<TaskItem[]>([])
@@ -201,6 +251,10 @@ function collectExtras(): Record<string, unknown> | null {
       ElMessage.error(`扩展项键名重复：${key}`)
       return null
     }
+    if (key === ACCEPTANCE_EXTRA_KEY) {
+      ElMessage.error(`扩展项键名「${ACCEPTANCE_EXTRA_KEY}」为成果要求保留键，请改用其它键名`)
+      return null
+    }
     result[key] = value
   }
   return result
@@ -222,6 +276,7 @@ function resetForm(): void {
   selectedDependencies.value = []
   similarItem.value = null
   lastSimilarQuery = ''
+  resetAcceptance()
 }
 
 async function handleSubmit(): Promise<void> {
@@ -235,6 +290,20 @@ async function handleSubmit(): Promise<void> {
 
   const extrasPayload = collectExtras()
   if (!extrasPayload) return
+
+  if (acceptance.modes.length === 0) {
+    ElMessage.error('请至少选择一种成果提交方式')
+    return
+  }
+  if (fileModeEnabled.value && acceptance.allowed_exts.length === 0) {
+    ElMessage.error('选择文件提交时，请至少选择一种允许的文件类型')
+    return
+  }
+  extrasPayload[ACCEPTANCE_EXTRA_KEY] = {
+    modes: [...acceptance.modes],
+    allowed_exts: [...acceptance.allowed_exts],
+    ai_precheck: acceptance.ai_precheck
+  }
 
   if (form.start_time && form.deadline && form.deadline < form.start_time) {
     ElMessage.error('截止时间不能早于开始时间')
@@ -356,6 +425,39 @@ async function handleSubmit(): Promise<void> {
         />
       </el-form-item>
 
+      <el-form-item label="成果要求">
+        <div class="manual-form__acceptance">
+          <div class="manual-form__acceptance-row">
+            <span class="manual-form__acceptance-label">提交方式（可多选）</span>
+            <el-checkbox-group v-model="acceptance.modes" class="manual-form__checks">
+              <el-checkbox v-for="mode in SUBMISSION_MODES" :key="mode" :value="mode">
+                {{ SUBMISSION_MODE_LABELS[mode] }}
+              </el-checkbox>
+            </el-checkbox-group>
+          </div>
+          <div class="manual-form__acceptance-row">
+            <span class="manual-form__acceptance-label">允许文件类型</span>
+            <el-checkbox-group
+              v-model="acceptance.allowed_exts"
+              :disabled="!fileModeEnabled"
+              class="manual-form__checks"
+            >
+              <el-checkbox v-for="ext in SUBMISSION_FILE_EXTS" :key="ext" :value="ext">
+                {{ submissionFileLabel(ext) }}
+              </el-checkbox>
+            </el-checkbox-group>
+          </div>
+          <p class="manual-form__tip">
+            未勾选「文件上传」时忽略文件类型；学生只能按所选方式提交成果。
+          </p>
+          <div class="manual-form__acceptance-row">
+            <span class="manual-form__acceptance-label">AI 成果预审</span>
+            <el-switch v-model="acceptance.ai_precheck" />
+            <span class="manual-form__tip">开启后学生提交会自动运行预审；预审不等于人工验收。</span>
+          </div>
+        </div>
+      </el-form-item>
+
       <el-form-item label="扩展项（任意键值对）">
         <div class="manual-form__extras">
           <div v-for="(row, index) in extras" :key="row.uid" class="manual-form__extra-row">
@@ -449,6 +551,36 @@ async function handleSubmit(): Promise<void> {
   width: 100%;
 }
 
+.manual-form__acceptance {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.manual-form__acceptance-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+}
+
+.manual-form__acceptance-label {
+  min-width: 112px;
+  font-size: var(--app-font-aux-lg);
+  color: var(--app-text-secondary);
+}
+
+.manual-form__checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.manual-form__checks :deep(.el-checkbox) {
+  margin-right: 0;
+}
+
 .manual-form__dependency-select {
   width: 100%;
 }
@@ -503,6 +635,19 @@ async function handleSubmit(): Promise<void> {
   .manual-form__switches {
     flex-wrap: wrap;
     gap: 8px 16px;
+  }
+
+  .manual-form__acceptance-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .manual-form__acceptance-label {
+    min-width: 0;
+  }
+
+  .manual-form__checks :deep(.el-checkbox) {
+    min-height: var(--app-touch);
   }
 
   .manual-form__footer {

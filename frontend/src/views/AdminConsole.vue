@@ -16,6 +16,7 @@ import { listActivities } from '../api/activities'
 import { decideApplication, listApplications } from '../api/applications'
 import { ApiError } from '../api/client'
 import { assignTask, getTaskChangeImpact, getTaskSubmissions, listTasks, patchTask, verifyTask } from '../api/tasks'
+import { getTask } from '../api/tasks'
 import AssignDialog, { type AssignCandidate } from '../components/admin/AssignDialog.vue'
 import ReminderRuleForm, { DEFAULT_REMINDER_RULE } from '../components/admin/ReminderRuleForm.vue'
 import EmptyState from '../components/common/EmptyState.vue'
@@ -25,6 +26,15 @@ import ActivityTaskTable from '../components/task/ActivityTaskTable.vue'
 import StatusTag from '../components/task/StatusTag.vue'
 import { applicationStatusMeta, formatDeadline, memberStatusMeta } from '../components/task/TaskCard.vue'
 import { useUserStore } from '../stores/user'
+import {
+  effectiveSubmissionFileExts,
+  parseSubmissionAcceptance,
+  SUBMISSION_FILE_EXTS,
+  SUBMISSION_MODE_LABELS,
+  SUBMISSION_MODES,
+  submissionAcceptanceSummary,
+  submissionFileLabel
+} from '../types/models'
 import type {
   Activity,
   ActivitySubtaskNode,
@@ -96,6 +106,18 @@ const ruleTarget = ref<TaskItem | null>(null)
 const ruleDraft = ref<ReminderRule>({ ...DEFAULT_REMINDER_RULE })
 const ruleLoading = ref(false)
 
+/** 成果要求编辑（`C-SUBMISSION-POLICY@1`，R2-01 编辑入口） */
+const acceptanceVisible = ref(false)
+const acceptanceTarget = ref<TaskItem | null>(null)
+const acceptanceWasConfigured = ref(false)
+const acceptanceLoading = ref(false)
+const acceptanceDraft = ref<AcceptanceDraft>({
+  modes: [...SUBMISSION_MODES],
+  allowed_exts: [...SUBMISSION_FILE_EXTS],
+  ai_precheck: false
+})
+const acceptanceFileMode = computed<boolean>(() => acceptanceDraft.value.modes.includes('file'))
+
 /** 报名审核弹窗（R16-AC7/AC8） */
 const auditVisible = ref(false)
 const auditTarget = ref<TaskItem | null>(null)
@@ -125,6 +147,13 @@ const filteredTasks = computed<TaskItem[]>(() => {
 /** 后台任务行：保留 `TaskItem` 写操作字段，同时满足共用表格的只读节点契约 */
 type AdminTableTask = TaskItem & ActivityTaskNode
 type AdminSubtaskRow = TaskItem & ActivitySubtaskNode
+
+/** 成果要求草稿：`modes` 用 `string[]` 兼容 el-checkbox-group 的 v-model 类型 */
+interface AcceptanceDraft {
+  modes: string[]
+  allowed_exts: string[]
+  ai_precheck: boolean
+}
 
 function assigneeList(task: TaskItem): ActivityTaskNode['assignees'] {
   return (task.members ?? []).map((member) => ({
@@ -491,6 +520,70 @@ function ruleSummary(task: TaskItem): string {
   return flags.join(' / ')
 }
 
+/** 当前成果要求摘要（与任务详情同文案）；未配置时展示默认口径 */
+function acceptanceSummary(task: TaskItem): string {
+  return (
+    submissionAcceptanceSummary(parseSubmissionAcceptance(task.extras)) ||
+    '默认（三种方式均可，不自动预审）'
+  )
+}
+
+function openAcceptance(task: TaskItem): void {
+  const stored = parseSubmissionAcceptance(task.extras)
+  acceptanceTarget.value = task
+  acceptanceWasConfigured.value = stored !== null
+  acceptanceDraft.value = stored
+    ? {
+        modes: [...stored.modes],
+        allowed_exts: [...stored.allowed_exts],
+        ai_precheck: stored.ai_precheck
+      }
+    : {
+        modes: [...SUBMISSION_MODES],
+        allowed_exts: [...SUBMISSION_FILE_EXTS],
+        ai_precheck: false
+      }
+  acceptanceVisible.value = true
+}
+
+async function saveAcceptance(): Promise<void> {
+  const target = acceptanceTarget.value
+  if (!target || acceptanceLoading.value) return
+  const draft = acceptanceDraft.value
+  if (draft.modes.length === 0) {
+    ElMessage.warning('请至少选择一种成果提交方式')
+    return
+  }
+  acceptanceLoading.value = true
+  try {
+    // 先取最新 extras，仅替换 acceptance，避免清空其它扩展键
+    const detail = await getTask(target.id)
+    const extras: Record<string, unknown> = { ...(detail.extras ?? {}) }
+    extras.acceptance = {
+      modes: [...draft.modes],
+      allowed_exts: effectiveSubmissionFileExts(draft.allowed_exts),
+      ai_precheck: draft.ai_precheck
+    }
+    await patchTask(target.id, { extras })
+    ElMessage.success('成果要求已保存')
+    acceptanceVisible.value = false
+
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 4001) {
+      ElMessage.error(err.message || '成果要求配置不合法')
+    } else {
+      ElMessage.error(errorMessage(err))
+    }
+  } finally {
+    acceptanceLoading.value = false
+  }
+}
+
+function onAcceptanceClosed(): void {
+  acceptanceTarget.value = null
+  void load()
+}
+
 /** 表格 `meta` 摘要：分配方式 · 报名 · 积分 · 催办；空值不占位 */
 function metaSummary(task: ActivityTaskNode | ActivitySubtaskNode): string {
   const row = asRow(task)
@@ -668,6 +761,7 @@ onMounted(async () => {
             >
               <template #meta="{ task }">
                 <span v-if="metaSummary(task)" class="task-table__meta">{{ metaSummary(task) }}</span>
+                <span class="acceptance-meta">成果要求：{{ acceptanceSummary(asRow(task)) }}</span>
               </template>
               <template #actions="{ task }">
                 <div class="row-actions">
@@ -706,6 +800,7 @@ onMounted(async () => {
                   >
                     改截止时间
                   </el-button>
+                  <el-button size="small" text @click="openAcceptance(asRow(task))">成果要求</el-button>
                   <el-button size="small" text @click="openRule(asRow(task))">催办规则</el-button>
                   <el-button size="small" text @click="goDetail(task.id)">详情</el-button>
                   <el-button
@@ -784,6 +879,10 @@ onMounted(async () => {
                     <dt>催办规则</dt>
                     <dd>{{ ruleSummary(task) }}</dd>
                   </div>
+                  <div class="meta-row">
+                    <dt>成果要求</dt>
+                    <dd>{{ acceptanceSummary(task) }}</dd>
+                  </div>
                 </dl>
 
                 <div class="mobile-card__actions">
@@ -799,6 +898,7 @@ onMounted(async () => {
                   <el-button v-if="canEditDeadline(task)" size="small" @click="openDeadline(task)">
                     改截止时间
                   </el-button>
+                  <el-button size="small" @click="openAcceptance(task)">成果要求</el-button>
                   <el-button size="small" @click="openRule(task)">催办规则</el-button>
                   <el-button size="small" @click="goDetail(task.id)">详情</el-button>
                   <el-button
@@ -985,6 +1085,57 @@ onMounted(async () => {
     <el-dialog v-model="ruleVisible" title="催办规则" width="600px" :close-on-click-modal="false">
       <p class="verify-task">{{ ruleTarget?.title }}</p>
       <ReminderRuleForm v-model="ruleDraft" :loading="ruleLoading" @submit="saveRule" />
+    </el-dialog>
+
+    <el-dialog
+      v-model="acceptanceVisible"
+      title="成果要求"
+      width="min(560px, calc(100vw - 32px))"
+      :close-on-click-modal="false"
+      class="acceptance-dialog"
+      @closed="onAcceptanceClosed"
+    >
+      <p class="verify-task">{{ acceptanceTarget?.title }}</p>
+      <el-form label-position="top">
+        <el-form-item label="提交方式（可多选）">
+          <el-checkbox-group v-model="acceptanceDraft.modes" class="acceptance-checks">
+            <el-checkbox v-for="mode in SUBMISSION_MODES" :key="mode" :value="mode">
+              {{ SUBMISSION_MODE_LABELS[mode] }}
+            </el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+        <el-form-item label="允许文件类型">
+          <el-checkbox-group
+            v-model="acceptanceDraft.allowed_exts"
+            :disabled="!acceptanceFileMode"
+            class="acceptance-checks"
+          >
+            <el-checkbox v-for="ext in SUBMISSION_FILE_EXTS" :key="ext" :value="ext">
+              {{ submissionFileLabel(ext) }}
+            </el-checkbox>
+          </el-checkbox-group>
+          <p class="acceptance-hint">
+            未勾选任何类型时按后端语义允许全部四种；未选择「文件上传」时忽略该配置。
+          </p>
+        </el-form-item>
+        <el-form-item label="AI 成果预审">
+          <div class="acceptance-switch">
+            <el-switch v-model="acceptanceDraft.ai_precheck" />
+            <span class="acceptance-hint">开启后学生提交会自动预审；预审不等于人工验收。</span>
+          </div>
+        </el-form-item>
+        <el-alert
+          v-if="!acceptanceWasConfigured"
+          type="info"
+          :closable="false"
+          show-icon
+          title="该任务尚未配置成果要求，当前默认为三种方式均可；保存后按此处配置限制提交。"
+        />
+      </el-form>
+      <template #footer>
+        <el-button :disabled="acceptanceLoading" @click="acceptanceVisible = false">取消</el-button>
+        <el-button type="primary" :loading="acceptanceLoading" @click="saveAcceptance">保存</el-button>
+      </template>
     </el-dialog>
 
     <el-dialog v-model="auditVisible" title="审核报名" width="760px" :close-on-click-modal="false">
@@ -1345,5 +1496,52 @@ onMounted(async () => {
 
 .mobile-card__actions :deep(.el-button) {
   margin-left: 0 !important;
+}
+
+.acceptance-meta {
+  display: block;
+  font-size: var(--app-font-aux);
+  line-height: 1.5;
+  color: var(--app-text-muted);
+  word-break: break-word;
+}
+
+.acceptance-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.acceptance-checks :deep(.el-checkbox) {
+  margin-right: 0;
+}
+
+.acceptance-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.acceptance-hint {
+  margin: 4px 0 0;
+  font-size: var(--app-font-aux);
+  line-height: 1.6;
+  color: var(--app-text-muted);
+}
+
+@media (max-width: 768px) {
+  .acceptance-checks :deep(.el-checkbox) {
+    min-height: var(--app-touch);
+  }
+
+  .acceptance-switch {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .acceptance-dialog :deep(.el-button) {
+    min-height: var(--app-touch);
+  }
 }
 </style>

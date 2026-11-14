@@ -1,7 +1,9 @@
 # 当前开发交接
 
 > 更新日期：2026-11-14（Asia/Shanghai）。当前计划 `v1-baseline`（本地）：按用户《校园任务助手：功能需求整理（V1）》拆为 S1～S6，每阶段一次提交 + 推送 + CI，最后部署验收。
-> **stage40（S1 活动 + 多任务整批原子发布）已在本地完成并通过独立审查修复**；提交/推送/CI 状态以回填提交为准（本行先记为「未提交」）。
+> **stage40（S1 活动 + 多任务整批原子发布）已完成并推送 `54bc81e`**，CI `43594367179` success。
+> **stage41（S2 成果提交方式与验收要求）已在本地完成并通过独立审查修复**；提交/CI 以回填提交为准。
+> 上一轮 `15e7e48` 的 CI `43592712459` 亦为 success；未部署。
 > 上一轮已完成 AIW-14 r1/r2/r4、AIW-09 历史增量、AIW-10 文件与预审、AIW-12 额度并发、AIW-13 收口，提交 `15e7e48`，CI `43592712459` 四 job success；未部署。
 > AIW-10 可执行增量已完成（预审资料版本 + 过期验收拒绝）；附件上传/解析仍按 D-04 挂起。
 > stage38 已收口：侧栏初始化请求复测 25/25 正常；后台验收补过期预审标记与禁用，契约 38/38、浏览器 18/18。
@@ -10,7 +12,7 @@
 
 ## 1. 当前事实与授权
 
-- 分支 `main`，上一提交 `15e7e48895068a339776143955c8469c91429327`（CI `43592712459` 四 job success）。stage40 改动当前在本地工作区，尚未提交。
+- 分支 `main`，上一提交 `54bc81e`（S1 整批发布，CI `43594367179` success）。stage41（S2）改动当前在本地工作区，尚未提交。
 - 本轮用户授权：按用户 V1 需求连续推进 S1 → S6，每阶段验证、独立审查、留痕后提交并推送，检查对应 SHA 的 CI；**最后阶段做部署验收**。部署目标（远程主机/本地生产模式）在 S6 开工前确认；不得用旧 CI 结果代替本次。
 - AIW-11 整个取消的决定继续有效；stage40 只按 V1 P0-1 恢复「整批原子发布」，不恢复其自动推荐、业务动作卡等能力。
 - 缺 D-04（文件格式）、D-05（成就规则）、D-06（真机/真实模型）时只挂起直接相关子任务。
@@ -20,7 +22,7 @@
 1. [AGENTS](../AGENTS.md)、[记录规则](DEVELOPMENT_RECORDS.md)、[浏览器单步协议](BROWSER_VALIDATION.md)。
 2. 本地 [roadmap](../.codeartsdoer/plans/ai-workbench/roadmap.md)、[需求](../.codeartsdoer/plans/ai-workbench/requirements.md)、[共同约束](../.codeartsdoer/plans/ai-workbench/execution-contract.md)、[决策](../.codeartsdoer/plans/ai-workbench/decisions.md)、[矩阵](../.codeartsdoer/plans/ai-workbench/acceptance-matrix.md)。
 3. 阶段计划：V1 基线 [roadmap](../.codeartsdoer/plans/v1-baseline/roadmap.md)、[S1 design](../.codeartsdoer/plans/v1-baseline/s1-batch-publish/design.md) / [S1 task](../.codeartsdoer/plans/v1-baseline/s1-batch-publish/task.md)、[S2 design](../.codeartsdoer/plans/v1-baseline/s2-submission-policy/design.md) / [S2 task](../.codeartsdoer/plans/v1-baseline/s2-submission-policy/task.md)；历史计划：[AIW-14 design §8/§9](../.codeartsdoer/plans/aiw14-workbench-library-search/design.md)、[UI r4](../.codeartsdoer/plans/aiw14-workbench-library-search/ui-reference-r4.md)、[AIW-09 design §5](../.codeartsdoer/plans/aiw09-context-voice/design.md)、[AIW-12 design §4](../.codeartsdoer/plans/aiw12-assets-quota/design.md)、各自 `task.md`。
-4. 阶段记录：[stage40 V1-S1 整批发布](../codearts_proof/ai_dialogue/stage40_活动与多任务整批发布.md)、[stage32 AIW-14 实施](../codearts_proof/ai_dialogue/stage32_AIW-14浏览与Library实施.md)、[stage33 AIW-09 历史](../codearts_proof/ai_dialogue/stage33_AIW-09历史会话.md)、[stage34 AIW-12 额度](../codearts_proof/ai_dialogue/stage34_AIW-12额度并发.md)、[stage35 AIW-14 r4](../codearts_proof/ai_dialogue/stage35_AIW-14r4头像短卡与分工表.md)、[stage36 AIW-10 预审资料版本](../codearts_proof/ai_dialogue/stage36_AIW-10预审资料版本.md)、[stage37 AIW-13 产品级验收](../codearts_proof/ai_dialogue/stage37_AIW-13产品级验收.md)、[stage38 AIW-13 遗留缺陷收口](../codearts_proof/ai_dialogue/stage38_AIW-13遗留缺陷收口.md)、[stage39 全局壳层与成果文件](../codearts_proof/ai_dialogue/stage39_全局壳层AI三栏与成果文件.md)。
+4. 阶段记录：[stage41 V1-S2 成果要求](../codearts_proof/ai_dialogue/stage41_成果提交策略与验收要求.md)、[stage40 V1-S1 整批发布](../codearts_proof/ai_dialogue/stage40_活动与多任务整批发布.md)、[stage32 AIW-14 实施](../codearts_proof/ai_dialogue/stage32_AIW-14浏览与Library实施.md)、[stage33 AIW-09 历史](../codearts_proof/ai_dialogue/stage33_AIW-09历史会话.md)、[stage34 AIW-12 额度](../codearts_proof/ai_dialogue/stage34_AIW-12额度并发.md)、[stage35 AIW-14 r4](../codearts_proof/ai_dialogue/stage35_AIW-14r4头像短卡与分工表.md)、[stage36 AIW-10 预审资料版本](../codearts_proof/ai_dialogue/stage36_AIW-10预审资料版本.md)、[stage37 AIW-13 产品级验收](../codearts_proof/ai_dialogue/stage37_AIW-13产品级验收.md)、[stage38 AIW-13 遗留缺陷收口](../codearts_proof/ai_dialogue/stage38_AIW-13遗留缺陷收口.md)、[stage39 全局壳层与成果文件](../codearts_proof/ai_dialogue/stage39_全局壳层AI三栏与成果文件.md)。
 
 详细计划被 Git 忽略，仅本地。换机器/worktree 缺计划时报告，不用摘要冒充完整契约。
 
@@ -79,10 +81,19 @@
    - 门禁：新测试 **12 passed**（含 flush 后异常回滚、KB 索引、边界 4001/4040）、活动/图/流程回归 **13+13+8 passed**、`vue-tsc` 0 error、build 成功、契约 **43/43**。
    - 独立审查 1 Critical / 2 Important 全部修复；9 条 Suggestion 记录未处置；未开第二轮复核。
 
+10. **stage41 V1-S2 成果提交方式与验收要求**
+   - `tasks.extras.acceptance`（`C-SUBMISSION-POLICY@1`）：提交方式 text/link/file、允许扩展名、AI 预审开关；未配置任务保持宽松。
+   - 后端在创建/编辑/提交/上传四处强制；批量发布写库前归一；PATCH extras 改合并语义。
+   - 前端：发布表单「成果要求」区块、任务详情按策略渲染（空扩展名回退四类）、后台任务操作区「成果要求」编辑对话框。
+   - CI 新增 `test_v1_batch_publish.py` + `test_v1_submission_policy.py` 步骤。
+   - 门禁：**10 + 14 + 4 + 1 passed**、`vue-tsc` 0 error、build 成功、契约 **43/43**。
+   - 审查 1 Critical / 3 Important 全部修复；8 条 Suggestion 记录未处置；未开第二轮独立复审。
+
 ## 4. 问题与待条件
 
 - **AIW-14 已完成 r1/r2/r4**；r4 的浏览器证据为模拟视口（1440/390），深色主题与真机未在 r4 重测。
-- **V1 基线进度**：S1 已完成本地实现与审查；S2 起为待实施（契约已冻结 S1/S2）。P0 剩余：成果提交策略（S2）、组织资料检索开关（S3）；P1：文档解析（S3）、个人 Library 引用（S4）、AI 任务查询增强（S4）、AI 任务树草案（S5）；P2：文件正文预审、优秀成果归档（S5）。
+- **V1 基线进度**：S1（整批发布）已提交 `54bc81e` 且 CI success；S2（成果提交策略）本地完成并通过独立审查修复；S3～S6 待实施（S3 契约 `C-DOC-PARSE@1`/`C-ORG-LIBRARY@1` 已冻结）。P0 剩余：组织资料检索开关（S3）；P1：文档解析（S3）、个人 Library 引用（S4）、AI 任务查询增强（S4）、AI 任务树草案（S5）；P2：文件正文预审、优秀成果归档（S5）。
+- **S2 已知限制**：AI 智能模式发布与活动整批发布页不提供成果要求控件，其任务默认未配置（宽松）；批量创建任务可由后台「成果要求」对话框补设。
 - **AIW-10 文件链路（stage39）**：成果文件上传/下载与 TXT/MD 预审取文已落地；PDF/DOCX 仍只存储不解析；未引入解析依赖；Library 仍只存链接。
 - **AIW-12 成就空窗**：D-05 规则未确认；未新增规则、展示或发奖写路径。
 - **AIW-13 可执行部分完成**：令牌化、角色/模拟视口、过期预审 UI、390 完整成果链路、移动搜索/Library/历史与键盘焦点已验；真机语音/安全区/键盘、固定真实模型评测、人工晚会链路与录屏未验；部署/提交未授权。
@@ -92,7 +103,7 @@
 
 ## 5. 本轮交付状态与下一次最短步骤
 
-- stage40（S1）本地完成并已通过独立审查修复；提交 SHA、推送与对应 CI 在紧随其后的回填提交中登记（本段写作时尚未提交，不预填结果）。上一轮 `15e7e48` 的 CI `43592712459` 四 job success 只代表上一轮。历史证据：`codearts_proof/reports/aiw14-browser.md`、`codearts_proof/screenshots/aiw14-*.png`、`codearts_proof/reviews/stage30_review_r{1,2,3}.md`、`stage31_quota_review.md`、`work/aiw14/browse/{verify-browse-r4.cjs,r4-report.json}`、`work/aiw14/backend-runall-aiw10-final.log`（本地忽略）。
-- 下一次最短可执行步骤：按 `.codeartsdoer/plans/v1-baseline/s2-submission-policy/task.md` 派工 S2（后端 `C-SUBMISSION-POLICY@1` + 前端表单），完成后同样验证、独立审查、提交推送并检查 CI；S3 起在开工前补 design/task。
+- stage41（S2）本地完成并通过独立审查修复；提交 SHA、推送与对应 CI 在紧随其后的回填提交中登记（本段写作时尚未提交，不预填结果）。上一提交 `54bc81e` 的 CI `43594367179` success 只代表 S1。历史证据：`codearts_proof/reports/aiw14-browser.md`、`codearts_proof/screenshots/aiw14-*.png`、`codearts_proof/reviews/stage30_review_r{1,2,3}.md`、`stage31_quota_review.md`、`work/aiw14/browse/{verify-browse-r4.cjs,r4-report.json}`、`work/aiw14/backend-runall-aiw10-final.log`（本地忽略）。
+- 下一次最短可执行步骤：按 `.codeartsdoer/plans/v1-baseline/s3-org-library/task.md` 派工 S3（先 T3-1 解析/模型，再 T3-2 接口与检索，T3-3 前端可并行），完成后验证、独立审查、提交推送并检查 CI。
 - 本地运行：后端 `python -m uvicorn app.main:app --port 8000`（`backend/`），前端 `npm run dev`（`frontend/`，5173）；当前两端口均在运行，迁移列已补齐。
 - 回填提交只更新交接/记录，不改变代码；其自身 CI 另行跟踪。

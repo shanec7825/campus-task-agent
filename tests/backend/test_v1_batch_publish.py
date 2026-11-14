@@ -601,3 +601,75 @@ def test_publish_batch_boundary_errors(
         f"{label}：错误消息应包含 {keyword!r}，实际 {payload.get('msg')!r}"
     )
     assert _counts() == before, f"{label}：失败后不得留下任何活动 / 任务 / 依赖行"
+
+def test_publish_batch_invalid_acceptance_rolls_back(ctx: _Ctx) -> None:
+    """批内任务 ``extras.acceptance`` 非法：``4001`` 且不写活动 / 任务 / 依赖行。"""
+    before = _counts()
+    payload = _err(
+        ctx.client,
+        "POST",
+        "/api/activities/publish-batch",
+        code=ERR_INVALID_PARAM,
+        headers=ctx.teacher,
+        body=_batch_body(
+            ctx,
+            [
+                {"key": "ok", "title": "合法任务"},
+                {
+                    "key": "bad",
+                    "title": "非法策略任务",
+                    "extras": {"acceptance": {"modes": ["video"]}},
+                },
+            ],
+            title="非法提交策略",
+        ),
+        label="非法 acceptance",
+    )
+    assert "成果提交方式配置不合法" in str(payload.get("msg")), (
+        f"错误消息应指出提交方式非法，实际 {payload.get('msg')!r}"
+    )
+    assert _counts() == before, "非法策略失败后不得留下任何活动 / 任务 / 依赖行"
+
+
+def test_publish_batch_normalizes_acceptance(ctx: _Ctx) -> None:
+    """合法 acceptance 经 normalize_acceptance 规范化后写入任务，其它 extras 键保留。"""
+    data = _ok(
+        ctx.client,
+        "POST",
+        "/api/activities/publish-batch",
+        headers=ctx.teacher,
+        body=_batch_body(
+            ctx,
+            [
+                {
+                    "key": "file",
+                    "title": "文件成果任务",
+                    "extras": {
+                        "custom": "keep",
+                        "acceptance": {
+                            "modes": ["file", "file"],
+                            "allowed_exts": [".PDF"],
+                            "ai_precheck": True,
+                        },
+                    },
+                }
+            ],
+            title="规范化提交策略",
+        ),
+        label="规范化 acceptance",
+    )
+    task_id = int(data["tasks"][0]["id"])
+    detail = _ok(
+        ctx.client,
+        "GET",
+        f"/api/tasks/{task_id}",
+        headers=ctx.teacher,
+        label="任务详情",
+    )
+    extras = detail["extras"]
+    assert extras["custom"] == "keep", "其它 extras 键应原样保留"
+    assert extras["acceptance"] == {
+        "modes": ["file"],
+        "allowed_exts": [".pdf"],
+        "ai_precheck": True,
+    }, "acceptance 策略应去重并规范化扩展名大小写"

@@ -755,6 +755,108 @@ export interface SubmitPayload {
   resource_url?: string | null
 }
 
+// --------------------------------------------------------------------------- //
+// 成果提交策略（`C-SUBMISSION-POLICY@1`）
+// --------------------------------------------------------------------------- //
+
+/** 成果提交方式：文字说明 / 成果链接 / 文件上传 */
+export type SubmissionMode = 'text' | 'link' | 'file'
+
+/** 全部提交方式（顺序即界面顺序） */
+export const SUBMISSION_MODES: SubmissionMode[] = ['text', 'link', 'file']
+
+/** 提交方式展示名 */
+export const SUBMISSION_MODE_LABELS: Record<SubmissionMode, string> = {
+  text: '文字说明',
+  link: '成果链接',
+  file: '文件上传'
+}
+
+/** 未配置策略时的文件扩展名白名单（与后端全局白名单一致） */
+export const SUBMISSION_FILE_EXTS: string[] = ['.pdf', '.docx', '.txt', '.md']
+
+/** 扩展名展示名 */
+export const SUBMISSION_FILE_LABELS: Record<string, string> = {
+  '.pdf': 'PDF',
+  '.docx': 'DOCX',
+  '.txt': 'TXT',
+  '.md': 'Markdown'
+}
+
+/** 任务成果提交策略（`tasks.extras["acceptance"]`） */
+export interface SubmissionAcceptance {
+  modes: SubmissionMode[]
+  allowed_exts: string[]
+  ai_precheck: boolean
+}
+
+/** 扩展名展示名；未知类型原样返回，避免界面出现空标签 */
+export function submissionFileLabel(ext: string): string {
+  return SUBMISSION_FILE_LABELS[ext] ?? ext
+}
+
+export function isSubmissionMode(value: unknown): value is SubmissionMode {
+  return value === 'text' || value === 'link' || value === 'file'
+}
+
+/**
+ * 解析 `extras.acceptance`。
+ * 未配置或结构非法时返回 `null`，调用方按「三种方式全允许」处理。
+ */
+export function parseSubmissionAcceptance(
+  extras: Record<string, unknown> | null | undefined
+): SubmissionAcceptance | null {
+  const raw = extras?.acceptance
+  if (raw === null || raw === undefined || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null
+  }
+  const record = raw as Record<string, unknown>
+  const modes = Array.isArray(record.modes)
+    ? [...new Set(record.modes.filter(isSubmissionMode))]
+    : []
+  if (modes.length === 0) return null
+  const allowedExts = Array.isArray(record.allowed_exts)
+    ? [
+        ...new Set(
+          record.allowed_exts
+            .filter((ext): ext is string => typeof ext === 'string')
+            .map((ext) => ext.trim().toLowerCase())
+            .filter((ext) => SUBMISSION_FILE_EXTS.includes(ext))
+        )
+      ]
+    : []
+  return { modes, allowed_exts: allowedExts, ai_precheck: record.ai_precheck === true }
+}
+
+/**
+ * 有效文件扩展名：`allowed_exts` 为空（或全部非法）时回退为全局四类。
+ * 后端对空 `allowed_exts` 按「不限具体类型」处理，前端渲染与校验必须保持同一语义。
+ */
+export function effectiveSubmissionFileExts(allowedExts: string[]): string[] {
+  const normalized = [
+    ...new Set(
+      allowedExts
+        .map((ext) => ext.trim().toLowerCase())
+        .filter((ext) => SUBMISSION_FILE_EXTS.includes(ext))
+    )
+  ]
+  return normalized.length > 0 ? normalized : [...SUBMISSION_FILE_EXTS]
+}
+
+/** 成果要求摘要（与任务详情同文案）：未配置返回空串，由调用方决定兜底文案 */
+export function submissionAcceptanceSummary(acceptance: SubmissionAcceptance | null): string {
+  if (!acceptance) return ''
+  const parts = [acceptance.modes.map((mode) => SUBMISSION_MODE_LABELS[mode]).join(' / ')]
+  if (acceptance.modes.includes('file')) {
+    const fileLabels = effectiveSubmissionFileExts(acceptance.allowed_exts)
+      .map(submissionFileLabel)
+      .join(' / ')
+    parts.push(`文件类型：${fileLabels}`)
+  }
+  if (acceptance.ai_precheck) parts.push('AI 成果预审已开启')
+  return parts.join(' · ')
+}
+
 export type PrecheckStatus = 'pass' | 'fail' | 'warn' | 'unknown'
 export type PrecheckVerdict = 'pass' | 'fail' | 'unknown'
 

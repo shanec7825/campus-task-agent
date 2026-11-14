@@ -38,13 +38,24 @@ import {
   quotaText
 } from '../components/task/TaskCard.vue'
 import { useUserStore } from '../stores/user'
+import {
+  effectiveSubmissionFileExts,
+  parseSubmissionAcceptance,
+  SUBMISSION_FILE_EXTS,
+  SUBMISSION_MODE_LABELS,
+  SUBMISSION_MODES,
+  submissionAcceptanceSummary,
+  submissionFileLabel
+} from '../types/models'
 import type {
   ApplicationStatus,
   MemberStatus,
   PrecheckResult,
   PrecheckStatus,
   ResourceItem,
+  SubmissionAcceptance,
   SubmissionItem,
+  SubmissionMode,
   TaskBrief,
   TaskDetail,
   TaskGraph as TaskGraphModel,
@@ -80,7 +91,41 @@ const submitFile = ref<File | null>(null)
 const submitFileError = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const FILE_MAX_BYTES = 10 * 1024 * 1024
-const FILE_EXTS = ['.txt', '.md', '.pdf', '.docx']
+
+/** 成果提交策略（`C-SUBMISSION-POLICY@1`）：未配置时按三种方式全允许处理 */
+const acceptance = computed<SubmissionAcceptance | null>(() =>
+  task.value ? parseSubmissionAcceptance(task.value.extras) : null
+)
+const submissionModes = computed<SubmissionMode[]>(() =>
+  acceptance.value ? acceptance.value.modes : SUBMISSION_MODES
+)
+const canSubmitText = computed<boolean>(() => submissionModes.value.includes('text'))
+const canSubmitLink = computed<boolean>(() => submissionModes.value.includes('link'))
+const canSubmitFile = computed<boolean>(() => submissionModes.value.includes('file'))
+const allowedFileExts = computed<string[]>(() =>
+  acceptance.value
+    ? effectiveSubmissionFileExts(acceptance.value.allowed_exts)
+    : SUBMISSION_FILE_EXTS
+)
+const fileAccept = computed<string>(() => allowedFileExts.value.join(','))
+const precheckEnabled = computed<boolean>(() => acceptance.value?.ai_precheck === true)
+const submissionPolicyText = computed<string>(() =>
+  submissionModes.value.map((mode) => SUBMISSION_MODE_LABELS[mode]).join(' / ')
+)
+const allowedFileText = computed<string>(() =>
+  allowedFileExts.value.map(submissionFileLabel).join(' / ')
+)
+const acceptanceSummary = computed<string>(() =>
+  submissionAcceptanceSummary(acceptance.value)
+)
+const fileHintText = computed<string>(() => {
+  if (!acceptance.value) {
+    return 'TXT/Markdown/PDF/DOCX，≤10MB；PDF/DOCX 暂不解析正文，请补充文字说明。'
+  }
+  const parts = [`允许类型：${allowedFileText.value}，≤10MB`]
+  if (canSubmitText.value) parts.push('PDF/DOCX 暂不解析正文，请补充文字说明')
+  return `${parts.join('；')}。`
+})
 /** 当前任务可见的成果版本（管理者看全部，普通成员只看自己） */
 const submissions = ref<SubmissionItem[]>([])
 const submissionsLoading = ref(false)
@@ -304,7 +349,9 @@ const sortedProgress = computed(() =>
   })
 )
 const extrasEntries = computed<Array<[string, unknown]>>(() =>
-  task.value ? Object.entries(task.value.extras ?? {}) : []
+  task.value
+    ? Object.entries(task.value.extras ?? {}).filter(([key]) => key !== 'acceptance')
+    : []
 )
 
 const currentBrief = computed<TaskBrief | null>(() => {
@@ -627,8 +674,10 @@ function onSubmitFileChange(event: Event): void {
     return
   }
   const lower = file.name.toLowerCase()
-  if (!FILE_EXTS.some((ext) => lower.endsWith(ext))) {
-    submitFileError.value = '仅支持 TXT/Markdown/PDF/DOCX'
+  if (!allowedFileExts.value.some((ext) => lower.endsWith(ext.toLowerCase()))) {
+    submitFileError.value = acceptance.value
+      ? '文件类型不在任务允许范围内'
+      : '仅支持 TXT/Markdown/PDF/DOCX'
     submitFile.value = null
     input.value = ''
     return
@@ -644,24 +693,56 @@ function onSubmitFileChange(event: Event): void {
 
 async function confirmSubmit(): Promise<void> {
   if (!task.value || submitLoading.value) return
+  const content = submitContent.value.trim()
+  const resourceUrl = submitResourceUrl.value.trim()
+
+  // 本地校验消息与后端保持一致（`C-SUBMISSION-POLICY@1`）；未配置策略时保持原有宽松行为
+  if (submitFile.value) {
+    if (!canSubmitFile.value) {
+      ElMessage.error('本任务不接受文件提交')
+      return
+    }
+    const lower = submitFile.value.name.toLowerCase()
+    if (!allowedFileExts.value.some((ext) => lower.endsWith(ext.toLowerCase()))) {
+      ElMessage.error('文件类型不在任务允许范围内')
+      return
+    }
+  } else if (acceptance.value) {
+    const textFilled = canSubmitText.value && content !== ''
+    const linkFilled = canSubmitLink.value && resourceUrl !== ''
+    if (!textFilled && !linkFilled) {
+      ElMessage.error('请按任务要求的成果提交方式提交')
+      return
+    }
+  }
+
   submitLoading.value = true
   try {
     if (submitFile.value) {
-      await uploadSubmission(task.value.id, submitFile.value, submitContent.value.trim() || null)
+      const uploadContent = canSubmitText.value ? content || null : null
+      await uploadSubmission(task.value.id, submitFile.value, uploadContent)
     } else {
       await submitTask(task.value.id, {
-        content: submitContent.value.trim() || null,
-        resource_url: submitResourceUrl.value.trim() || null
+        content: canSubmitText.value ? content || null : null,
+        resource_url: canSubmitLink.value ? resourceUrl || null : null
       })
     }
     submitDialogVisible.value = false
     ElMessage.success('已提交，等待发布者验收')
     await load()
+    if (precheckEnabled.value) await runAutoPrecheck()
   } catch (err) {
     ElMessage.error(errorMessage(err))
   } finally {
     submitLoading.value = false
   }
+}
+
+/** 任务开启 AI 成果预审时，提交后自动预审本人最新版本（预审失败不影响提交结果） */
+async function runAutoPrecheck(): Promise<void> {
+  const latest = mySubmissions.value.find((item) => item.latest)
+  if (!latest) return
+  await handlePrecheck(latest)
 }
 
 /** 对某个成果版本运行规则预审 + AI 建议（只写预审记录，不改变业务状态） */
@@ -1007,6 +1088,11 @@ watch(
 
         <TaskContentSections :model="contentModel" />
 
+        <div v-if="acceptance" class="extras">
+          <span class="extras-label">成果要求</span>
+          <el-tag class="extra-tag" effect="plain">{{ acceptanceSummary }}</el-tag>
+        </div>
+
         <el-descriptions :column="infoColumns" border size="small" class="info-table">
           <el-descriptions-item label="发布者">{{ task.publisher_name || '—' }}</el-descriptions-item>
           <el-descriptions-item label="首批成员">{{ task.assignee_name || '暂无成员' }}</el-descriptions-item>
@@ -1194,10 +1280,11 @@ watch(
               <div class="submission-actions">
                 <el-button
                   size="small"
+                  :type="precheckEnabled ? 'primary' : 'default'"
                   :loading="precheckLoading === item.id"
                   @click="handlePrecheck(item)"
                 >
-                  运行预审
+                  {{ precheckEnabled ? '运行 AI 预审' : '运行预审' }}
                 </el-button>
               </div>
               <div v-if="submissionPrecheck(item)" class="precheck-detail">
@@ -1283,10 +1370,11 @@ watch(
                 <el-button
                   v-if="submission"
                   size="small"
+                  :type="precheckEnabled ? 'primary' : 'default'"
                   :loading="precheckLoading === submission.id"
                   @click="handlePrecheck(submission)"
                 >
-                  运行预审
+                  {{ precheckEnabled ? '运行 AI 预审' : '运行预审' }}
                 </el-button>
                 <el-button
                   type="success"
@@ -1498,7 +1586,25 @@ watch(
       :close-on-click-modal="false"
     >
       <el-form label-position="top">
-        <el-form-item label="成果说明">
+        <el-alert
+          v-if="acceptance"
+          type="info"
+          :closable="false"
+          show-icon
+          title="本任务的成果提交要求"
+          :description="`提交方式：${submissionPolicyText}`"
+          class="submission-policy-alert"
+        />
+        <el-alert
+          v-if="precheckEnabled"
+          type="success"
+          :closable="false"
+          show-icon
+          title="本任务已开启 AI 成果预审"
+          description="提交后会自动运行预审；预审结论仅供参考，验收仍由负责人人工决定。"
+          class="submission-policy-alert"
+        />
+        <el-form-item v-if="canSubmitText" label="成果说明">
           <el-input
             v-model="submitContent"
             type="textarea"
@@ -1508,19 +1614,19 @@ watch(
             placeholder="例如：推文终稿已发布，活动时间为 2026-12-25 19:00，地点为礼堂。"
           />
         </el-form-item>
-        <el-form-item label="成果链接">
+        <el-form-item v-if="canSubmitLink" label="成果链接">
           <el-input
             v-model="submitResourceUrl"
             maxlength="1000"
             placeholder="可选，例如 https://example.com/final-post"
           />
         </el-form-item>
-        <el-form-item label="成果文件（可选）">
+        <el-form-item v-if="canSubmitFile" label="成果文件（可选）">
           <div class="file-picker">
             <input
               ref="fileInputRef"
               type="file"
-              accept=".txt,.md,.pdf,.docx"
+              :accept="fileAccept"
               class="file-picker__input"
               @change="onSubmitFileChange"
             />
@@ -1530,9 +1636,7 @@ watch(
             </span>
             <el-button v-if="submitFile" size="small" text @click="clearSubmitFile">清除</el-button>
           </div>
-          <p class="file-picker__hint">
-            TXT/Markdown/PDF/DOCX，≤10MB；PDF/DOCX 暂不解析正文，请补充文字说明。
-          </p>
+          <p class="file-picker__hint">{{ fileHintText }}</p>
           <p v-if="submitFileError" class="file-picker__error">{{ submitFileError }}</p>
         </el-form-item>
         <el-alert
@@ -2204,6 +2308,10 @@ watch(
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+.submission-policy-alert {
+  margin-bottom: var(--app-space-3);
 }
 
 .file-picker {

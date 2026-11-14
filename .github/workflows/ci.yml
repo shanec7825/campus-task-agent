@@ -62,6 +62,10 @@ jobs:
           tests/backend/test_aiw14_activity_table.py
           tests/backend/test_notice_archive.py
           tests/backend/test_submission_file.py -q
+      - name: Run V1 batch publish and submission policy suites
+        run: >-
+          python -m pytest tests/backend/test_v1_batch_publish.py
+          tests/backend/test_v1_submission_policy.py -q
 
   backend-integration:
     name: Backend API and SSE integration

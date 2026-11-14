@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -29,11 +29,13 @@ from app.agents import llm_client, prompts
 from app.errors import ApiError
 from app.models import Activity, SubmissionPrecheck, Task, TaskSubmission, User
 from app.schemas import (
+    ACCEPTANCE_KEY,
     PrecheckItem,
     PrecheckOut,
     PrecheckResourceSnapshot,
     PrecheckSuggestion,
     PrecheckSummary,
+    SubmissionAcceptance,
     SubmissionOut,
 )
 from app.services import authz, resource_service
@@ -55,6 +57,13 @@ ALLOWED_FILE_EXTS = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 PARSEABLE_FILE_EXTS = frozenset({".txt", ".md"})
+
+# 提交策略（`C-SUBMISSION-POLICY@1`）的拒绝文案：前端本地校验与服务端保持一致。
+MSG_POLICY_EMPTY = "请按任务要求的成果提交方式提交"
+MSG_TEXT_NOT_ALLOWED = "本任务不接受文字说明提交"
+MSG_LINK_NOT_ALLOWED = "本任务不接受成果链接提交"
+MSG_FILE_NOT_ALLOWED = "本任务不接受文件提交"
+MSG_EXT_NOT_ALLOWED = "文件类型不在任务允许范围内"
 
 STATUS_PASS = "pass"
 STATUS_FAIL = "fail"
@@ -127,6 +136,57 @@ def create_submission(
     db.add(row)
     db.flush()
     return row
+
+
+def task_acceptance(task: Task) -> SubmissionAcceptance | None:
+    """读取任务提交策略（`C-SUBMISSION-POLICY@1`）。
+
+    未配置或历史脏数据一律视为未配置，保持旧任务的宽松行为；写库前的
+    ``schemas.normalize_acceptance`` 已保证新任务不会存入非法策略。
+    """
+    extras = task.extras if isinstance(task.extras, dict) else {}
+    raw = extras.get(ACCEPTANCE_KEY)
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return SubmissionAcceptance.model_validate(raw)
+    except (ApiError, ValidationError):
+        logger.warning("任务 %s 的提交策略非法，按未配置处理", getattr(task, "id", None))
+        return None
+
+
+def enforce_submit_policy(
+    task: Task,
+    content: str | None = None,
+    resource_url: str | None = None,
+) -> None:
+    """文字/链接提交前按策略校验；必须在 ``record_submit`` 之前调用。"""
+    policy = task_acceptance(task)
+    if policy is None:
+        return
+    text = (content or "").strip()
+    url = (resource_url or "").strip()
+    if text and not policy.allows("text"):
+        raise ApiError(ERR_INVALID_PARAM, MSG_TEXT_NOT_ALLOWED)
+    if url and not policy.allows("link"):
+        raise ApiError(ERR_INVALID_PARAM, MSG_LINK_NOT_ALLOWED)
+    if not text and not url:
+        raise ApiError(ERR_INVALID_PARAM, MSG_POLICY_EMPTY)
+
+
+def validate_upload_against_policy(task: Task, filename: str) -> None:
+    """文件上传前按策略校验通道与扩展名；必须在落盘与 ``record_submit`` 之前调用。"""
+    policy = task_acceptance(task)
+    if policy is None:
+        return
+    if not policy.allows("file"):
+        raise ApiError(ERR_INVALID_PARAM, MSG_FILE_NOT_ALLOWED)
+    allowed = set(policy.allowed_exts)
+    if not allowed:
+        # 策略未限定文件类型时沿用全局白名单（仍由 validate_submission_file 兜底）
+        return
+    if Path(filename or "").suffix.lower() not in allowed:
+        raise ApiError(ERR_INVALID_PARAM, MSG_EXT_NOT_ALLOWED)
 
 
 def validate_submission_file(filename: str, payload: bytes) -> str:

@@ -14,13 +14,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import ApiError
 from app.models import Activity, Organization, Task, User
-from app.schemas import ActivityBatchTaskDraft, ActivityPublishBatchIn
+from app.schemas import ActivityBatchTaskDraft, ActivityPublishBatchIn, normalize_acceptance
 from app.services import application_service, authz, task_graph_service
 
 #: 终态：不再参与进度统计（``verified`` 计为完成，``cancelled`` 单独计数）。
@@ -126,14 +127,21 @@ def _assert_acyclic(adjacency: dict[str, list[str]]) -> None:
                 stack.append((child, iter(adjacency.get(child, ()))))
 
 
-def _validate_batch_drafts(drafts: Sequence[ActivityBatchTaskDraft], keys: Sequence[str]) -> None:
+def _validate_batch_drafts(
+    drafts: Sequence[ActivityBatchTaskDraft], keys: Sequence[str]
+) -> list[dict[str, Any]]:
     """写入前完成全部任务级校验；任一失败 ``4001`` 且不写库。
 
     校验项：标题、配额、积分、``parent_id`` 不受支持、父任务存在且为顶层、
-    依赖 key 存在、自依赖 / 重复依赖、依赖同层级、成环。
+    依赖 key 存在、自依赖 / 重复依赖、依赖同层级、成环、``extras.acceptance``
+    提交策略（`C-SUBMISSION-POLICY@1`）。
+
+    Returns:
+        与 ``drafts`` 同序的规范化 ``extras``，供 ``_build_batch_task`` 写入。
     """
     key_to_index = {key: index for index, key in enumerate(keys)}
     adjacency: dict[str, list[str]] = {}
+    normalized_extras: list[dict[str, Any]] = []
 
     for key, draft in zip(keys, drafts):
         if not (draft.title or "").strip():
@@ -144,6 +152,8 @@ def _validate_batch_drafts(drafts: Sequence[ActivityBatchTaskDraft], keys: Seque
             raise ApiError(ERR_ACTIVITY, f"任务 {key} 需求人数必须大于 0")
         if draft.credit_reward < 0:
             raise ApiError(ERR_ACTIVITY, f"任务 {key} 完成奖励积分不能为负数")
+        # 非法 acceptance 直接 4001；校验发生在任何 db.add 之前，整批不写库
+        normalized_extras.append(normalize_acceptance(draft.extras))
 
         parent_key = _parent_key(draft)
         if parent_key is not None:
@@ -167,6 +177,7 @@ def _validate_batch_drafts(drafts: Sequence[ActivityBatchTaskDraft], keys: Seque
         adjacency[key] = depends_on_keys
 
     _assert_acyclic(adjacency)
+    return normalized_extras
 
 
 def _build_batch_task(
@@ -175,6 +186,7 @@ def _build_batch_task(
     draft: ActivityBatchTaskDraft,
     *,
     parent_id: int | None,
+    extras: dict[str, Any],
 ) -> Task:
     """构造一条待写入的任务行；字段口径与单任务发布保持一致。"""
     return Task(
@@ -195,7 +207,7 @@ def _build_batch_task(
         depends_on=None,
         sop_guide=draft.sop_guide,
         style_note=draft.style_note,
-        extras=draft.extras,
+        extras=extras,
         reminder_rule=dict(DEFAULT_REMINDER_RULE),
         credit_reward=draft.credit_reward,
     )
@@ -231,7 +243,7 @@ def publish_batch(
 
     drafts = list(payload.tasks)
     keys = _resolve_batch_keys(drafts)
-    _validate_batch_drafts(drafts, keys)
+    extras_list = _validate_batch_drafts(drafts, keys)
 
     created: dict[str, Task] = {}
     try:
@@ -250,14 +262,16 @@ def publish_batch(
         db.flush()
 
         # 先顶层后子任务：子任务需要父任务的 id，而请求顺序不保证父任务在前。
-        for key, draft in zip(keys, drafts):
+        for key, draft, extras in zip(keys, drafts, extras_list):
             if _parent_key(draft) is not None:
                 continue
-            task = _build_batch_task(activity, int(user.id), draft, parent_id=None)
+            task = _build_batch_task(
+                activity, int(user.id), draft, parent_id=None, extras=extras
+            )
             db.add(task)
             db.flush()
             created[key] = task
-        for key, draft in zip(keys, drafts):
+        for key, draft, extras in zip(keys, drafts, extras_list):
             parent_key = _parent_key(draft)
             if parent_key is None:
                 continue
@@ -266,6 +280,7 @@ def publish_batch(
                 int(user.id),
                 draft,
                 parent_id=int(created[parent_key].id),
+                extras=extras,
             )
             db.add(task)
             db.flush()

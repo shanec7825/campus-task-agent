@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from app.errors import ApiError
 
 # --------------------------------------------------------------------------- #
 # 通用 / 认证
@@ -1181,6 +1183,85 @@ class SubmissionListOut(BaseModel):
     items: list[SubmissionOut] = Field(default_factory=list)
 
 
+# --------------------------------------------------------------------------- #
+# 成果提交策略（契约 `C-SUBMISSION-POLICY@1`）
+# --------------------------------------------------------------------------- #
+
+SUBMISSION_MODES: tuple[str, ...] = ("text", "link", "file")
+SUBMISSION_ALLOWED_EXTS: tuple[str, ...] = (".pdf", ".docx", ".txt", ".md")
+ACCEPTANCE_KEY = "acceptance"
+MSG_ACCEPTANCE_MODES_INVALID = "成果提交方式配置不合法"
+MSG_ACCEPTANCE_EXTS_INVALID = "成果文件类型配置不合法"
+MSG_ACCEPTANCE_INVALID = "成果提交策略配置不合法"
+
+
+class SubmissionAcceptance(BaseModel):
+    """任务成果提交策略；存放于 ``tasks.extras["acceptance"]``。
+
+    ``modes`` 必须是非空子集 ``text|link|file``；``allowed_exts`` 是
+    ``.pdf|.docx|.txt|.md`` 的子集（不带点或大小写差异会被规范化），
+    仅在 ``modes`` 含 ``file`` 时具有约束力。非法配置统一抛 4001。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    modes: list[str]
+    allowed_exts: list[str] = Field(default_factory=list)
+    ai_precheck: bool = False
+
+    @field_validator("modes")
+    @classmethod
+    def _check_modes(cls, value: list[str]) -> list[str]:
+        if not value or any(str(item) not in SUBMISSION_MODES for item in value):
+            raise ApiError(4001, MSG_ACCEPTANCE_MODES_INVALID)
+        return list(dict.fromkeys(str(item) for item in value))
+
+    @field_validator("allowed_exts")
+    @classmethod
+    def _check_allowed_exts(cls, value: list[str]) -> list[str]:
+        exts: list[str] = []
+        for item in value:
+            ext = str(item).strip().lower()
+            if ext and not ext.startswith("."):
+                ext = f".{ext}"
+            if ext not in SUBMISSION_ALLOWED_EXTS:
+                raise ApiError(4001, MSG_ACCEPTANCE_EXTS_INVALID)
+            if ext not in exts:
+                exts.append(ext)
+        return exts
+
+    def allows(self, mode: str) -> bool:
+        return mode in self.modes
+
+
+def normalize_acceptance(extras: dict[str, Any] | None) -> dict[str, Any]:
+    """校验并规范化 ``extras`` 中的 ``acceptance``（写库前调用，纯函数）。
+
+    返回新字典，其它键原样保留；``acceptance`` 缺失或显式为 ``null`` 时视为
+    未配置（不写入该键），非法值抛 4001。
+    """
+    normalized = dict(extras or {})
+    if ACCEPTANCE_KEY not in normalized:
+        return normalized
+    raw = normalized[ACCEPTANCE_KEY]
+    if raw is None:
+        normalized.pop(ACCEPTANCE_KEY, None)
+        return normalized
+    if not isinstance(raw, dict):
+        raise ApiError(4001, MSG_ACCEPTANCE_MODES_INVALID)
+    try:
+        policy = SubmissionAcceptance.model_validate(raw)
+    except ValidationError as exc:
+        # 字段类型本身不合法（如 modes 传字符串）时统一转成 4001，避免落成 500
+        raise ApiError(4001, MSG_ACCEPTANCE_INVALID) from exc
+    normalized[ACCEPTANCE_KEY] = {
+        "modes": policy.modes,
+        "allowed_exts": policy.allowed_exts,
+        "ai_precheck": policy.ai_precheck,
+    }
+    return normalized
+
+
 __all__ = [
     "ReminderRule",
     "UserOut",
@@ -1266,6 +1347,11 @@ __all__ = [
     "PrecheckSummary",
     "SubmissionOut",
     "SubmissionListOut",
+    "SubmissionAcceptance",
+    "SUBMISSION_MODES",
+    "SUBMISSION_ALLOWED_EXTS",
+    "ACCEPTANCE_KEY",
+    "normalize_acceptance",
 ]
 
 # --------------------------------------------------------------------------- #
