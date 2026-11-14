@@ -1,0 +1,27 @@
+{
+  "cases": [
+    {
+      "id": "R-03-guest-publish-activity",
+      "url": "http://127.0.0.1:8020/login?redirect=/activities/new",
+      "ok": true
+    },
+    {
+      "id": "R-03-member-publish-activity",
+      "url": "http://127.0.0.1:8020/ai",
+      "ok": true
+    },
+    {
+      "id": "R-07-detail-shared-fields",
+      "hasStart": true,
+      "hasDeadline": true,
+      "hasOwner": true,
+      "backUrl": "http://127.0.0.1:8020/published-activities",
+      "ok": true
+    },
+    {
+      "id": "R-02-task-back-to-my-tasks",
+      "url": "http://127.0.0.1:8020/my-tasks",
+      "ok": true
+    }
+  ]
+}

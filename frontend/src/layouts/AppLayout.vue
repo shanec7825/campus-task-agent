@@ -5,10 +5,12 @@ import { useRoute, useRouter } from 'vue-router'
 import ThemeToggle from '../components/common/ThemeToggle.vue'
 import { useSSE } from '../composables/useSSE'
 import { PAGE_TITLES } from '../router'
+import { listActivities } from '../api/activities'
+import { listTasks } from '../api/tasks'
 import { useAiChatStore } from '../stores/aiChat'
 import { useNotificationsStore } from '../stores/notifications'
 import { useUserStore } from '../stores/user'
-import type { OrgMembership } from '../types/models'
+import type { Activity, OrgMembership, TaskItem } from '../types/models'
 
 /**
  * 应用外壳（契约 C-ROUTE-NAV@1 / C-FE-AI@1）。
@@ -29,6 +31,8 @@ interface NavItem {
 
 const SIDEBAR_COLLAPSED_KEY = 'cta_sidebar_collapsed'
 const MOBILE_NAMES = ['ai', 'hall', 'messages', 'profile']
+/** 侧栏/抽屉最近条目上限：只减少预览数量，不隐藏正式列表数据 */
+const RECENT_LIMIT = 5
 
 const route = useRoute()
 const router = useRouter()
@@ -61,12 +65,26 @@ const pageTitle = computed<string>(() => {
 })
 
 const mainNav: NavItem[] = [
-  { name: 'ai', path: '/ai', label: 'AI 助手', short: 'AI' },
-  { name: 'workbench', path: '/workbench', label: '工作台', short: '台' },
-  { name: 'hall', path: '/tasks', label: '事务', short: '事' },
-  { name: 'messages', path: '/messages', label: '消息', short: '信' },
-  { name: 'profile', path: '/profile', label: '我的', short: '我' }
+  { name: 'ai', path: '/ai', label: 'AI 对话与通知', short: 'AI' },
+  { name: 'hall', path: '/tasks', label: '任务大厅', short: '大厅' },
+  { name: 'my-tasks', path: '/my-tasks', label: '我的任务', short: '我的' },
+  { name: 'messages', path: '/messages', label: '消息', short: '消息' },
+  { name: 'profile', path: '/profile', label: '个人主页', short: '个人' }
 ]
+
+/** 管理者的额外入口；普通用户不渲染，直连接口仍由后端授权拒绝 */
+const managerNav: NavItem[] = [
+  {
+    name: 'published-activities',
+    path: '/published-activities',
+    label: '我发布的活动',
+    short: '发布'
+  },
+  { name: 'admin', path: '/admin', label: '发布者后台', short: '管理' }
+]
+
+const recentActivities = ref<Activity[]>([])
+const recentTasks = ref<TaskItem[]>([])
 
 const mobileNav = computed<NavItem[]>(() =>
   mainNav
@@ -96,23 +114,61 @@ function toggleSidebar(): void {
 }
 
 function isActive(name: string): boolean {
+  const current = typeof route.name === 'string' ? route.name : ''
   if (name === 'hall') {
-    return route.name === 'hall' || route.name === 'detail' || route.name === 'activity'
+    return current === 'hall' || current === 'detail' || current === 'activity'
   }
-  return route.name === name
+  if (name === 'my-tasks') {
+    return current === 'my-tasks'
+  }
+  if (name === 'published-activities') {
+    return current === 'published-activities' || current === 'publish-activity'
+  }
+  return current === name
 }
 
 function navigate(item: NavItem): void {
   if (route.name !== item.name) void router.push({ name: item.name })
 }
 
+/** 最近条目：复用权限过滤后的列表摘要，不逐卡请求完整详情 */
+async function loadRecent(): Promise<void> {
+  if (!userStore.isLoggedIn) return
+  try {
+    const [activityResult, taskResult] = await Promise.all([
+      listActivities({ scope: 'mine' }),
+      listTasks({ scope: 'mine', include_sub: false })
+    ])
+    recentActivities.value = (activityResult?.items ?? []).slice(0, RECENT_LIMIT)
+    recentTasks.value = (taskResult?.items ?? []).slice(0, RECENT_LIMIT)
+  } catch {
+    // 最近条目失败不阻塞主页面与主导航
+    recentActivities.value = []
+    recentTasks.value = []
+  }
+}
+
+function goActivity(id: number): void {
+  mobileDrawerOpen.value = false
+  if (route.name === 'activity' && Number(route.params.id) === id) return
+  void router.push({ name: 'activity', params: { id } })
+}
+
+function goTask(id: number): void {
+  mobileDrawerOpen.value = false
+  if (route.name === 'detail' && Number(route.params.id) === id) return
+  void router.push({ name: 'detail', params: { id } })
+}
+
+function goAllActivities(): void {
+  mobileDrawerOpen.value = false
+  void router.push({ name: 'my-tasks' })
+}
+
 function goHome(): void {
   if (route.name !== 'ai') void router.push({ name: 'ai' })
 }
 
-function goAdmin(): void {
-  if (route.name !== 'admin') void router.push({ name: 'admin' })
-}
 
 function openPublish(): void {
   void router.push({ name: 'publish' })
@@ -123,10 +179,6 @@ function navigateFromDrawer(item: NavItem): void {
   navigate(item)
 }
 
-function adminFromDrawer(): void {
-  mobileDrawerOpen.value = false
-  goAdmin()
-}
 
 function publishFromDrawer(): void {
   mobileDrawerOpen.value = false
@@ -142,6 +194,7 @@ onMounted(async () => {
   } catch {
     // 未读数拉取失败不阻塞主页面
   }
+  void loadRecent()
   sse.connect()
 })
 
@@ -156,6 +209,7 @@ async function handleLogout(): Promise<void> {
   aiChat.reset()
   try {
     window.sessionStorage.removeItem('cta_hall_view')
+    window.sessionStorage.removeItem('cta_my_tasks_view')
   } catch {
     // 隐私模式下无法清理时不影响退出
   }
@@ -217,17 +271,56 @@ async function handleLogout(): Promise<void> {
         </a>
       </nav>
 
+      <div v-if="!collapsed" class="sidebar-recent" aria-label="最近条目">
+        <div class="recent-group">
+          <p class="recent-title">最近活动</p>
+          <p v-if="recentActivities.length === 0" class="recent-empty">暂无相关活动</p>
+          <a
+            v-for="activity in recentActivities"
+            :key="`recent-activity-${activity.id}`"
+            :href="`/activities/${activity.id}`"
+            class="recent-link"
+            :title="activity.title"
+            @click.prevent="goActivity(activity.id)"
+          >
+            {{ activity.title }}
+          </a>
+          <a href="/my-tasks" class="recent-all" @click.prevent="goAllActivities">
+            查看全部活动
+          </a>
+        </div>
+        <div class="recent-group">
+          <p class="recent-title">最近任务</p>
+          <p v-if="recentTasks.length === 0" class="recent-empty">暂无相关任务</p>
+          <a
+            v-for="task in recentTasks"
+            :key="`recent-task-${task.id}`"
+            :href="`/tasks/${task.id}`"
+            class="recent-link"
+            :title="task.title"
+            @click.prevent="goTask(task.id)"
+          >
+            {{ task.title }}
+          </a>
+          <a href="/my-tasks" class="recent-all" @click.prevent="goAllActivities">
+            查看全部任务
+          </a>
+        </div>
+      </div>
+
       <nav v-if="canAdmin" class="sidebar-nav sidebar-admin" aria-label="管理">
         <a
-          href="/admin"
+          v-for="item in managerNav"
+          :key="item.name"
+          :href="item.path"
           class="nav-link"
-          :class="{ 'is-active': isActive('admin') }"
-          aria-label="管理"
-          :aria-current="isActive('admin') ? 'page' : undefined"
-          title="管理"
-          @click.prevent="goAdmin"
+          :class="{ 'is-active': isActive(item.name) }"
+          :aria-label="item.label"
+          :aria-current="isActive(item.name) ? 'page' : undefined"
+          :title="item.label"
+          @click.prevent="navigate(item)"
         >
-          {{ collapsed ? '管' : '管理' }}
+          {{ collapsed ? item.short : item.label }}
         </a>
       </nav>
 
@@ -263,16 +356,19 @@ async function handleLogout(): Promise<void> {
         >
           {{ item.label }}
         </a>
-        <a
-          v-if="canAdmin"
-          href="/admin"
-          class="nav-link"
-          :class="{ 'is-active': isActive('admin') }"
-          :aria-current="isActive('admin') ? 'page' : undefined"
-          @click.prevent="goAdmin"
-        >
-          管理
-        </a>
+        <template v-if="canAdmin">
+          <a
+            v-for="item in managerNav"
+            :key="item.name"
+            :href="item.path"
+            class="nav-link"
+            :class="{ 'is-active': isActive(item.name) }"
+            :aria-current="isActive(item.name) ? 'page' : undefined"
+            @click.prevent="navigate(item)"
+          >
+            {{ item.label }}
+          </a>
+        </template>
       </nav>
 
       <!-- 平板形态没有侧栏，发布主入口由顶栏承载（≥1025px 由侧栏承载） -->
@@ -363,18 +459,66 @@ async function handleLogout(): Promise<void> {
             <span>{{ item.label }}</span>
             <span v-if="isActive(item.name)" class="drawer-current">当前</span>
           </a>
-          <a
-            v-if="canAdmin"
-            href="/admin"
-            class="drawer-link"
-            :class="{ 'is-active': isActive('admin') }"
-            :aria-current="isActive('admin') ? 'page' : undefined"
-            @click.prevent="adminFromDrawer"
-          >
-            <span>管理</span>
-            <span v-if="isActive('admin')" class="drawer-current">当前</span>
-          </a>
+          <template v-if="canAdmin">
+            <a
+              v-for="item in managerNav"
+              :key="item.name"
+              :href="item.path"
+              class="drawer-link"
+              :class="{ 'is-active': isActive(item.name) }"
+              :aria-current="isActive(item.name) ? 'page' : undefined"
+              @click.prevent="navigateFromDrawer(item)"
+            >
+              <span>{{ item.label }}</span>
+              <span v-if="isActive(item.name)" class="drawer-current">当前</span>
+            </a>
+          </template>
         </nav>
+
+        <div class="drawer-recent" aria-label="最近条目">
+          <div class="recent-group">
+            <p class="recent-title">最近活动</p>
+            <p v-if="recentActivities.length === 0" class="recent-empty">暂无相关活动</p>
+            <a
+              v-for="activity in recentActivities"
+              :key="`drawer-activity-${activity.id}`"
+              :href="`/activities/${activity.id}`"
+              class="drawer-link drawer-link--recent"
+              :title="activity.title"
+              @click.prevent="goActivity(activity.id)"
+            >
+              <span>{{ activity.title }}</span>
+            </a>
+            <a
+              href="/my-tasks"
+              class="drawer-link drawer-link--recent"
+              @click.prevent="goAllActivities"
+            >
+              <span>查看全部活动</span>
+            </a>
+          </div>
+          <div class="recent-group">
+            <p class="recent-title">最近任务</p>
+            <p v-if="recentTasks.length === 0" class="recent-empty">暂无相关任务</p>
+            <a
+              v-for="task in recentTasks"
+              :key="`drawer-task-${task.id}`"
+              :href="`/tasks/${task.id}`"
+              class="drawer-link drawer-link--recent"
+              :title="task.title"
+              @click.prevent="goTask(task.id)"
+            >
+              <span>{{ task.title }}</span>
+            </a>
+            <a
+              href="/my-tasks"
+              class="drawer-link drawer-link--recent"
+              @click.prevent="goAllActivities"
+            >
+              <span>查看全部任务</span>
+            </a>
+          </div>
+        </div>
 
         <div class="drawer-actions">
           <el-button type="primary" @click="publishFromDrawer">发布事务</el-button>
@@ -572,6 +716,23 @@ async function handleLogout(): Promise<void> {
   font-size: var(--app-font-aux);
 }
 
+.drawer-recent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-3);
+}
+
+.drawer-link--recent {
+  font-size: var(--app-font-aux);
+}
+
+.drawer-link--recent span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .drawer-actions :deep(.el-button) {
   width: 100%;
   min-height: var(--app-touch);
@@ -721,6 +882,67 @@ async function handleLogout(): Promise<void> {
   .sidebar-admin {
     padding-top: var(--app-space-3);
     border-top: 1px solid var(--app-border);
+  }
+
+  /* 最近条目：有限量预览 + 查看全部；长标题省略但保留 title 全文 */
+  .sidebar-recent {
+    display: flex;
+    flex-direction: column;
+    gap: var(--app-space-3);
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .recent-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .recent-title {
+    margin: 0 0 2px;
+    font-size: var(--app-font-aux);
+    color: var(--app-text-muted);
+  }
+
+  .recent-empty {
+    margin: 0;
+    font-size: var(--app-font-aux);
+    color: var(--app-text-muted);
+  }
+
+  .recent-link {
+    display: block;
+    min-width: 0;
+    padding: 6px var(--app-space-2);
+    border-radius: var(--app-radius-sm);
+    color: var(--app-text-secondary);
+    font-size: var(--app-font-aux);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .recent-link:hover,
+  .recent-link:focus-visible {
+    background: var(--app-surface-sunken);
+    color: var(--app-text);
+  }
+
+  .recent-all {
+    align-self: flex-start;
+    min-height: var(--app-touch);
+    padding: 0 var(--app-space-2);
+    color: var(--app-primary);
+    font-size: var(--app-font-aux);
+    line-height: var(--app-touch);
+    text-decoration: none;
+  }
+
+  .recent-all:hover {
+    text-decoration: underline;
   }
 
   .sidebar-foot {

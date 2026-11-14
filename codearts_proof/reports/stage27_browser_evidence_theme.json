@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "id": "R-21-mobile-dark",
+      "theme": "dark",
+      "bg": "rgb(15, 17, 21)",
+      "color": "rgb(229, 234, 243)",
+      "ok": true
+    }
+  ]
+}

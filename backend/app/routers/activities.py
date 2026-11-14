@@ -141,19 +141,23 @@ def _visible_activity_tasks(
 
 @router.get("")
 def list_activities(
-    scope: Literal["all", "mine"] = "all",
+    scope: Literal["all", "mine", "published"] = "all",
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """活动列表：新的在前，每项带负责人昵称与整体进度。
 
     ``scope=mine`` 只返回我是负责人或活动下存在我参与/管理的任务的活动；
-    ``scope=all`` 保持既有可见范围。
+    ``scope=published`` 只返回我本人发布（``owner_id`` 为当前用户）的活动，
+    供「我发布的活动」页使用；``scope=all`` 保持既有可见范围。
+    三个范围都叠加可见性条件，不能先取全表再在 Python 过滤。
     """
     visible_tasks = authz.visible_task_filter(db, current_user)
     condition = _visible_activity_condition(db, current_user, visible_tasks)
     if scope == "mine":
         condition = and_(condition, _mine_activity_condition(db, current_user, visible_tasks))
+    elif scope == "published":
+        condition = and_(condition, Activity.owner_id == int(current_user.id))
     activities = (
         db.query(Activity)
         .filter(condition)

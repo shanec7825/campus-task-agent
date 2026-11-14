@@ -1,0 +1,82 @@
+{
+  "cases": [
+    {
+      "id": "R-03-guest-guard",
+      "url": "http://127.0.0.1:8020/login?redirect=/published-activities",
+      "ok": true
+    },
+    {
+      "id": "R-02-member-my-tasks",
+      "title": "我的任务",
+      "activityCount": 1,
+      "taskCount": 1,
+      "hasScopeFilter": 0,
+      "recentHasGroups": true,
+      "recentHasViewAll": true,
+      "managerLinks": [],
+      "ok": true
+    },
+    {
+      "id": "R-04-recent-view-all",
+      "url": "http://127.0.0.1:8020/my-tasks",
+      "ok": true
+    },
+    {
+      "id": "R-03-member-guard",
+      "url": "http://127.0.0.1:8020/ai",
+      "ok": true
+    },
+    {
+      "id": "R-02-hall-contrast",
+      "title": "任务大厅",
+      "activityCount": 1,
+      "taskCount": 1
+    },
+    {
+      "id": "R-04-manager-nav",
+      "managerLinks": [
+        "我发布的活动",
+        "发布者后台"
+      ],
+      "ok": true
+    },
+    {
+      "id": "R-03-published-scope",
+      "before": 3,
+      "hasOwn": true,
+      "hasOthers": false,
+      "ok": true
+    },
+    {
+      "id": "R-07-publish-activity",
+      "previewTag": "活动名称预览",
+      "detailUrl": "http://127.0.0.1:8020/activities/5",
+      "detailTitle": "AIW-08 桌面走查活动",
+      "detailHasLocation": true,
+      "ok": true
+    },
+    {
+      "id": "R-03-published-after",
+      "count": 4,
+      "hasNew": true
+    },
+    {
+      "id": "R-02-admin-my-tasks",
+      "activityCount": 4,
+      "taskCount": 0,
+      "text": true
+    },
+    {
+      "id": "R-21-dark-theme",
+      "theme": "dark",
+      "bg": "rgb(15, 17, 21)",
+      "color": "rgb(229, 234, 243)",
+      "ok": true
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ]
+}

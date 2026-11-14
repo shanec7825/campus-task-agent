@@ -481,8 +481,25 @@ function goDetail(id: number): void {
   void router.push({ name: 'detail', params: { id } })
 }
 
+/** 从大厅或「我的任务」进入时按来源返回，直接打开时回大厅（站内路径白名单） */
 function backToHall(): void {
+  const back = window.history.state?.back
+  if (isInternalBack(back)) {
+    router.back()
+    return
+  }
   void router.push({ name: 'hall' })
+}
+
+function isInternalBack(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.startsWith('/') &&
+    !value.startsWith('//') &&
+    !value.startsWith('/login') &&
+    !value.startsWith('/register') &&
+    !value.startsWith('/reset-password')
+  )
 }
 
 /** 发布者查看「待验收」任务时可直接去后台验收；也用于「去审核报名」 */

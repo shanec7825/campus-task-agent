@@ -8,7 +8,9 @@
  * - 筛选：状态 / 范围 / 类型；≤768px 收进单个「筛选」按钮的底部抽屉；
  * - 桌面精确指针设备提供 200ms 悬浮预览；手机点击直接进入详情；
  * - 筛选与滚动位置保存在当前标签页 `sessionStorage`，从详情返回后恢复；
- * - 加载中不渲染空状态；本页不放发布入口（发布入口由外壳提供）。
+ * - 加载中不渲染空状态；本页不放发布入口（发布入口由外壳提供）；
+ * - `variant="mine"` 复用同一实现作为独立「我的任务」页：范围锁定 `mine`，
+ *   筛选与滚动位置使用独立键，不复制第二套查询逻辑。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -37,21 +39,32 @@ interface HallViewState {
 }
 
 const HALL_VIEW_KEY = 'cta_hall_view'
+const MY_TASKS_VIEW_KEY = 'cta_my_tasks_view'
+
+const props = withDefaults(defineProps<{ variant?: 'hall' | 'mine' }>(), { variant: 'hall' })
+/** 「我的任务」与大厅共用本组件，只锁定范围与文案 */
+const isMineVariant = props.variant === 'mine'
+const viewStorageKey = isMineVariant ? MY_TASKS_VIEW_KEY : HALL_VIEW_KEY
 
 const router = useRouter()
 const userStore = useUserStore()
 
 function readHallView(): HallViewState {
-  const fallback: HallViewState = { status: 'all', scope: 'all', type: 'all', scrollTop: 0 }
+  const fallback: HallViewState = {
+    status: 'all',
+    scope: isMineVariant ? 'mine' : 'all',
+    type: 'all',
+    scrollTop: 0
+  }
   try {
-    const raw = window.sessionStorage.getItem(HALL_VIEW_KEY)
+    const raw = window.sessionStorage.getItem(viewStorageKey)
     if (!raw) return fallback
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null) return fallback
     const candidate = parsed as Partial<HallViewState>
     return {
       status: typeof candidate.status === 'string' ? candidate.status : 'all',
-      scope: candidate.scope === 'mine' ? 'mine' : 'all',
+      scope: isMineVariant ? 'mine' : candidate.scope === 'mine' ? 'mine' : 'all',
       type: typeof candidate.type === 'string' ? candidate.type : 'all',
       scrollTop: typeof candidate.scrollTop === 'number' && candidate.scrollTop > 0 ? candidate.scrollTop : 0
     }
@@ -115,26 +128,30 @@ const activityTitleById = computed<Map<number, string>>(
 )
 
 const hasFilter = computed<boolean>(
-  () => statusFilter.value !== 'all' || scope.value !== 'all' || typeFilter.value !== 'all'
+  () => statusFilter.value !== 'all' || (!isMineVariant && scope.value !== 'all') || typeFilter.value !== 'all'
 )
 
-const emptyTitle = computed<string>(() => (hasFilter.value ? '没有符合条件的任务' : '暂无任务'))
-const emptyDescription = computed<string>(() =>
-  hasFilter.value
-    ? '试着切换状态、范围或类型筛选，或点击「刷新」重新加载。'
+const emptyTitle = computed<string>(() => {
+  if (hasFilter.value) return '没有符合条件的任务'
+  return isMineVariant ? '还没有与你相关的任务' : '暂无任务'
+})
+const emptyDescription = computed<string>(() => {
+  if (hasFilter.value) return '试着切换状态、范围或类型筛选，或点击「刷新」重新加载。'
+  return isMineVariant
+    ? '你还没有需要执行或管理的任务；报名通过或成为负责人后，任务会出现在这里。'
     : '还没有人发布任务，可以在发布页创建第一个事务。'
-)
+})
 
 /** 当前筛选摘要：不依赖按钮高亮即可读到「现在筛了什么」 */
 const activeFilterText = computed<string>(() => {
   const parts: string[] = []
   if (statusFilter.value !== 'all') parts.push(`状态：${statusText(statusFilter.value)}`)
-  if (scope.value !== 'all') parts.push('范围：我的任务与活动')
+  if (!isMineVariant && scope.value !== 'all') parts.push('范围：我的任务与活动')
   if (typeFilter.value !== 'all') {
     const matched = typeOptions.find((option) => option.value === typeFilter.value)
     parts.push(`类型：${matched?.label ?? typeFilter.value}`)
   }
-  return parts.length > 0 ? parts.join(' · ') : '全部事务'
+  return parts.length > 0 ? parts.join(' · ') : isMineVariant ? '我的全部任务与活动' : '全部事务'
 })
 
 function errorMessage(err: unknown): string {
@@ -156,7 +173,7 @@ function taskQuery(): { status?: string; scope: 'all' | 'mine'; include_sub: boo
 function writeHallView(): void {
   try {
     window.sessionStorage.setItem(
-      HALL_VIEW_KEY,
+      viewStorageKey,
       JSON.stringify({
         status: statusFilter.value,
         scope: scope.value,
@@ -229,7 +246,7 @@ function handleFilterChange(): void {
 function resetFilters(): void {
   if (!hasFilter.value) return
   statusFilter.value = 'all'
-  scope.value = 'all'
+  scope.value = isMineVariant ? 'mine' : 'all'
   typeFilter.value = 'all'
   writeHallView()
   void loadAll()
@@ -300,9 +317,9 @@ onBeforeUnmount(() => {
   <section class="app-page hall" :aria-busy="loading ? 'true' : 'false'">
     <header class="app-page-header hall-header">
       <div class="hall-heading">
-        <h1 class="app-page-title">事务</h1>
+        <h1 class="app-page-title">{{ isMineVariant ? '我的任务' : '任务大厅' }}</h1>
         <p class="app-page-subtitle" aria-live="polite">
-          <template v-if="loading">正在加载事务…</template>
+          <template v-if="loading">正在加载{{ isMineVariant ? '我的' : '' }}事务…</template>
           <template v-else>
             共 {{ activities.length }} 个活动 · {{ activityTaskCount }} 个活动任务 ·
             {{ independentTaskCount }} 个独立任务
@@ -408,7 +425,7 @@ onBeforeUnmount(() => {
             </el-radio-group>
           </div>
 
-          <div class="filter-row">
+          <div v-if="!isMineVariant" class="filter-row">
             <span class="filter-label">范围</span>
             <el-radio-group v-model="scope" class="filter-group" @change="handleFilterChange">
               <el-radio-button value="all">全部</el-radio-button>
@@ -502,7 +519,7 @@ onBeforeUnmount(() => {
           </el-radio-group>
         </div>
 
-        <div class="filter-row">
+        <div v-if="!isMineVariant" class="filter-row">
           <span class="filter-label">范围</span>
           <el-radio-group v-model="scope" class="filter-group" @change="handleFilterChange">
             <el-radio-button value="all">全部</el-radio-button>

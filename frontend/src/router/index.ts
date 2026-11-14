@@ -55,6 +55,25 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/TaskHall.vue')
   },
   {
+    // 独立「我的任务」：复用 TaskHall 的查询/网格/预览/返回保位，范围锁定本人
+    name: 'my-tasks',
+    path: '/my-tasks',
+    component: () => import('../views/TaskHall.vue'),
+    props: { variant: 'mine' }
+  },
+  {
+    name: 'published-activities',
+    path: '/published-activities',
+    component: () => import('../views/PublishedActivitiesPage.vue'),
+    meta: { requiresManager: true }
+  },
+  {
+    name: 'publish-activity',
+    path: '/activities/new',
+    component: () => import('../views/PublishActivityPage.vue'),
+    meta: { requiresManager: true }
+  },
+  {
     name: 'detail',
     path: '/tasks/:id',
     component: () => import('../views/TaskDetail.vue'),
@@ -158,7 +177,10 @@ export const PAGE_TITLES: Record<string, string> = {
   'reset-password': '重置密码',
   ai: 'AI 助手',
   workbench: '工作台',
-  hall: '事务',
+  hall: '任务大厅',
+  'my-tasks': '我的任务',
+  'published-activities': '我发布的活动',
+  'publish-activity': '发布活动',
   detail: '任务详情',
   activity: '活动详情',
   messages: '消息',

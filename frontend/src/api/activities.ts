@@ -12,12 +12,15 @@ import type {
 } from '../types/models'
 
 export interface ActivityListParams {
-  /** `mine` 只返回我是负责人或活动下存在我参与/管理任务的活动 */
-  scope?: 'all' | 'mine'
+  /**
+   * `mine` 只返回我是负责人或活动下存在我参与/管理任务的活动；
+   * `published` 只返回我本人发布的活动（服务端按 `owner_id` 过滤，不是前端筛选）。
+   */
+  scope?: 'all' | 'mine' | 'published'
 }
 
 export function listActivities(params: ActivityListParams = {}): Promise<ActivityListResult> {
-  const scope = params.scope === 'mine' ? '?scope=mine' : ''
+  const scope = params.scope && params.scope !== 'all' ? `?scope=${params.scope}` : ''
   return request<ActivityListResult>('GET', `/api/activities${scope}`)
 }
 

@@ -274,6 +274,8 @@ export interface ActivityCreatePayload {
   start_time?: string | null
   deadline?: string | null
   org?: string | null
+  /** 活动归属组织；必须是本人 admin/collaborator 的组织（服务端 `resolve_task_org` 校验） */
+  org_id?: number | null
 }
 
 // --------------------------------------------------------------------------- //

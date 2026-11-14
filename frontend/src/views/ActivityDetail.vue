@@ -15,6 +15,7 @@ import { getActivity } from '../api/activities'
 import { ApiError } from '../api/client'
 import { createResource, listResources } from '../api/resources'
 import AgentDock from '../components/ai/AgentDock.vue'
+import ActivityInfoSection from '../components/activity/ActivityInfoSection.vue'
 import ActivityTaskTree from '../components/task/ActivityTaskTree.vue'
 import TaskGraph from '../components/task/TaskGraph.vue'
 import ErrorState from '../components/common/ErrorState.vue'
@@ -92,16 +93,12 @@ const allExpanded = computed<boolean>(
   () => expandableIds.value.length > 0 && expandableIds.value.every((id) => expanded.value.includes(id))
 )
 
-function activityStatusText(status: string): string {
-  if (status === 'published') return '进行中'
-  if (status === 'closed') return '已结束'
-  return '未知'
-}
 
 function dateText(value: string | null): string {
   if (!value) return '未设置'
   return value.length > 16 ? value.slice(0, 16) : value
 }
+
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -122,8 +119,25 @@ function toggleAll(): void {
   expanded.value = allExpanded.value ? [] : [...expandableIds.value]
 }
 
+/** 从大厅/我的任务/我发布的活动进入时按来源返回，直接打开时回大厅（站内路径白名单） */
 function backToHall(): void {
+  const back = window.history.state?.back
+  if (isInternalBack(back)) {
+    router.back()
+    return
+  }
   void router.push({ name: 'hall' })
+}
+
+function isInternalBack(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.startsWith('/') &&
+    !value.startsWith('//') &&
+    !value.startsWith('/login') &&
+    !value.startsWith('/register') &&
+    !value.startsWith('/reset-password')
+  )
 }
 
 function goPublish(): void {
@@ -276,28 +290,8 @@ watch(
     />
 
     <template v-else-if="activity">
-      <header class="activity-header app-section-card">
-        <h1 class="activity-title">{{ activity.title }}</h1>
-        <p v-if="activity.description" class="activity-desc">{{ activity.description }}</p>
-        <dl class="activity-facts">
-          <div class="fact">
-            <dt>负责人</dt>
-            <dd>{{ activity.owner_name }}</dd>
-          </div>
-          <div class="fact">
-            <dt>截止</dt>
-            <dd>{{ dateText(activity.deadline) }}</dd>
-          </div>
-          <div class="fact">
-            <dt>组织</dt>
-            <dd>{{ activity.org || '未加入组织' }}</dd>
-          </div>
-          <div class="fact">
-            <dt>状态</dt>
-            <dd>{{ activityStatusText(activity.status) }}</dd>
-          </div>
-        </dl>
-      </header>
+      <!-- 与发布活动页共用字段区块（`C-NAV-SHARED-ACTIVITY@2`） -->
+      <ActivityInfoSection :activity="activity" />
 
       <section class="app-section-card" aria-labelledby="activity-progress-heading">
         <h2 id="activity-progress-heading" class="section-title">整体进度</h2>
@@ -441,7 +435,7 @@ watch(
 
       <section class="app-section-card" aria-label="操作">
         <div class="app-actions">
-          <el-button @click="backToHall">返回事务列表</el-button>
+          <el-button @click="backToHall">返回列表</el-button>
           <el-button type="primary" @click="publishUnderActivity">在此活动下新建任务</el-button>
           <el-button @click="goPublish">发布相关事务</el-button>
         </div>
@@ -504,60 +498,6 @@ watch(
   gap: 16px;
 }
 
-.activity-header {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.activity-title {
-  margin: 0;
-  font-size: var(--app-font-page-title);
-  font-weight: 700;
-  line-height: 1.3;
-  color: var(--app-text);
-  word-break: break-word;
-}
-
-.activity-desc {
-  margin: 0;
-  font-size: var(--app-font-body);
-  line-height: 1.7;
-  color: var(--app-text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.activity-facts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px;
-  margin: 0;
-}
-
-.fact {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-sm);
-  background: var(--app-surface-sunken);
-}
-
-.fact dt {
-  font-size: var(--app-font-aux);
-  color: var(--app-text-muted);
-}
-
-.fact dd {
-  margin: 0;
-  font-size: var(--app-font-body);
-  font-weight: 600;
-  color: var(--app-text);
-  word-break: break-word;
-}
 
 .section-head {
   display: flex;
@@ -737,9 +677,6 @@ watch(
     gap: 12px;
   }
 
-  .activity-facts {
-    grid-template-columns: 1fr;
-  }
 
   .section-head :deep(.expand-all),
   .section-head .expand-all {

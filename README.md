@@ -186,6 +186,9 @@ cp .env.example .env      # Windows cmd: copy .env.example .env
 | `/login` | 登录页（唯一公开页） |
 | `/publish` | 统一发布页（**默认 AI 智能模式**，手动表单为兜底；文字 AI + 语音流式） |
 | `/tasks` | 任务大厅 |
+| `/my-tasks` | 我的任务（范围锁定本人参与/管理，不含全量） |
+| `/published-activities` | 我发布的活动（管理者；发布活动入口） |
+| `/activities/new` | 发布活动（管理者；预览与详情共用字段区块） |
 | `/tasks/:id` | 任务详情（子任务 / SOP / 进度 / 签到） |
 | `/profile` | 个人中心（我的任务 / 积分流水 / 签到 / 通知中心） |
 | `/admin` | 发布者后台（拆解确认 / 指派 / 催办 / 验收） |
