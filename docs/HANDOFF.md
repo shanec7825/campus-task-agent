@@ -1,6 +1,6 @@
 # 当前开发交接
 
-> 更新日期：2026-11-14（Asia/Shanghai，stage26 / AIW-07 既有验收补齐）。当前结论：AIW-00～06 阶段实现与 CI 已通过；stage25 规划已入库（`19eda9f` / CI `43553685701`，回填 `d1ceab2` / CI `43554038152`）；AIW-07 的 AC-01/03/09/14/15 已用 CLI 浏览器实际复现通过，AC-16 固定评测输入集已建立并在 mock 下验证 E-01/E-02/E-05。业务代码本轮未改。真实模型、真机与部署仍未验证，最终产品验收未完成。
+> 更新日期：2026-11-14（Asia/Shanghai，stage26 / AIW-07 既有验收补齐）。当前结论：AIW-00～06 阶段实现与 CI 已通过；stage25 规划已入库（`19eda9f` / CI `43553685701`，回填 `d1ceab2` / CI `43554038152`）；AIW-07 的 AC-01/03/09/14/15 已用 CLI 浏览器实际复现通过，AC-16 固定评测输入集已建立并在 mock 下验证 E-01/E-02/E-05。stage26 提交 `f3fa0fb` 已推送，CI run `43558695172` 四 job success。业务代码本轮未改。真实模型、真机与部署仍未验证，最终产品验收未完成。
 
 ## 1. 当前基线与本轮授权
 
@@ -27,6 +27,7 @@
 - 文档提交 `2439154`：CI run [43533483789](https://github.com/shanec7825/campus-task-agent/actions/runs/43533483789) 四个 job success。
 - 文档提交 `0d45809`：CI run [43533843104](https://github.com/shanec7825/campus-task-agent/actions/runs/43533843104) 四个 job success。
 - stage25 收口 `19eda9f` / CI `43553685701`，回填 `d1ceab2` / CI `43554038152`，均四 job success。
+- stage26 交付 `f3fa0fb` / CI `43558695172`，四 job success。`AGENTS.md` 单步协议条款按用户选择未提交，仍在工作区待确认。
 - stage26 浏览器验收：AC-01 未登录与会话失效均回跳 `/login?redirect=/admin`、成员被拒管理页落 `/ai`、通知深链到 `/tasks/1`；AC-03 大厅/预览/Esc/快速划过/返回保位 92→92；AC-09 v1 预审 fail→退回→v2 重提→旧稿 4090→同页验收 +4 积分→跨组织 4040；AC-14 零额度 0/0、AgentDock 三形态、390 视口；AC-15 深色 light→dark、移动无溢出。证据见 [stage26 过程](../codearts_proof/ai_dialogue/stage26_既有验收补齐.md)、[浏览器证据 JSON](../codearts_proof/reports/stage26_browser_evidence.json)、[AC-09/14/16 证据 JSON](../codearts_proof/reports/stage26_acceptance_evidence.json)、[评测输入集](../codearts_proof/reports/stage26_model_eval_inputs.json) 与 [截图](../codearts_proof/screenshots/stage26/)。
 - 本轮后端 `run_all` EXIT=0、前端 `run_all` ALL PASS；安全红线 12 通过 / 1 失败（B5b 忽略目录产物）；交付校验 39 / 1（D19 规划契约路径缺失，历史问题）。
 - 历史命令/审查/截图详情见 [stage24 验收报告](../codearts_proof/reports/stage24_整体验收.md) 和 [stage24 过程](../codearts_proof/ai_dialogue/stage24_整体验收.md)，不将历史通过数字算作本轮测试。

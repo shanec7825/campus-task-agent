@@ -106,8 +106,10 @@
 
 ## 7. 提交与 CI
 
-- 待回填：提交 SHA、推送结果、对应 CI run。
-- 回滚：文档与评测输入集可 `git revert`；验证脚本与隔离库位于 Git 忽略目录，不随提交分发。
+- 提交：`f3fa0fb`（`docs(stage26): AIW-07 既有验收补齐与证据归档`），已推送 `origin/main`。
+- CI：run `43558695172` 四个 job 全 success（Backend reliability ubuntu/windows、Backend API and SSE integration、Frontend build/voice/public source security checks）。
+- `AGENTS.md` 的单步协议条款按用户选择不提交，留在工作区待确认；本提交不含该文件。
+- 回滚：`git revert f3fa0fb`；`AGENTS.md` 未包含在提交中，无需回滚。
 
 ## 8. 并发写入者与工具归属
 
