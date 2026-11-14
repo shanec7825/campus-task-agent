@@ -300,6 +300,40 @@ export interface ActivityCreatePayload {
   org_id?: number | null
 }
 
+/** 整批发布中的任务草稿（`ActivityBatchTaskDraft`，契约 `C-BATCH-PUBLISH@1`） */
+export interface ActivityBatchTaskDraft {
+  /** 批内唯一引用键；同批任务只能通过它声明依赖与父任务 */
+  key: string
+  title: string
+  description?: string | null
+  location?: string | null
+  start_time?: string | null
+  deadline?: string | null
+  quota?: number | null
+  volunteer_hours?: number | null
+  claim_type?: 'open' | 'assign'
+  sop_guide?: string | null
+  style_note?: string | null
+  extras?: Record<string, unknown>
+  credit_reward?: number
+  /** 前置任务 key（只能引用同批次其他任务） */
+  depends_on_keys: string[]
+  /** 父任务 key；`null` 表示顶层任务（父任务自身不得再有父任务） */
+  parent_key: string | null
+}
+
+/** 整批发布请求体（`POST /api/activities/publish-batch`） */
+export interface ActivityBatchPublishPayload {
+  activity: ActivityCreatePayload
+  tasks: ActivityBatchTaskDraft[]
+}
+
+/** 整批发布返回（`{activity, tasks}`，任务顺序与请求一致） */
+export interface ActivityBatchPublishResult {
+  activity: Activity
+  tasks: TaskItem[]
+}
+
 // --------------------------------------------------------------------------- //
 // 报名审批（`C-APPLY@1` 的数据结构，契约 `C-DATA@2`）
 // --------------------------------------------------------------------------- //

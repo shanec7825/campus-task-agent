@@ -6,6 +6,8 @@
 import { request } from './client'
 import type {
   Activity,
+  ActivityBatchPublishPayload,
+  ActivityBatchPublishResult,
   ActivityCreatePayload,
   ActivityDetail,
   ActivityListResult
@@ -30,4 +32,10 @@ export function getActivity(id: number): Promise<ActivityDetail> {
 
 export function createActivity(payload: ActivityCreatePayload): Promise<Activity> {
   return request<Activity>('POST', '/api/activities', payload)
+}
+/** 活动与全部任务一次原子发布（契约 `C-BATCH-PUBLISH@1`）；任一失败服务端整体回滚 */
+export function publishActivityBatch(
+  payload: ActivityBatchPublishPayload
+): Promise<ActivityBatchPublishResult> {
+  return request<ActivityBatchPublishResult>('POST', '/api/activities/publish-batch', payload)
 }

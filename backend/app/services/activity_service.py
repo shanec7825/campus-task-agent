@@ -1,8 +1,9 @@
 """活动层级校验与进度聚合的唯一实现（契约 `C-HIERARCHY@1`、`C-ACTIVITY-API@1`）。
 
-本模块只读活动与任务数据（除调用方自行插入活动行外不写库），提供：
+除 :func:`publish_batch` 在单事务内写入活动 + 任务 + 依赖外，本模块只读活动与任务数据，提供：
 
 - :func:`resolve_task_placement`：任务创建 / 移动时的三层结构与跨活动校验；
+- :func:`publish_batch`：整批发布（`C-BATCH-PUBLISH@1`），先全量校验再写入；
 - :func:`build_activity_payload`：``ActivityOut`` 可直读的字典（含 ``owner_name`` 与进度）；
 - :func:`build_activity_tree`：``ActivityTaskNode`` 可直读的任务树（一层任务 + 一层子任务）。
 
@@ -12,17 +13,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import ApiError
-from app.models import Activity, Task, User
-from app.services import application_service
+from app.models import Activity, Organization, Task, User
+from app.schemas import ActivityBatchTaskDraft, ActivityPublishBatchIn
+from app.services import application_service, authz, task_graph_service
 
 #: 终态：不再参与进度统计（``verified`` 计为完成，``cancelled`` 单独计数）。
 TERMINAL_STATUSES: frozenset[str] = frozenset({"verified", "cancelled"})
 
 ERR_ACTIVITY = 4001
+ERR_NOT_FOUND = 4040
+
+#: 整批发布未提供 ``reminder_rule``（契约字段集不含该字段），与单任务发布的默认值一致。
+DEFAULT_REMINDER_RULE: dict = {"days_before": 1, "day_of": True, "on_overdue": True}
 
 
 def resolve_task_placement(
@@ -70,6 +78,214 @@ def resolve_task_placement(
         raise ApiError(ERR_ACTIVITY, "活动不存在")
 
     return effective_parent.activity_id if effective_parent is not None else activity_id
+
+
+def _parent_key(draft: ActivityBatchTaskDraft) -> str | None:
+    """草稿的 ``parent_key`` 归一化：去空白，空串视为未声明。"""
+    if draft.parent_key is None:
+        return None
+    normalized = draft.parent_key.strip()
+    if not normalized:
+        raise ApiError(ERR_ACTIVITY, "父任务 key 不能为空")
+    return normalized
+
+
+def _resolve_batch_keys(drafts: Sequence[ActivityBatchTaskDraft]) -> list[str]:
+    """批内 key 列表：缺失按索引生成 ``t0``、``t1``…；重复直接 ``4001``。"""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for index, draft in enumerate(drafts):
+        key = (draft.key or "").strip() or f"t{index}"
+        if key in seen:
+            raise ApiError(ERR_ACTIVITY, f"任务 key 重复：{key}")
+        seen.add(key)
+        keys.append(key)
+    return keys
+
+
+def _assert_acyclic(adjacency: dict[str, list[str]]) -> None:
+    """批内依赖成环检测（迭代 DFS，状态 0/1/2），成环抛 ``4001``。"""
+    state: dict[str, int] = {}
+    for start in adjacency:
+        if state.get(start, 0) == 2:
+            continue
+        state[start] = 1
+        stack: list[tuple[str, Iterator[str]]] = [(start, iter(adjacency.get(start, ())))]
+        while stack:
+            node, children = stack[-1]
+            child = next(children, None)
+            if child is None:
+                state[node] = 2
+                stack.pop()
+                continue
+            status = state.get(child, 0)
+            if status == 1:
+                raise ApiError(ERR_ACTIVITY, "前置依赖不能形成环")
+            if status == 0:
+                state[child] = 1
+                stack.append((child, iter(adjacency.get(child, ()))))
+
+
+def _validate_batch_drafts(drafts: Sequence[ActivityBatchTaskDraft], keys: Sequence[str]) -> None:
+    """写入前完成全部任务级校验；任一失败 ``4001`` 且不写库。
+
+    校验项：标题、配额、积分、``parent_id`` 不受支持、父任务存在且为顶层、
+    依赖 key 存在、自依赖 / 重复依赖、依赖同层级、成环。
+    """
+    key_to_index = {key: index for index, key in enumerate(keys)}
+    adjacency: dict[str, list[str]] = {}
+
+    for key, draft in zip(keys, drafts):
+        if not (draft.title or "").strip():
+            raise ApiError(ERR_ACTIVITY, f"任务 {key} 标题不能为空")
+        if draft.parent_id is not None:
+            raise ApiError(ERR_ACTIVITY, f"任务 {key} 请使用 parent_key 指定父任务")
+        if draft.quota is not None and draft.quota < 1:
+            raise ApiError(ERR_ACTIVITY, f"任务 {key} 需求人数必须大于 0")
+        if draft.credit_reward < 0:
+            raise ApiError(ERR_ACTIVITY, f"任务 {key} 完成奖励积分不能为负数")
+
+        parent_key = _parent_key(draft)
+        if parent_key is not None:
+            if parent_key == key:
+                raise ApiError(ERR_ACTIVITY, "任务不能以自己为父任务")
+            if parent_key not in key_to_index:
+                raise ApiError(ERR_ACTIVITY, f"未知父任务 key：{parent_key}")
+            if _parent_key(drafts[key_to_index[parent_key]]) is not None:
+                raise ApiError(ERR_ACTIVITY, "子任务不可继续拆分")
+
+        depends_on_keys = list(draft.depends_on_keys)
+        if len(depends_on_keys) != len(set(depends_on_keys)):
+            raise ApiError(ERR_ACTIVITY, f"任务 {key} 的前置任务不能重复")
+        for dep_key in depends_on_keys:
+            if dep_key == key:
+                raise ApiError(ERR_ACTIVITY, "任务不能依赖自己")
+            if dep_key not in key_to_index:
+                raise ApiError(ERR_ACTIVITY, f"未知依赖 key：{dep_key}")
+            if _parent_key(drafts[key_to_index[dep_key]]) != parent_key:
+                raise ApiError(ERR_ACTIVITY, "前置任务必须与当前任务属于同一层级")
+        adjacency[key] = depends_on_keys
+
+    _assert_acyclic(adjacency)
+
+
+def _build_batch_task(
+    activity: Activity,
+    owner_id: int,
+    draft: ActivityBatchTaskDraft,
+    *,
+    parent_id: int | None,
+) -> Task:
+    """构造一条待写入的任务行；字段口径与单任务发布保持一致。"""
+    return Task(
+        parent_id=parent_id,
+        activity_id=int(activity.id),
+        org_id=activity.org_id,
+        title=(draft.title or "").strip(),
+        description=draft.description,
+        location=draft.location,
+        start_time=draft.start_time,
+        deadline=draft.deadline,
+        quota=draft.quota,
+        volunteer_hours=draft.volunteer_hours,
+        status="published",
+        claim_type=draft.claim_type,
+        publisher_id=int(owner_id),
+        assignee_id=None,
+        depends_on=None,
+        sop_guide=draft.sop_guide,
+        style_note=draft.style_note,
+        extras=draft.extras,
+        reminder_rule=dict(DEFAULT_REMINDER_RULE),
+        credit_reward=draft.credit_reward,
+    )
+
+
+def publish_batch(
+    db: Session, user: User, payload: ActivityPublishBatchIn
+) -> tuple[Activity, list[Task]]:
+    """整批发布活动与全部任务（`C-BATCH-PUBLISH@1`），失败整体回滚。
+
+    先完成全部校验（活动标题、组织存在与发布权、任务字段、批内 key、依赖、层级、成环），
+    再写入活动与任务（先顶层后子任务，逐条 ``flush`` 取 id），依赖经
+    ``task_graph_service.replace_dependencies`` 写边表并同步旧 ``depends_on``；
+    最后单次 ``commit``。任何异常先 ``rollback`` 再抛出，不留活动 / 任务 / 依赖行。
+
+    Returns:
+        ``(activity, tasks)``，``tasks`` 顺序与请求一致。
+    """
+    activity_in = payload.activity
+    title = (activity_in.title or "").strip()
+    if not title:
+        raise ApiError(ERR_ACTIVITY, "活动标题不能为空")
+
+    if activity_in.org_id is not None and db.get(Organization, int(activity_in.org_id)) is None:
+        raise ApiError(ERR_NOT_FOUND, "组织不存在", 404)
+    org_id = authz.resolve_task_org(
+        db,
+        user=user,
+        parent=None,
+        activity=None,
+        org_id=activity_in.org_id,
+    )
+
+    drafts = list(payload.tasks)
+    keys = _resolve_batch_keys(drafts)
+    _validate_batch_drafts(drafts, keys)
+
+    created: dict[str, Task] = {}
+    try:
+        activity = Activity(
+            title=title,
+            description=activity_in.description,
+            location=activity_in.location,
+            start_time=activity_in.start_time,
+            deadline=activity_in.deadline,
+            owner_id=int(user.id),
+            org=activity_in.org,
+            org_id=org_id,
+            status="published",
+        )
+        db.add(activity)
+        db.flush()
+
+        # 先顶层后子任务：子任务需要父任务的 id，而请求顺序不保证父任务在前。
+        for key, draft in zip(keys, drafts):
+            if _parent_key(draft) is not None:
+                continue
+            task = _build_batch_task(activity, int(user.id), draft, parent_id=None)
+            db.add(task)
+            db.flush()
+            created[key] = task
+        for key, draft in zip(keys, drafts):
+            parent_key = _parent_key(draft)
+            if parent_key is None:
+                continue
+            task = _build_batch_task(
+                activity,
+                int(user.id),
+                draft,
+                parent_id=int(created[parent_key].id),
+            )
+            db.add(task)
+            db.flush()
+            created[key] = task
+
+        for key, draft in zip(keys, drafts):
+            dependency_ids = [int(created[dep_key].id) for dep_key in draft.depends_on_keys]
+            if dependency_ids:
+                task_graph_service.replace_dependencies(db, created[key], dependency_ids)
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(activity)
+    ordered = [created[key] for key in keys]
+    for task in ordered:
+        db.refresh(task)
+    return activity, ordered
 
 
 def _activity_tasks(db: Session, activity_id: int) -> list[Task]:
@@ -206,7 +422,9 @@ def _assignees_payload(rows: list[tuple[int, str]]) -> list[dict]:
 
 __all__ = [
     "TERMINAL_STATUSES",
+    "DEFAULT_REMINDER_RULE",
     "resolve_task_placement",
+    "publish_batch",
     "build_activity_payload",
     "build_activity_tree",
 ]

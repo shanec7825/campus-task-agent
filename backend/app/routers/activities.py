@@ -20,7 +20,13 @@ from app.db import get_db
 from app.deps import get_current_user, require_csrf
 from app.errors import ApiError, ok
 from app.models import Activity, Task, User
-from app.schemas import ActivityCreate, ActivityDetailOut, ActivityListOut, ActivityOut
+from app.schemas import (
+    ActivityCreate,
+    ActivityDetailOut,
+    ActivityListOut,
+    ActivityOut,
+    ActivityPublishBatchIn,
+)
 from app.services import activity_service, authz
 from app.services import task_graph_service
 
@@ -227,6 +233,32 @@ def create_activity(
     db.commit()
     db.refresh(activity)
     return ok(ActivityOut.model_validate(_activity_payload(db, activity)).model_dump())
+
+
+@router.post("/publish-batch")
+def publish_batch(
+    payload: ActivityPublishBatchIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """整批发布活动与全部任务（契约 `C-BATCH-PUBLISH@1`），任一失败整体回滚。
+
+    事务边界在 ``activity_service.publish_batch``：校验全部完成后才写库并单次提交。
+    响应 ``data = {activity, tasks}``，``tasks`` 顺序与请求一致。
+    """
+    activity, tasks = activity_service.publish_batch(db, current_user, payload)
+    # 复用任务路由的任务装配与知识库入库；本路由挂载在 tasks 路由之后，导入不会反向成环。
+    from app.routers.tasks import _index_task_safe, _single_task_payload
+
+    # 先固化响应快照：知识库入库失败时 ``_index_task_safe`` 会 rollback，ORM 对象可能过期。
+    data = {
+        "activity": ActivityOut.model_validate(_activity_payload(db, activity)).model_dump(),
+        "tasks": [_single_task_payload(db, task, int(current_user.id)) for task in tasks],
+    }
+    # 与单任务发布同口径：入库失败只记日志，不让已提交的整批发布返回失败。
+    for task in tasks:
+        _index_task_safe(db, task)
+    return ok(data)
 
 
 __all__ = ["router"]

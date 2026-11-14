@@ -487,6 +487,44 @@ class ActivityCreate(BaseModel):
     org_id: int | None = None
 
 
+class ActivityBatchTaskDraft(BaseModel):
+    """整批发布中的单个任务草稿（`C-BATCH-PUBLISH@1`）。
+
+    字段集 = ``TaskCreate`` 去掉 ``activity_id`` / ``org_id`` / ``assignee_id`` /
+    ``depends_on`` / ``depends_on_ids`` / ``reminder_rule``，另加批内引用字段。
+    ``key`` 缺失时由服务层按数组索引生成 ``t0``、``t1``…；``parent_id`` 仅为字段集
+    兼容保留，批内父任务必须用 ``parent_key`` 声明。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,32}$")
+    parent_id: int | None = None
+    title: str = Field(min_length=1)
+    description: str | None = None
+    location: str | None = None
+    start_time: str | None = None
+    deadline: str | None = None
+    quota: int | None = None
+    volunteer_hours: float | None = None
+    claim_type: Literal["open", "assign"] = "open"
+    depends_on_keys: list[str] = Field(default_factory=list)
+    parent_key: str | None = None
+    sop_guide: str | None = None
+    style_note: str | None = None
+    extras: dict[str, Any] = Field(default_factory=dict)
+    credit_reward: int = 20
+
+
+class ActivityPublishBatchIn(BaseModel):
+    """活动 + 全部任务的整批发布请求（`C-BATCH-PUBLISH@1`）；``tasks`` 允许为空。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    activity: ActivityCreate
+    tasks: list[ActivityBatchTaskDraft] = Field(default_factory=list)
+
+
 # --------------------------------------------------------------------------- #
 # 报名审批（`C-APPLY@1` 的数据结构，契约 `C-DATA@2`）
 # --------------------------------------------------------------------------- #
