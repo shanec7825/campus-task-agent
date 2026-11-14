@@ -904,14 +904,20 @@ class AiChatIn(BaseModel):
 
 
 class AiCitation(BaseModel):
-    """回答来源：只由服务端从当前用户可见任务映射生成。"""
+    """回答来源：只由服务端从当前用户可见任务 / 开放资料映射生成。
+
+    ``kind`` 区分任务、活动与资料；旧记录没有该字段时按 ``task`` 解析，
+    旧客户端忽略不认识的 ``doc`` 项仍可正常展示。``doc`` 项额外带 ``resource_id``。
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
-    type: Literal["task"] = "task"
+    type: Literal["task", "doc"] = "task"
     id: int
     title: str
     activity_id: int | None = None
+    kind: Literal["task", "activity", "doc"] = "task"
+    resource_id: int | None = None
 
 
 class AiMessageOut(BaseModel):
@@ -1077,6 +1083,36 @@ class LibraryLinkUpdateIn(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Library 资料引用（契约 `C-LIB-REF@1`）
+# --------------------------------------------------------------------------- #
+
+
+class LibraryRefIn(BaseModel):
+    """新增 / 刷新一条资料引用；只接受资料 id，可见性由服务层校验。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    resource_id: int = Field(gt=0)
+
+
+class LibraryRefOut(BaseModel):
+    """引用响应：资料快照字段 + 引用时间；不返回 ``owner_id`` 与正文。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    resource_id: int
+    title: str
+    summary: str | None = None
+    resource_type: str
+    file_name: str | None = None
+    file_size: int | None = None
+    url: str | None = None
+    org_id: int
+    added_at: str
+    last_used_at: str
+
+
+# --------------------------------------------------------------------------- #
 # 成果版本与预审（契约 `C-SUBMISSION@1` / `C-PRECHECK@1`）
 # --------------------------------------------------------------------------- #
 
@@ -1181,6 +1217,70 @@ class SubmissionListOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     items: list[SubmissionOut] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# 组织资料库（契约 `C-ORG-LIBRARY@1`）
+# --------------------------------------------------------------------------- #
+
+
+class OrgResourceFileIn(BaseModel):
+    """上传文件描述：JSON + base64，不引入 multipart 依赖。
+
+    ``size`` 为声明的字节数，服务层解码后必须与 ``data_base64`` 实际长度一致。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str = Field(min_length=1, max_length=255)
+    mime: str = Field(default="", max_length=200)
+    size: int = Field(ge=0)
+    data_base64: str = Field(min_length=1)
+
+
+class OrgResourceCreateIn(BaseModel):
+    """组织资料新增入参；``file`` 与 ``url`` 二选一由服务层校验（同时给或都不给 → 4001）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    org_id: int
+    title: str = Field(min_length=1, max_length=200)
+    summary: str | None = Field(default=None, max_length=2000)
+    url: str | None = Field(default=None, max_length=1000)
+    file: OrgResourceFileIn | None = None
+
+
+class OrgResourcePatchIn(BaseModel):
+    """PATCH 入参：只改传入字段；服务层按 ``model_fields_set`` 区分缺省与显式值。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    summary: str | None = Field(default=None, max_length=2000)
+    allow_student_ai: bool | None = None
+    archived: bool | None = None
+
+
+class OrgResourceOut(BaseModel):
+    """组织资料响应；不返回 ``content_text`` / ``search_text`` / ``file_path``。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    org_id: int
+    title: str
+    summary: str | None = None
+    resource_type: str
+    url: str | None = None
+    file_name: str | None = None
+    file_mime: str | None = None
+    file_size: int | None = None
+    text_status: Literal["pending", "ready", "failed"] = "pending"
+    allow_student_ai: bool = False
+    archived: bool = False
+    created_by: int
+    created_at: str
+    updated_at: str
 
 
 # --------------------------------------------------------------------------- #
@@ -1352,6 +1452,10 @@ __all__ = [
     "SUBMISSION_ALLOWED_EXTS",
     "ACCEPTANCE_KEY",
     "normalize_acceptance",
+    "OrgResourceFileIn",
+    "OrgResourceCreateIn",
+    "OrgResourcePatchIn",
+    "OrgResourceOut",
 ]
 
 # --------------------------------------------------------------------------- #

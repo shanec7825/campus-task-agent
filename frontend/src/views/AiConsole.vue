@@ -21,9 +21,15 @@ import LoadingState from '../components/common/LoadingState.vue'
 import { useVoiceComposer } from '../composables/useVoiceComposer'
 import { useAiChatStore } from '../stores/aiChat'
 import { useNotificationsStore } from '../stores/notifications'
-import type { NotificationItem } from '../types/models'
+import type { AiCitation, AiCitationKind, NotificationItem } from '../types/models'
 
 const SUGGESTIONS = ['我有哪些临近截止的事务？', '我有权限查看哪些活动？', '我接下来该先处理什么？']
+
+/** 回答来源类型标签（`C-AI-DOC-CONTEXT@1`）：任务 / 资料 */
+const CITATION_KIND_LABELS: Record<AiCitationKind, string> = {
+  task: '任务',
+  doc: '资料'
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -299,8 +305,26 @@ function switchNoticePanel(panel: 'inbox' | 'archive'): void {
   void router.replace({ query })
 }
 
+/** 只认 doc；未知值与历史的 activity 一律兜底为 task，避免出现死标签 */
+function citationKind(citation: AiCitation): AiCitationKind {
+  return citation.kind === 'doc' ? 'doc' : 'task'
+}
+
+function citationLabel(citation: AiCitation): string {
+  return CITATION_KIND_LABELS[citationKind(citation)]
+}
+
+function citationTagType(citation: AiCitation): 'info' | 'success' {
+  return citationKind(citation) === 'doc' ? 'success' : 'info'
+}
+
 function openCitation(taskId: number): void {
   void router.push({ name: 'detail', params: { id: taskId } })
+}
+
+/** 资料引用跳 Library 引用区；没有资料详情路由，不做客户端拼接 */
+function openCitationLibrary(): void {
+  void router.push({ name: 'library' })
 }
 
 function openWorkbench(): void {
@@ -488,8 +512,30 @@ onUnmounted(() => {
           <p class="message-role">{{ item.role === 'user' ? '你' : '助手' }}</p>
           <p class="message-content">{{ item.content }}</p>
           <ul v-if="item.citations.length > 0" class="citation-list" aria-label="回答来源">
-            <li v-for="citation in item.citations" :key="`${citation.id}-${citation.title}`">
+            <li
+              v-for="(citation, index) in item.citations"
+              :key="`${citation.kind}-${index}`"
+              class="citation-item"
+            >
+              <el-tag
+                size="small"
+                effect="plain"
+                :type="citationTagType(citation)"
+                class="citation-tag"
+              >
+                {{ citationLabel(citation) }}
+              </el-tag>
               <button
+                v-if="citationKind(citation) === 'doc'"
+                type="button"
+                class="citation-link"
+                :aria-label="`在 Library 查看资料：${citation.title}`"
+                @click="openCitationLibrary"
+              >
+                {{ citation.title }}
+              </button>
+              <button
+                v-else
                 type="button"
                 class="citation-link"
                 :aria-label="`打开来源任务：${citation.title}`"
@@ -891,6 +937,18 @@ onUnmounted(() => {
   padding: 0;
   list-style: none;
 }
+
+.citation-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--app-space-2);
+}
+
+.citation-tag {
+  flex-shrink: 0;
+}
+
 
 .citation-link {
   display: inline-flex;

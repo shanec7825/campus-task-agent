@@ -66,6 +66,14 @@ jobs:
         run: >-
           python -m pytest tests/backend/test_v1_batch_publish.py
           tests/backend/test_v1_submission_policy.py -q
+      - name: Run V1 document parse suite
+        run: python -m pytest tests/backend/test_v1_document_parse.py -q
+      - name: Run V1 org library suite
+        run: python -m pytest tests/backend/test_v1_org_library.py -q
+      - name: Run V1 library refs suite
+        run: python -m pytest tests/backend/test_v1_library_refs.py -q
+      - name: Run V1 AI context suite
+        run: python -m pytest tests/backend/test_v1_ai_context.py -q
 
   backend-integration:
     name: Backend API and SSE integration

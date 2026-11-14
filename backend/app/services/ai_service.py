@@ -2,8 +2,12 @@
 
 职责边界：
 
-* 上下文只取 ``authz.visible_task_filter`` 命中的任务，最多 20 条；
-* 回答来源由服务端把模型返回的 ``ref`` 映射回真实任务，模型给出的 ID / 标题不落库；
+* 任务上下文委托 ``task_query_service.build_task_context``（按问题相关度），
+  最多 20 条；``general`` / ``activity`` / ``task`` 作用域语义保持不变；
+* 文档上下文只取 ``org_library_service.search_allowed`` 命中的开放资料片段，
+  最多 3 条、整体不超过 1200 字符；
+* 回答来源由服务端把模型返回的 ``ref`` 映射回真实任务 / 资料，模型给出的 ID /
+  标题不落库；回答成功后自动收藏 ``kind="doc"`` 的引用，失败不影响回答；
 * 会话按 ``user_id`` 归属，跨账号读写一律 4040，不泄露资源存在性；
 * 会话作用域（``C-AI-SCOPE@1``）绑定通用 / 活动 / 任务，每次读取 / 续写前
   重新校验对象可见性，撤权后 4040 且保留历史行；
@@ -25,7 +29,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import case, delete, func, or_, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -42,7 +46,7 @@ from app.schemas import (
     AiUsageItem,
     AiUsageOut,
 )
-from app.services import authz
+from app.services import authz, library_ref_service, org_library_service, task_query_service
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,10 @@ MAX_CONTEXT_TASKS = 20
 MAX_CONVERSATION_LIST = 50
 MAX_CITATIONS = 5
 TITLE_LENGTH = 30
+#: 文档上下文（`C-AI-DOC-CONTEXT@1`）：最多 3 条片段，整体不超过 1200 字符。
+MAX_DOC_ITEMS = 3
+MAX_DOC_SNIPPET = 300
+MAX_DOC_CONTEXT_CHARS = 1200
 
 ROLE_USER = "user"
 ROLE_ASSISTANT = "assistant"
@@ -252,17 +260,28 @@ def _replay(
 
 @dataclass(frozen=True)
 class _ContextItem:
-    """模型上下文的纯值快照：不在模型调用期间持有 ORM 对象。"""
+    """模型上下文的纯值快照：不在模型调用期间持有 ORM 对象。
+
+    ``kind`` 区分 ``task`` / ``activity`` / ``doc``；文档条目没有任务字段，
+    只填 ``title`` 与 ``summary``（片段）以及 ``resource_id``。
+    """
 
     ref: str
-    task_id: int
     title: str
-    activity_id: int | None
-    activity_title: str | None
-    status: str
-    deadline: str | None
-    location: str | None
-    description: str | None
+    kind: str = "task"
+    task_id: int | None = None
+    activity_id: int | None = None
+    activity_title: str | None = None
+    status: str = ""
+    deadline: str | None = None
+    location: str | None = None
+    description: str | None = None
+    sop: str | None = None
+    acceptance: str | None = None
+    latest_submission: str | None = None
+    review_result: str | None = None
+    resource_id: int | None = None
+    summary: str | None = None
 
 
 class _RawAnswer(BaseModel):
@@ -334,113 +353,192 @@ def _visible_context(
     user: User,
     scope_type: str = SCOPE_GENERAL,
     scope_id: int | None = None,
+    question: str = "",
 ) -> list[_ContextItem]:
-    """按截止时间取当前用户可见任务摘要（NULL 截止排在最后）。
+    """按问题相关度取当前用户可见任务（委托 ``task_query_service``）。
 
-    ``general`` 取全部可见任务；``activity`` 只取该活动下可见任务；
-    ``task`` 取该任务及同活动可见任务；均最多 ``MAX_CONTEXT_TASKS`` 条。
+    没有任何关键词 / 意图命中时按截止时间取最近任务，保持旧行为；
+    ``general`` 取全部可见任务，``activity`` / ``task`` 只取对应作用域任务，
+    均最多 ``MAX_CONTEXT_TASKS`` 条。
     """
-    query = (
-        select(Task, Activity)
-        .outerjoin(Activity, Activity.id == Task.activity_id)
-        .where(authz.visible_task_filter(db, user))
+    rows = task_query_service.build_task_context(
+        db,
+        user,
+        question,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        limit=MAX_CONTEXT_TASKS,
     )
-    if scope_type == SCOPE_ACTIVITY:
-        query = query.where(Task.activity_id == int(scope_id))
-    elif scope_type == SCOPE_TASK:
-        task = db.get(Task, int(scope_id))
-        activity_id = int(task.activity_id) if task is not None and task.activity_id is not None else None
-        if activity_id is None:
-            query = query.where(Task.id == int(scope_id))
-        else:
-            query = query.where(or_(Task.id == int(scope_id), Task.activity_id == activity_id))
-    rows = db.execute(
-        query.order_by(
-            case((Task.deadline.is_(None), 1), else_=0),
-            Task.deadline.asc(),
-            Task.id.asc(),
-        ).limit(MAX_CONTEXT_TASKS)
-    ).all()
+    return [
+        _ContextItem(
+            ref=f"T{index}",
+            kind="task",
+            task_id=int(row["task_id"]),
+            title=str(row["title"]),
+            activity_id=row.get("activity_id"),
+            activity_title=row["activity_name"],
+            status=str(row["status"] or ""),
+            deadline=row["deadline"],
+            location=row["location"],
+            description=row.get("description"),
+            sop=row["sop"],
+            acceptance=row["acceptance"],
+            latest_submission=row["latest_submission"],
+            review_result=row["review_result"],
+        )
+        for index, row in enumerate(rows, start=1)
+    ]
+
+
+def _doc_context(db: Session, user: User, question: str) -> list[_ContextItem]:
+    """开放资料片段：最多 3 条、整体不超过 ``MAX_DOC_CONTEXT_CHARS``。
+
+    检索失败只记日志并返回空上下文，不阻断问答（资料是增强信息，不是必需输入）。
+    """
+    try:
+        hits = org_library_service.search_allowed(db, user, question, limit=MAX_DOC_ITEMS)
+    except Exception:  # noqa: BLE001 - 资料检索失败不得中断回答
+        logger.warning("资料检索失败，跳过文档上下文", exc_info=True)
+        return []
+
     items: list[_ContextItem] = []
-    for index, (task, activity) in enumerate(rows, start=1):
-        description = (task.description or "").strip()
+    total = 0
+    for hit in hits:
+        snippet = str(hit.get("snippet") or "").strip()[:MAX_DOC_SNIPPET]
+        if not snippet:
+            continue
+        if total + len(snippet) > MAX_DOC_CONTEXT_CHARS:
+            break
+        total += len(snippet)
         items.append(
             _ContextItem(
-                ref=f"T{index}",
-                task_id=int(task.id),
-                title=task.title,
-                activity_id=int(activity.id) if activity is not None else None,
-                activity_title=activity.title if activity is not None else None,
-                status=task.status,
-                deadline=task.deadline,
-                location=task.location,
-                description=description[:300] if description else None,
+                ref=f"D{len(items) + 1}",
+                kind="doc",
+                title=str(hit.get("title") or ""),
+                summary=snippet,
+                resource_id=int(hit["resource_id"]),
             )
         )
     return items
 
 
 def _citation(item: _ContextItem) -> AiCitation:
+    if item.kind == "doc":
+        return AiCitation(
+            type="doc",
+            id=int(item.resource_id or 0),
+            title=item.title,
+            activity_id=None,
+            kind="doc",
+            resource_id=item.resource_id,
+        )
     return AiCitation(
         type="task",
-        id=item.task_id,
+        id=int(item.task_id or 0),
         title=item.title,
         activity_id=item.activity_id,
+        kind=item.kind if item.kind in ("task", "activity") else "task",
     )
 
 
 def _context_payload(items: list[_ContextItem]) -> list[dict[str, Any]]:
-    return [
-        {
-            "ref": item.ref,
-            "title": item.title,
-            "activity": item.activity_title,
-            "status": item.status,
-            "deadline": item.deadline,
-            "location": item.location,
-            "description": item.description,
-        }
-        for item in items
-    ]
+    payload: list[dict[str, Any]] = []
+    for item in items:
+        if item.kind == "doc":
+            payload.append(
+                {
+                    "ref": item.ref,
+                    "kind": "doc",
+                    "title": item.title,
+                    "snippet": item.summary,
+                }
+            )
+            continue
+        payload.append(
+            {
+                "ref": item.ref,
+                "kind": item.kind,
+                "title": item.title,
+                "activity": item.activity_title,
+                "status": item.status,
+                "deadline": item.deadline,
+                "location": item.location,
+                "description": item.description,
+                "sop": item.sop,
+                "acceptance": item.acceptance,
+                "latest_submission": item.latest_submission,
+                "review_result": item.review_result,
+            }
+        )
+    return payload
+
+
+def _doc_block(doc_items: list[_ContextItem]) -> str:
+    return "参考资料：\n" + "\n".join(f"- {item.title}" for item in doc_items)
+
+
+def _with_docs(
+    answer: str, citations: list[AiCitation], doc_items: list[_ContextItem]
+) -> tuple[str, list[AiCitation]]:
+    """把文档来源并入回答与 citation。
+
+    有文档命中时为资料预留槽位（优先保留全部 doc 来源，总数仍受 ``MAX_CITATIONS``
+    限制），保证正文列出的参考资料都能在 citations 中找到，而不是被任务来源挤掉。
+    """
+    if not doc_items:
+        return answer, citations
+    doc_citations = [_citation(item) for item in doc_items[:MAX_CITATIONS]]
+    reserved = min(len(doc_citations), MAX_CITATIONS)
+    merged = citations[: MAX_CITATIONS - reserved] + doc_citations
+    return answer + "\n" + _doc_block(doc_items), merged
 
 
 def _mock_answer(items: list[_ContextItem], question: str) -> tuple[str, list[AiCitation]]:
     """确定性 mock 回答：只使用可见上下文，便于行为回归。"""
-    if not items:
+    task_items = [item for item in items if item.kind != "doc"]
+    doc_items = [item for item in items if item.kind == "doc"]
+
+    if not task_items:
+        if not doc_items:
+            return (
+                "当前没有你有权限查看的事务，因此暂时无法基于事务数据回答。"
+                "可以到事务大厅查看公开范围，或联系组织管理员确认权限。",
+                [],
+            )
         return (
-            "当前没有你有权限查看的事务，因此暂时无法基于事务数据回答。"
-            "可以到事务大厅查看公开范围，或联系组织管理员确认权限。",
-            [],
+            "当前没有你有权限查看的任务，但检索到以下参考资料：\n" + _doc_block(doc_items),
+            [_citation(item) for item in doc_items[:MAX_CITATIONS]],
         )
 
     if "活动" in question:
         activity_names: list[str] = []
-        for item in items:
+        for item in task_items:
             if item.activity_title is None:
                 continue
             if item.activity_title not in activity_names:
                 activity_names.append(item.activity_title)
         if activity_names:
             shown = "、".join(activity_names[:5])
-            cited = [item for item in items if item.activity_title is not None][:3]
-            return (
+            cited = [item for item in task_items if item.activity_title is not None][:3]
+            return _with_docs(
                 f"你有权限查看的活动包括：{shown}。每个活动下的任务可以在活动详情中查看，"
                 "本回答只使用当前可见范围。",
                 [_citation(item) for item in cited],
+                doc_items,
             )
 
-    selected = items[:3]
+    selected = task_items[:3]
     lines = []
     for item in selected:
         activity = f"（{item.activity_title}）" if item.activity_title is not None else ""
         deadline = item.deadline or "未设置截止时间"
         lines.append(f"{item.ref}. {item.title}{activity}，截止：{deadline}")
     answer = (
-        f"根据你有权限查看的 {len(items)} 项事务，先列出最需要关注的 {len(selected)} 项：\n"
+        f"根据你有权限查看的 {len(task_items)} 项事务，先列出最需要关注的 {len(selected)} 项：\n"
         + "\n".join(lines)
         + "\n以上内容来自当前可见任务；如需查看要求或更新进度，请打开对应任务详情。"
     )
-    return answer, [_citation(item) for item in selected]
+    return _with_docs(answer, [_citation(item) for item in selected], doc_items)
 
 
 def _real_answer(items: list[_ContextItem], question: str) -> tuple[str, list[AiCitation]]:
@@ -561,7 +659,8 @@ def chat(
     # 只读校验后结束事务，避免模型调用期间持有 SQLite 读锁。
     db.rollback()
 
-    items = _visible_context(db, user, normalized_scope_type, normalized_scope_id)
+    items = _visible_context(db, user, normalized_scope_type, normalized_scope_id, text)
+    items.extend(_doc_context(db, user, text))
     db.rollback()
 
     try:
@@ -655,13 +754,32 @@ def chat(
     db.refresh(user_message)
     db.refresh(assistant_message)
 
-    return AiChatOut(
+    out = AiChatOut(
         conversation_id=int(conversation.id),
         user_message=_message_out(user_message),
         assistant_message=_message_out(assistant_message),
         mock=mock,
         replayed=False,
     )
+    # 回答已提交，引用收藏走独立短事务；任何失败都只记日志，不影响回答返回。
+    _record_doc_citations(db, user, citations)
+    return out
+
+
+def _record_doc_citations(db: Session, user: User, citations: list[AiCitation]) -> None:
+    """回答成功后自动收藏 ``kind="doc"`` 的资料引用（`C-AI-DOC-CONTEXT@1`）。"""
+    resource_ids = [
+        int(citation.resource_id)
+        for citation in citations
+        if citation.kind == "doc" and citation.resource_id is not None
+    ]
+    if not resource_ids:
+        return
+    try:
+        library_ref_service.record_citations(db, user, resource_ids)
+    except Exception:  # noqa: BLE001 - 收藏失败不得影响已成功返回的回答
+        db.rollback()
+        logger.exception("记录 AI 资料引用失败（user_id=%s）", getattr(user, "id", None))
 
 
 def get_usage(db: Session, user: User, limit: int = 20) -> AiUsageOut:

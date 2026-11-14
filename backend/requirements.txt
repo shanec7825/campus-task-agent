@@ -9,6 +9,9 @@ openai>=1.30
 apscheduler>=3.10,<4
 python-dotenv>=1.0
 jieba>=0.42
+# S3 组织资料 PDF 正文抽取（`C-DOC-PARSE@1`）。可选依赖：缺失或解析异常时
+# document_service 返回 text_status=failed，上传照常保存，不阻断主流程。
+pypdf>=4.0
 # 阶段 2 密码哈希：使用标准库 hashlib.scrypt（n=2^14, r=8, p=1，16 字节 salt），
 # 存储格式 scrypt$16384$8$1$<salt_b64>$<hash_b64>。
 # 环境无法安装 argon2-cffi（PyPI 不可达），故未引入 argon2-cffi / passlib / pyjwt；

@@ -3232,6 +3232,10 @@ CHECKS = CHECKS + (
         "㊸ C-AI-THREE-PANE@1 个人页只保留未读数，通知正文仅在 AI 页",
         lambda: check_profile_notice_entry("views/Profile.vue", SRC_DIR),
     ),
+    (
+        "㊹ C-ORG-LIBRARY@1 Library 组织资料开关默认关闭与免责提示",
+        lambda: check_org_library_ui("api/orgResources.ts", "views/LibraryPage.vue", SRC_DIR),
+    ),
 )
 
 
@@ -3394,6 +3398,212 @@ def check_profile_notice_entry(rel_view: str, src_dir: Path) -> str:
         raise ContractError("；".join(problems))
     return f"{rel_view} 通知中心已移除，未读数入口跳到 AI 页 `panel=inbox`"
 
+
+
+def check_org_library_ui(rel_api: str, rel_view: str, src_dir: Path) -> str:
+    """㊹ `C-ORG-LIBRARY@1`（前端）：4 个 API 导出 + 组织资料区默认关闭与免责提示。"""
+    api = strip_ts_comments(load_text(src_dir / rel_api))
+    view = strip_ts_comments(load_text(src_dir / rel_view))
+    problems: list[str] = []
+
+    exported = collect_exported_functions(api)
+    missing = [
+        name
+        for name in (
+            "listOrgResources",
+            "createOrgResource",
+            "patchOrgResource",
+            "downloadOrgResourceUrl",
+        )
+        if name not in exported
+    ]
+    if missing:
+        problems.append(f"{rel_api} 缺少导出函数：{missing}（C-ORG-LIBRARY@1 前端消费者契约）")
+
+    for token, detail in (
+        ("allow_student_ai", "组织资料 AI 检索开关字段"),
+        ("ORG_AI_NOTICE", "开关风险提示常量"),
+        ("开启后学生可能通过 AI 回答看到资料内容，不等于文件保密", "免责提示文案"),
+        ("(org.role === 'admin' || org.role === 'collaborator')", "组织资料区仅限 admin/collaborator"),
+        ('v-if="manageableOrgs.length > 0"', "无管理权组织时不渲染组织资料区"),
+        ("include_archived", "归档资料可查看"),
+        ("downloadOrgResourceUrl", "文件下载入口"),
+        ("'归档'", "归档动作"),
+        ("'恢复'", "归档后恢复动作"),
+        ("statusMeta(item.text_status)", "解析状态展示"),
+    ):
+        _require(problems, view, token, rel_view, detail)
+
+    for status in ("pending", "ready", "failed"):
+        if f"{status}:" not in view:
+            problems.append(f"{rel_view} 未展示解析状态 `{status}`（C-ORG-LIBRARY@1）")
+
+    for forbidden in ("allow_student_ai = true", "allow_student_ai: true"):
+        if forbidden in view:
+            problems.append(
+                f"{rel_view} 出现 `{forbidden}`（默认开启学生 AI 检索，契约要求缺省关闭）"
+            )
+
+    if not re.search(r':model-value="flagOn\(item\.allow_student_ai\)"', view):
+        problems.append(
+            f"{rel_view} 的检索开关未绑定服务端 `allow_student_ai`（默认取回 0 = 关闭）"
+        )
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_api} 导出 listOrgResources/createOrgResource/patchOrgResource/"
+        f"downloadOrgResourceUrl；{rel_view} 组织资料区仅 admin/collaborator 可见，"
+        "开关默认关闭并提示「开启后学生可能通过 AI 回答看到资料内容，不等于文件保密」，"
+        "支持归档/恢复、下载与 pending/ready/failed 状态"
+    )
+
+
+def check_library_refs_ui(
+    rel_api: str, rel_view: str, rel_ai: str, rel_types: str, src_dir: Path
+) -> str:
+    """㊺ `C-LIB-REF@1` / `C-AI-DOC-CONTEXT@1`（前端）：引用收藏区 + AI 来源标签。"""
+    api = strip_ts_comments(load_text(src_dir / rel_api))
+    view = strip_ts_comments(load_text(src_dir / rel_view))
+    ai = strip_ts_comments(load_text(src_dir / rel_ai))
+    types_text = strip_ts_comments(load_text(src_dir / rel_types))
+    problems: list[str] = []
+
+    exported = collect_exported_functions(api)
+    missing = [name for name in ("listLibraryRefs", "saveLibraryRef") if name not in exported]
+    if missing:
+        problems.append(f"{rel_api} 缺少导出函数：{missing}（C-LIB-REF@1 前端消费者契约）")
+    for token, detail in (
+        ("'/api/library/refs'", "引用列表 / 保存端点"),
+        ("revoked_count", "撤回数量字段"),
+        ("{ resource_id: resourceId }", "保存引用请求体"),
+    ):
+        _require(problems, api, token, rel_api, detail)
+
+    for token, detail in (
+        ("我的引用资料", "引用区标题"),
+        ("listLibraryRefs", "引用区读取接口"),
+        ("refRevokedCount", "撤回数量状态"),
+        ("条引用已撤回或归档", "撤回数量提示"),
+        ("在 AI 中引用后自动收藏", "空态说明"),
+        ("downloadOrgResourceUrl(ref.resource_id)", "引用资料下载入口"),
+        ("refTypeLabel(ref.resource_type)", "引用资料类型标签"),
+    ):
+        _require(problems, view, token, rel_view, detail)
+
+    for token, detail in (
+        ("CITATION_KIND_LABELS", "来源类型标签映射"),
+        ("openCitationLibrary", "资料项跳 Library"),
+        ('@click="openCitationLibrary"', "资料项点击跳 Library"),
+        ("name: 'library'", "Library 路由"),
+        ("citation-tag", "来源标签渲染"),
+    ):
+        _require(problems, ai, token, rel_ai, detail)
+
+    labels_match = re.search(r"CITATION_KIND_LABELS[^=]*=\s*\{([^}]*)\}", ai, re.S)
+    if labels_match is None:
+        problems.append(f"{rel_ai} 未找到 `CITATION_KIND_LABELS` 映射（C-AI-DOC-CONTEXT@1）")
+    else:
+        labels = dict(
+            re.findall(
+                r"([A-Za-z_$][\w$]*)\s*:\s*'([^']*)'", labels_match.group(1)
+            )
+        )
+        if set(labels) != {"task", "doc"}:
+            problems.append(
+                f"{rel_ai} CITATION_KIND_LABELS 的键为 {sorted(labels)}，"
+                "契约要求 task / doc 二值（`kind='activity'` 永不产生）"
+            )
+        elif labels["task"] != "任务" or labels["doc"] != "资料":
+            problems.append(
+                f"{rel_ai} 来源标签值不符：task={labels['task']!r} / doc={labels['doc']!r}"
+                "（要求「任务」/「资料」）"
+            )
+    if not re.search(
+        r"citation\.kind\s*===\s*'doc'\s*\?\s*'doc'\s*:\s*'task'", ai
+    ):
+        problems.append(
+            f"{rel_ai} 的 citationKind() 未按 `kind === 'doc' ? 'doc' : 'task'` 兜底"
+            "（未知 kind 必须落回 task）"
+        )
+
+    ref_iface = re.search(r"export interface LibraryRef\s*\{([^}]*)\}", types_text, re.S)
+    if ref_iface is None:
+        problems.append(f"{rel_types} 缺少 `export interface LibraryRef`（C-LIB-REF@1）")
+    else:
+        body = ref_iface.group(1)
+        for field in (
+            "resource_id",
+            "title",
+            "summary",
+            "resource_type",
+            "file_name",
+            "file_size",
+            "url",
+            "org_id",
+            "added_at",
+            "last_used_at",
+        ):
+            if not re.search(rf"\b{field}\s*:", body):
+                problems.append(
+                    f"{rel_types} 的 LibraryRef 缺少字段 `{field}`（C-LIB-REF@1）"
+                )
+
+    kind_match = re.search(r"export type AiCitationKind\s*=\s*([^\n]+)", types_text)
+    if kind_match is None:
+        problems.append(
+            f"{rel_types} 缺少 `export type AiCitationKind`（C-AI-DOC-CONTEXT@1）"
+        )
+    else:
+        kinds = set(re.findall(r"'([^']+)'", kind_match.group(1)))
+        if kinds != {"task", "doc"}:
+            problems.append(
+                f"{rel_types} AiCitationKind={sorted(kinds)}，"
+                "契约要求 task / doc 二值（`kind='activity'` 永不产生）"
+            )
+    citation_match = re.search(r"export interface AiCitation\s*\{([^}]*)\}", types_text, re.S)
+    if citation_match is None:
+        problems.append(f"{rel_types} 缺少 `export interface AiCitation`")
+    else:
+        citation_body = citation_match.group(1)
+        if not re.search(r"\bkind\s*:\s*AiCitationKind", citation_body):
+            problems.append(
+                f"{rel_types} 的 AiCitation 缺少 `kind: AiCitationKind`（C-AI-DOC-CONTEXT@1）"
+            )
+        if not re.search(r"\btype\s*:\s*'task'\s*\|\s*'doc'", citation_body):
+            problems.append(
+                f"{rel_types} 的 AiCitation.type 必须为 `'task' | 'doc'`（doc 来源）"
+            )
+        if not re.search(r"\bresource_id\s*\??\s*:", citation_body):
+            problems.append(
+                f"{rel_types} 的 AiCitation 缺少 `resource_id` 字段（doc 引用）"
+            )
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_api} 导出 listLibraryRefs/saveLibraryRef 并指向 /api/library/refs；"
+        f"{rel_view} 新增「我的引用资料」区（类型标签、下载、撤回数量、空态说明）；"
+        f"{rel_ai} 来源标签为 task「任务」/ doc「资料」二值（无活动标签），"
+        "未知 kind 兜底 task，doc 项跳 Library；"
+        f"{rel_types} 的 AiCitationKind 二值、AiCitation.type 含 doc、"
+        "LibraryRef 字段与 resource_id 齐备"
+    )
+
+
+# 追加到既有 44 项之后（S4 引用区与 AI 来源标签）
+CHECKS = CHECKS + (
+    (
+        "㊺ C-LIB-REF@1 / C-AI-DOC-CONTEXT@1 引用区与 AI 来源标签",
+        lambda: check_library_refs_ui(
+            "api/library.ts",
+            "views/LibraryPage.vue",
+            "views/AiConsole.vue",
+            "types/models.ts",
+            SRC_DIR,
+        ),
+    ),
+)
 
 
 if __name__ == "__main__":

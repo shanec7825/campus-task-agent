@@ -602,12 +602,19 @@ export interface SimilarResult {
 // AI 只读问答（`C-AI-CHAT@1`）
 // --------------------------------------------------------------------------- //
 
-/** 回答来源：只由服务端从当前用户可见任务映射生成 */
+/** 回答来源类型（`C-AI-DOC-CONTEXT@1`）：任务 / 资料（`activity` 永不产生） */
+export type AiCitationKind = 'task' | 'doc'
+
+/** 回答来源：只由服务端从当前用户可见任务 / 开放资料映射生成 */
 export interface AiCitation {
-  type: 'task'
+  /** 来源类型；历史或未知值前端一律按 `task` 展示 */
+  kind: AiCitationKind
+  type: 'task' | 'doc'
   id: number
   title: string
   activity_id: number | null
+  /** `kind="doc"` 的资料 id（跳 Library 用）；任务来源无此字段 */
+  resource_id?: number | null
 }
 
 /** AI 会话作用域（`C-AI-SCOPE@1`）：通用 / 活动 / 任务 */
@@ -920,4 +927,51 @@ export interface SubmissionItem {
 
 export interface SubmissionListResult {
   items: SubmissionItem[]
+}
+// --------------------------------------------------------------------------- //
+// 组织资料库（`C-ORG-LIBRARY@1`）
+// --------------------------------------------------------------------------- //
+
+/** 正文解析状态（`org_resources.text_status`）：解析失败不阻断保存 */
+export type OrgResourceTextStatus = 'pending' | 'ready' | 'failed'
+
+/** 组织资料（`OrgResourceOut`）：响应不含解析正文，`search_text` 也不外露 */
+export interface OrgResource {
+  id: number
+  org_id: number
+  title: string
+  summary: string | null
+  resource_type: 'file' | 'link'
+  /** link 必填；file 为空 */
+  url: string | null
+  file_name: string | null
+  file_mime: string | null
+  file_size: number | null
+  text_status: OrgResourceTextStatus
+  /** 后端按 0/1 存储、PATCH 接受 bool；读取时兼容两种形态 */
+  allow_student_ai: boolean | number
+  archived: boolean | number
+  created_by: number
+  created_at: string
+  updated_at: string
+}
+// --------------------------------------------------------------------------- //
+// 个人 Library 引用（`C-LIB-REF@1`）
+// --------------------------------------------------------------------------- //
+
+/**
+ * AI 收藏的引用资料（`LibraryRefOut`）：只含当前仍可访问的引用，不复制文件。
+ * 已撤回 / 归档的引用不出现在列表项中，只在响应的 `revoked_count` 里计数。
+ */
+export interface LibraryRef {
+  resource_id: number
+  title: string
+  summary: string | null
+  resource_type: 'file' | 'link'
+  file_name: string | null
+  file_size: number | null
+  url: string | null
+  org_id: number
+  added_at: string
+  last_used_at: string
 }

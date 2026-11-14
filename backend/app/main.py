@@ -22,6 +22,7 @@ from app import routers
 from app.db import Base, init_db
 from app.routers import activities as activities_router
 from app.routers import library as library_router
+from app.routers import org_resources as org_resources_router
 from app.routers import orgs as orgs_router
 from app.routers import registration as registration_router
 from app.routers import search as search_router
@@ -154,6 +155,8 @@ app.include_router(registration_router.router)
 # AIW-14 r2：Library 私有链接与「我的活动/任务」搜索（`C-LIBRARY@1` / `C-MY-SEARCH@1`）
 app.include_router(library_router.router)
 app.include_router(search_router.router)
+# S3：组织资料库上传 / 列表 / 开关 / 归档 / 下载（`C-ORG-LIBRARY@1`）
+app.include_router(org_resources_router.router)
 
 # --------------------------------------------------------------------------- #
 # 生产形态静态托管（首屏加速）：dist 同源托管，避免经 1Mbps 隧道拉取数百个 ESM

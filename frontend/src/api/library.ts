@@ -5,6 +5,7 @@
  * 契约不提供删除与公开共享。
  */
 import { request } from './client'
+import type { LibraryRef } from '../types/models'
 
 /** 个人参考链接（`LibraryLinkOut`）：归属由服务端按会话判定，响应不含 `owner_id` */
 export interface LibraryLink {
@@ -52,4 +53,19 @@ export function updateLibraryLink(
   p: LibraryLinkUpdatePayload
 ): Promise<LibraryLink> {
   return request<LibraryLink>('PATCH', `/api/library/links/${linkId}`, p)
+}
+/** 引用资料列表（`C-LIB-REF@1`）：`items` 只含仍可访问的引用，`revoked_count` 为其余条数 */
+export interface LibraryRefListResult {
+  items: LibraryRef[]
+  revoked_count: number
+}
+
+/** `GET /api/library/refs`：只返回本人仍可访问的引用，不泄露被撤回资料的标题 */
+export function listLibraryRefs(): Promise<LibraryRefListResult> {
+  return request<LibraryRefListResult>('GET', '/api/library/refs')
+}
+
+/** `POST /api/library/refs`：资料不可访问时服务端返回 `code=4040` */
+export function saveLibraryRef(resourceId: number): Promise<LibraryRef> {
+  return request<LibraryRef>('POST', '/api/library/refs', { resource_id: resourceId })
 }

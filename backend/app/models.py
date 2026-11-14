@@ -1,11 +1,11 @@
-"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1` / `C-TASK-GRAPH@1` / `C-RESOURCE@1` / `C-SUBMISSION@1` / `C-PRECHECK@1` / `C-AI-USAGE@1` / `C-LIBRARY@1`）。
+"""共享数据模型（契约 `C-DATA@2` / `C-DATA-AUTH@1` / `C-AI-DATA@1` / `C-TASK-GRAPH@1` / `C-RESOURCE@1` / `C-SUBMISSION@1` / `C-PRECHECK@1` / `C-AI-USAGE@1` / `C-LIBRARY@1` / `C-ORG-LIBRARY@1` / `C-LIB-REF@1`）。
 
-24 张表：users / tasks / checkins / credit_logs / notifications /
+26 张表：users / tasks / checkins / credit_logs / notifications /
 kb_entries / parse_sessions / progress_logs / task_applications / task_members /
 activities / organizations / org_members / invitations / user_sessions /
 password_resets / ai_conversations / ai_messages / task_dependencies /
 activity_resources / task_submissions / submission_prechecks / ai_usage_ledger /
-library_links。
+library_links / org_resources / library_refs。
 
 说明：Demo 期不建数据库级外键约束，仅做应用层校验（PLAN 2.2.1 A：
 「Demo 期不建数据库级外键，应用层校验」）；JSON 列落库为 SQLite TEXT，
@@ -583,6 +583,83 @@ class LibraryLink(Base):
     )
 
 
+class OrgResource(Base):
+    """组织资料库条目（契约 `C-ORG-LIBRARY@1`）。
+
+    - ``resource_type=file`` 时 ``file_name`` / ``file_mime`` / ``file_size`` / ``file_path``
+      必填、``url`` 为空；``link`` 反之。二选一由服务层校验，库表不建 CHECK。
+    - ``content_text`` 存解析正文（失败为空），``search_text`` 存其规范化检索文本；
+      ``text_status`` ∈ ``pending`` / ``ready`` / ``failed``。
+    - ``allow_student_ai`` 与 ``archived`` 落库为 0/1（SQLite 无原生 bool）：默认关闭
+      学生 AI 检索、默认未归档。
+    - 沿用项目「Demo 期不建数据库级外键」约定，``org_id`` / ``created_by`` 由应用层校验。
+    """
+
+    __tablename__ = "org_resources"
+    __table_args__ = (
+        Index("ix_org_resources_org_id", "org_id"),
+        Index("ix_org_resources_org_allow", "org_id", "allow_student_ai", "archived"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resource_type: Mapped[str] = mapped_column(
+        Text, nullable=False, default="file", server_default=text("'file'")
+    )
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_mime: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    text_status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default=text("'pending'")
+    )
+    allow_student_ai: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    archived: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+    updated_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
+class LibraryRef(Base):
+    """个人 Library 的组织资料引用（契约 `C-LIB-REF@1`）。
+
+    - 只记录「谁引用了哪份资料」与时间戳，不复制文件、不缓存正文；
+    - ``(owner_id, resource_id)`` 唯一，重复引用只更新 ``last_used_at``；
+    - 可见性不落库：每次读取按 ``org_resources`` 的开关 / 归档与当前组织成员
+      关系实时判定，资料撤回后引用自动「失效」但仍保留在表中（用于撤回计数）；
+    - 沿用项目「Demo 期不建数据库级外键」约定，两个 id 由服务层校验。
+    """
+
+    __tablename__ = "library_refs"
+    __table_args__ = (
+        Index("uq_library_refs_owner_resource", "owner_id", "resource_id", unique=True),
+        Index("ix_library_refs_owner_id", "owner_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    resource_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    added_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+    last_used_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default=_now_local, server_default=_NOW_SQL
+    )
+
+
 __all__ = [
     "User",
     "Task",
@@ -608,4 +685,6 @@ __all__ = [
     "SubmissionPrecheck",
     "AiUsageLedger",
     "LibraryLink",
+    "OrgResource",
+    "LibraryRef",
 ]

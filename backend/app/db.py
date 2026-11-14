@@ -265,15 +265,17 @@ def init_db() -> None:
     阶段 2 的 ``organizations`` / ``org_members`` / ``invitations`` / ``user_sessions`` /
     ``password_resets``、阶段 19 的 ``ai_conversations`` / ``ai_messages``、AIW-03 的
     ``task_dependencies``，以及 AIW-04 的 ``activity_resources`` / ``task_submissions`` /
-    ``submission_prechecks``、AIW-05 的 ``ai_usage_ledger``）；随后
+    ``submission_prechecks``、AIW-05 的 ``ai_usage_ledger``、S3 的 ``org_resources``、
+    S4 的 ``library_refs``）；随后
     ``_migrate`` 对旧库补齐 ``notifications.dedupe_key``、``notifications.stale``、去重索引、具名唯一索引
     ``uq_task_members_task_user``、legacy ``approved`` 报名与逐人成员行、
     ``tasks.activity_id``，以及阶段 2 的 ``users`` 认证列、``tasks`` /
     ``activities`` 的 ``org_id`` 与组织相关索引，并把无密码旧账号标记为
     ``legacy_unclaimed``，以及 AIW-09 的 ``ai_conversations.scope_type`` /
     ``scope_id`` 与 ``parse_sessions.user_id``、AIW-10 的
-    ``submission_prechecks.resource_snapshot``。AI 会话表只新增、不修改既有表；
-    全程不使用 DROP / 删列 / 删行，重复执行不会产生重复数据。
+    ``submission_prechecks.resource_snapshot``。S3 的 ``org_resources`` 与 S4 的
+    ``library_refs`` 是全新表，由 ``create_all`` 直接创建、无需 ALTER，也没有旧数据回填。
+    AI 会话表只新增、不修改既有表；全程不使用 DROP / 删列 / 删行，重复执行不会产生重复数据。
     """
     from app import models  # noqa: F401  （注册 ORM 映射，避免循环导入）
 
