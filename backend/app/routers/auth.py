@@ -2,7 +2,8 @@
 
 - ``POST /api/auth/login``：账号密码登录，成功下发 ``cta_session`` 与 ``cta_csrf``；
 - ``POST /api/auth/logout``：撤销当前会话并清 Cookie（无会话时幂等返回）；
-- ``GET /api/auth/me``：前端刷新后恢复会话，带该用户 active 组织成员关系。
+- ``GET /api/auth/me``：前端刷新后恢复会话，带该用户 active 组织成员关系；
+- ``PATCH /api/auth/avatar``：本人头像整体替换 / 清除（契约 `C-AVATAR-API@1`）。
 
 登录失败按同一 IP + 用户名做进程内滑动窗口限流；失败文案不区分「账号不存在」与
 「密码错误」（R1 不泄露账号是否存在）。
@@ -10,6 +11,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import time
 from typing import Any
 
@@ -21,7 +24,7 @@ from app.db import get_db
 from app.deps import get_current_user, require_csrf
 from app.errors import ApiError, ok
 from app.models import User
-from app.schemas import LoginIn, LoginOut, MeOut, OrgMembershipOut, UserOut
+from app.schemas import AvatarIn, LoginIn, LoginOut, MeOut, OrgMembershipOut, UserOut
 from app.security import hash_token, verify_password
 from app.services import session_service
 
@@ -35,6 +38,13 @@ MESSAGE_TOO_MANY_ATTEMPTS = "尝试过于频繁，请稍后再试"
 
 LOGIN_WINDOW_SECONDS = 300
 LOGIN_MAX_FAILURES = 5
+
+ERROR_INVALID_INPUT = 4001
+MESSAGE_INVALID_AVATAR = "头像格式无效"
+
+#: 头像（`C-AVATAR-API@1`）：只接受三种 data URL 前缀，总长 ≈200KB 原始字节的上限。
+AVATAR_MAX_CHARS = 280_000
+AVATAR_PREFIXES = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,")
 
 # 限流键 -> 窗口内的失败时间戳（monotonic 秒）
 _FAILURES: dict[str, list[float]] = {}
@@ -136,6 +146,22 @@ def logout(
     return ok({"revoked": revoked})
 
 
+def _normalize_avatar(value: str | None) -> str | None:
+    """把请求值规范为可落库的头像；``None`` / 空串清除，其余不合法一律 4001。"""
+    if not value:
+        return None
+    if len(value) > AVATAR_MAX_CHARS:
+        raise ApiError(ERROR_INVALID_INPUT, MESSAGE_INVALID_AVATAR)
+    prefix = next((item for item in AVATAR_PREFIXES if value.startswith(item)), None)
+    if prefix is None:
+        raise ApiError(ERROR_INVALID_INPUT, MESSAGE_INVALID_AVATAR)
+    try:
+        base64.b64decode(value[len(prefix):], validate=True)
+    except (binascii.Error, ValueError):
+        raise ApiError(ERROR_INVALID_INPUT, MESSAGE_INVALID_AVATAR) from None
+    return value
+
+
 @router.get("/me")
 def me(
     current_user: User = Depends(get_current_user),
@@ -147,6 +173,19 @@ def me(
         orgs=_memberships(db, current_user.id),
     ).model_dump()
     return ok(data)
+
+
+@router.patch("/avatar", dependencies=[Depends(require_csrf)])
+def update_avatar(
+    payload: AvatarIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """本人头像整体替换（幂等）或清除；校验失败不写库，返回统一 ``{code,msg,data}`` 包装。"""
+    current_user.avatar = _normalize_avatar(payload.avatar)
+    db.commit()
+    db.refresh(current_user)
+    return ok(UserOut.model_validate(current_user).model_dump())
 
 
 __all__ = ["router"]

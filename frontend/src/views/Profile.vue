@@ -17,6 +17,7 @@ import { ElMessage } from 'element-plus'
 
 import { myApplications } from '../api/applications'
 import { getUsage } from '../api/agent'
+import { updateAvatar } from '../api/auth'
 import { ApiError } from '../api/client'
 import { myCheckins } from '../api/checkin'
 import { myCredits } from '../api/credits'
@@ -24,6 +25,7 @@ import { listTasks } from '../api/tasks'
 import EmptyState from '../components/common/EmptyState.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import LoadingState from '../components/common/LoadingState.vue'
+import UserAvatar from '../components/common/UserAvatar.vue'
 import StatusTag from '../components/task/StatusTag.vue'
 import { applicationStatusMeta, formatDeadline, memberStatusMeta } from '../components/task/TaskCard.vue'
 import { useNotificationsStore } from '../stores/notifications'
@@ -69,6 +71,64 @@ const aiUsageError = ref('')
 
 const currentUserId = computed<number | null>(() => userStore.user?.id ?? null)
 const displayName = computed<string>(() => userStore.displayName || '未登录用户')
+
+/** 头像上传（`C-AVATAR-UI@1`）：类型与大小在浏览器侧先校验，超限不发请求 */
+const AVATAR_MAX_BYTES = 200 * 1024
+const AVATAR_TYPES = ['image/png', 'image/jpeg', 'image/webp']
+const avatarInput = ref<HTMLInputElement | null>(null)
+const avatarUploading = ref(false)
+
+function pickAvatar(): void {
+  avatarInput.value?.click()
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(new Error('图片读取失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
+/** 提交头像变更：`null` 表示移除并回退默认头像 */
+async function applyAvatar(avatar: string | null): Promise<void> {
+  avatarUploading.value = true
+  try {
+    const updated = await updateAvatar(avatar)
+    userStore.setAvatar(updated.avatar)
+    ElMessage.success(avatar === null ? '已恢复默认头像' : '头像已更新')
+  } catch (err) {
+    ElMessage.error(errorMessage(err))
+  } finally {
+    avatarUploading.value = false
+  }
+}
+
+async function onAvatarChange(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  input.value = ''
+  if (!file) return
+  if (!AVATAR_TYPES.includes(file.type)) {
+    ElMessage.warning('仅支持 PNG / JPEG / WebP 图片')
+    return
+  }
+  if (file.size > AVATAR_MAX_BYTES) {
+    ElMessage.warning('图片不能超过 200KB')
+    return
+  }
+  try {
+    const dataUrl = await readFileAsDataUrl(file)
+    await applyAvatar(dataUrl)
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '图片读取失败')
+  }
+}
+
+function removeAvatar(): void {
+  void applyAvatar(null)
+}
 const roleText = computed<string>(() => {
   const role = userStore.user?.role
   if (role === 'publisher') return '发布者'
@@ -263,12 +323,43 @@ onMounted(async () => {
     <section class="app-section-card overview">
       <div class="overview-main">
         <div class="overview-user">
-          <h3 class="overview-name">{{ displayName }}</h3>
-          <p class="overview-meta">
-            <el-tag size="small" effect="plain">{{ roleText }}</el-tag>
-            <span>{{ userStore.user?.username || '—' }}</span>
-            <span v-if="userStore.user?.org">{{ userStore.user?.org }}</span>
-          </p>
+          <div class="overview-avatar">
+            <UserAvatar
+              :user-id="currentUserId"
+              :name="displayName"
+              size="md"
+              :avatar="userStore.user?.avatar ?? null"
+            />
+            <div class="avatar-actions">
+              <input
+                ref="avatarInput"
+                class="avatar-input"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                @change="onAvatarChange"
+              />
+              <el-button size="small" :loading="avatarUploading" @click="pickAvatar">
+                上传头像
+              </el-button>
+              <el-button
+                v-if="userStore.user?.avatar"
+                size="small"
+                text
+                :loading="avatarUploading"
+                @click="removeAvatar"
+              >
+                移除头像
+              </el-button>
+            </div>
+          </div>
+          <div class="overview-identity">
+            <h3 class="overview-name">{{ displayName }}</h3>
+            <p class="overview-meta">
+              <el-tag size="small" effect="plain">{{ roleText }}</el-tag>
+              <span>{{ userStore.user?.username || '—' }}</span>
+              <span v-if="userStore.user?.org">{{ userStore.user?.org }}</span>
+            </p>
+          </div>
         </div>
         <div class="overview-credits">
           <span class="credits-value">{{ creditsBalance }}</span>
@@ -605,6 +696,35 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.overview-user {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.overview-avatar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.avatar-input {
+  display: none;
+}
+
+.avatar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+
+.overview-identity {
+  min-width: 0;
 }
 
 .overview-name {

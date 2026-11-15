@@ -64,7 +64,8 @@ export function chat(
   message: string,
   conversationId?: number,
   requestId?: string,
-  scope?: AiScope
+  scope?: AiScope,
+  resourceIds?: number[]
 ): Promise<AiChatResult> {
   const body: Record<string, unknown> = { message }
   if (conversationId !== undefined) body.conversation_id = conversationId
@@ -73,6 +74,8 @@ export function chat(
     body.scope_type = scope.type
     if (scope.type !== 'general' && scope.id !== null) body.scope_id = scope.id
   }
+  // 指定资料上下文（`C-AI-CONTEXT@1`）：空数组与缺省一致，不发该字段
+  if (resourceIds !== undefined && resourceIds.length > 0) body.resource_ids = resourceIds
   return request<AiChatResult>('POST', '/api/agent/chat', body)
 }
 

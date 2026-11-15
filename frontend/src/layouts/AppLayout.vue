@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import SegmentedTabs from '../components/common/SegmentedTabs.vue'
 import ThemeToggle from '../components/common/ThemeToggle.vue'
+import UserAvatar from '../components/common/UserAvatar.vue'
 import HistoryEntry from '../components/nav/HistoryEntry.vue'
 import NavIcon, { type NavIconName } from '../components/nav/NavIcon.vue'
 import SearchOverlay from '../components/nav/SearchOverlay.vue'
@@ -18,12 +20,12 @@ import { useUserStore } from '../stores/user'
 import type { Activity, AiConversationSummary, OrgMembership, TaskItem } from '../types/models'
 
 /**
- * 应用外壳（契约 C-ROUTE-NAV@1 / C-FE-AI@1）。
+ * 应用外壳（契约 C-ROUTE-NAV@1 / C-FE-AI@1 / C-SIDEBAR@1）。
  *
- * - ≥1025px：固定侧栏（品牌 / 主导航 / 管理入口 / 主题 / 用户与退出）+ 主内容列顶部组织上下文；
- *   侧栏可在 208px 与 72px 之间折叠，状态存 `cta_sidebar_collapsed`；
+ * - ≥1025px：固定侧栏（品牌 / 主导航 / 管理入口 / 历史胶囊 / 归档入口 / 主题 / 头像与退出）+ 主内容列顶部组织上下文；
+ *   侧栏默认展开、整体不滚动，可在 208px 与 72px 之间折叠，状态存 `cta_sidebar_collapsed_v2`；
  * - 769–1024px：顶部横向导航 + 组织上下文，无侧栏；
- * - ≤768px：顶部标题栏（当前页标题 + 组织上下文）+ 四项底部导航（AI / 事务 / 消息 / 我的，每项 44×44）；
+ * - ≤768px：顶部标题栏（当前页标题 + 组织上下文）+ 四项底部导航（AI / 大厅 / 归档 / 我的，每项 44×44）；
  * - 发布主入口仅出现在桌面展开态侧栏，手机端由工作台标题区承载；
  * - 未读消息数在底部导航以文字呈现（如「消息 3」）。
  */
@@ -32,13 +34,23 @@ interface NavItem {
   path: string
   label: string
   icon: NavIconName
-  /** 可选 query（如归档箱 `panel=archive`） */
+  /** 可选 query（跳转到列表页时携带筛选参数） */
   query?: Record<string, string>
 }
 
-const SIDEBAR_COLLAPSED_KEY = 'cta_sidebar_collapsed'
+const SIDEBAR_COLLAPSED_KEY = 'cta_sidebar_collapsed_v2'
+/** 侧栏历史胶囊的选中态：`activity` / `task` / `chat` */
+const SIDEBAR_HISTORY_TAB_KEY = 'cta_sidebar_history_tab'
 /** 侧栏/抽屉最近条目上限：只减少预览数量，不隐藏正式列表数据 */
-const RECENT_LIMIT = 5
+const RECENT_LIMIT = 3
+
+type HistoryTab = 'activity' | 'task' | 'chat'
+
+const HISTORY_TABS: Array<{ value: string; label: string }> = [
+  { value: 'activity', label: '活动' },
+  { value: 'task', label: '任务' },
+  { value: 'chat', label: '聊天' }
+]
 
 const route = useRoute()
 const router = useRouter()
@@ -52,6 +64,7 @@ const displayName = computed<string>(() => userStore.user?.display_name || userS
 const isLoggedIn = computed<boolean>(() => userStore.isLoggedIn)
 const canAdmin = computed<boolean>(() => userStore.isAdmin || userStore.isPublisher)
 const collapsed = ref<boolean>(readCollapsed())
+const historyTab = ref<HistoryTab>(readHistoryTab())
 const mobileDrawerOpen = ref<boolean>(false)
 const searchOpen = ref<boolean>(false)
 /** 搜索面板恢复词：来自 `cta_search_return`（`{ q }`） */
@@ -76,15 +89,7 @@ const pageTitle = computed<string>(() => {
 const mainNav: NavItem[] = [
   { name: 'ai', path: '/ai', label: 'AI 对话与通知', icon: 'ai' },
   { name: 'hall', path: '/tasks', label: '任务大厅', icon: 'hall' },
-  { name: 'my-tasks', path: '/my-tasks', label: '我的任务', icon: 'my-tasks' },
-  { name: 'library', path: '/library', label: 'Library', icon: 'library' },
-  {
-    name: 'ai-archive',
-    path: '/ai?panel=archive',
-    label: '归档通知',
-    icon: 'archive',
-    query: { panel: 'archive' }
-  }
+  { name: 'library', path: '/library', label: 'Library', icon: 'library' }
 ]
 
 /** 管理者的额外入口；普通用户不渲染，直连接口仍由后端授权拒绝 */
@@ -100,18 +105,14 @@ const managerNav: NavItem[] = [
 
 /** 底部个人区：主题切换之外的个人入口与退出 */
 const profileNav: NavItem = { name: 'profile', path: '/profile', label: '个人主页', icon: 'profile' }
+/** 归档通知不再是主导航项，入口固定在侧栏底部 */
+const archiveNav: NavItem = { name: 'archive', path: '/archive', label: '归档通知', icon: 'archive' }
 
 /** 手机底部导航保留主要入口（个人入口不在主导航重复出现） */
 const bottomNav: NavItem[] = [
   { name: 'ai', path: '/ai', label: 'AI', icon: 'ai' },
   { name: 'hall', path: '/tasks', label: '大厅', icon: 'hall' },
-  {
-    name: 'ai-archive',
-    path: '/ai?panel=archive',
-    label: '归档',
-    icon: 'archive',
-    query: { panel: 'archive' }
-  },
+  { name: 'archive', path: '/archive', label: '归档', icon: 'archive' },
   profileNav
 ]
 
@@ -135,6 +136,24 @@ function readCollapsed(): boolean {
   }
 }
 
+function readHistoryTab(): HistoryTab {
+  try {
+    const stored = window.localStorage.getItem(SIDEBAR_HISTORY_TAB_KEY)
+    if (stored === 'task' || stored === 'chat') return stored
+  } catch {
+    // 隐私模式下读不到持久值时用默认分组
+  }
+  return 'activity'
+}
+
+watch(historyTab, (value) => {
+  try {
+    window.localStorage.setItem(SIDEBAR_HISTORY_TAB_KEY, value)
+  } catch {
+    // 隐私模式下无法持久化时仅保留本次选择
+  }
+})
+
 function toggleSidebar(): void {
   collapsed.value = !collapsed.value
   try {
@@ -149,23 +168,16 @@ function isActive(name: string): boolean {
   if (name === 'hall') {
     return current === 'hall' || current === 'detail' || current === 'activity'
   }
-  if (name === 'my-tasks') {
-    return current === 'my-tasks'
-  }
   if (name === 'published-activities') {
     return current === 'published-activities' || current === 'publish-activity'
   }
-  if (name === 'ai-archive') return current === 'ai' && route.query.panel === 'archive'
-  if (name === 'ai') return current === 'ai' && route.query.panel !== 'archive'
+  if (name === 'ai') return current === 'ai'
   return current === name
 }
 
 function navigate(item: NavItem): void {
-  const name = item.name === 'ai-archive' ? 'ai' : item.name
-  const currentPanel = typeof route.query.panel === 'string' ? route.query.panel : ''
-  const targetPanel = item.query?.panel ?? ''
-  if (route.name !== name || currentPanel !== targetPanel) {
-    void router.push({ name, ...(item.query ? { query: item.query } : {}) })
+  if (route.name !== item.name) {
+    void router.push({ name: item.name, ...(item.query ? { query: item.query } : {}) })
   }
 }
 
@@ -185,10 +197,7 @@ function goConversation(id: number): void {
   void router.push({ name: 'ai', query: { conversation: String(id) } })
 }
 
-function openHistoryAll(): void {
-  mobileDrawerOpen.value = false
-  void router.push({ name: 'ai', query: { history: '1' } })
-}
+
 
 /** 最近条目：复用权限过滤后的列表摘要，不逐卡请求完整详情 */
 async function loadRecent(): Promise<void> {
@@ -219,14 +228,38 @@ function goTask(id: number): void {
   void router.push({ name: 'detail', params: { id } })
 }
 
-function goAllActivities(): void {
+/** 历史胶囊切换只切本地分组，不发请求 */
+const historyEmptyText = computed<string>(() => {
+  if (historyTab.value === 'activity') return '暂无活动'
+  if (historyTab.value === 'task') return '暂无任务'
+  return '暂无历史'
+})
+
+const historyAllHref = computed<string>(() => {
+  if (historyTab.value === 'activity') return '/my-tasks?type=activity'
+  if (historyTab.value === 'task') return '/my-tasks?type=task'
+  return '/ai?history=1'
+})
+
+function showAllHistory(): void {
   mobileDrawerOpen.value = false
-  void router.push({ name: 'my-tasks', query: { type: 'activity' } })
+  if (historyTab.value === 'activity') {
+    void router.push({ name: 'my-tasks', query: { type: 'activity' } })
+  } else if (historyTab.value === 'task') {
+    void router.push({ name: 'my-tasks', query: { type: 'task' } })
+  } else {
+    void router.push({ name: 'ai', query: { history: '1' } })
+  }
 }
 
-function goAllTasks(): void {
+function goArchive(): void {
   mobileDrawerOpen.value = false
-  void router.push({ name: 'my-tasks', query: { type: 'task' } })
+  void router.push({ name: 'archive' })
+}
+
+function goProfile(): void {
+  mobileDrawerOpen.value = false
+  void router.push({ name: 'profile' })
 }
 
 function openSearch(): void {
@@ -413,68 +446,87 @@ async function handleLogout(): Promise<void> {
         </a>
       </nav>
 
-      <div v-if="!collapsed" class="sidebar-group sidebar-recent" aria-label="最近条目">
+      <div v-if="!collapsed" class="sidebar-group sidebar-history" aria-label="最近条目">
+        <SegmentedTabs v-model="historyTab" :options="HISTORY_TABS" aria-label="最近条目类型" />
         <div class="recent-group">
-          <p class="recent-title">
-            <NavIcon name="recent" :size="16" />
-            <span>最近活动</span>
-          </p>
-          <p v-if="recentActivities.length === 0" class="recent-empty">暂无相关活动</p>
-          <a
-            v-for="activity in recentActivities"
-            :key="`recent-activity-${activity.id}`"
-            :href="`/activities/${activity.id}`"
-            class="recent-link"
-            :title="activity.title"
-            @click.prevent="goActivity(activity.id)"
+          <template v-if="historyTab === 'activity'">
+            <a
+              v-for="activity in recentActivities"
+              :key="`recent-activity-${activity.id}`"
+              :href="`/activities/${activity.id}`"
+              class="recent-link"
+              :title="activity.title"
+              @click.prevent="goActivity(activity.id)"
+            >
+              {{ activity.title }}
+            </a>
+          </template>
+          <template v-else-if="historyTab === 'task'">
+            <a
+              v-for="task in recentTasks"
+              :key="`recent-task-${task.id}`"
+              :href="`/tasks/${task.id}`"
+              class="recent-link"
+              :title="task.title"
+              @click.prevent="goTask(task.id)"
+            >
+              {{ task.title }}
+            </a>
+          </template>
+          <template v-else>
+            <HistoryEntry
+              v-for="item in recentAiHistory"
+              :key="`history-${item.id}`"
+              :conversation="item"
+              @select="goConversation"
+            />
+          </template>
+          <p
+            v-if="
+              (historyTab === 'activity' && recentActivities.length === 0) ||
+              (historyTab === 'task' && recentTasks.length === 0) ||
+              (historyTab === 'chat' && recentAiHistory.length === 0)
+            "
+            class="recent-empty"
           >
-            {{ activity.title }}
-          </a>
-          <a href="/my-tasks" class="recent-all" @click.prevent="goAllActivities">
-            查看全部活动
-          </a>
+            {{ historyEmptyText }}
+          </p>
+          <a :href="historyAllHref" class="recent-all" @click.prevent="showAllHistory">查看全部</a>
         </div>
-      </div>
-
-      <div class="sidebar-group sidebar-history" aria-label="最近聊天">
-        <p v-if="!collapsed" class="sidebar-group__title">最近聊天</p>
-        <div v-if="!collapsed" class="recent-group">
-          <p v-if="recentAiHistory.length === 0" class="recent-empty">暂无 AI 历史</p>
-          <HistoryEntry
-            v-for="item in recentAiHistory"
-            :key="`history-${item.id}`"
-            :conversation="item"
-            @select="goConversation"
-          />
-          <a href="/ai?history=1" class="recent-all" @click.prevent="openHistoryAll">查看全部</a>
-        </div>
-        <a
-          v-else
-          href="/ai?history=1"
-          class="sidebar-history__all"
-          aria-label="最近聊天"
-          title="最近聊天"
-          @click.prevent="openHistoryAll"
-        >
-          <NavIcon name="history" :size="18" />
-        </a>
       </div>
       </div>
 
       <div class="sidebar-foot">
-        <ThemeToggle />
-        <a
-          :href="profileNav.path"
+        <button
+          type="button"
           class="foot-link"
-          :class="{ 'is-active': isActive(profileNav.name) }"
-          :aria-label="profileNav.label"
-          :aria-current="isActive(profileNav.name) ? 'page' : undefined"
-          :title="profileNav.label"
-          @click.prevent="navigate(profileNav)"
+          :class="{ 'is-active': isActive(archiveNav.name) }"
+          aria-label="归档通知"
+          :aria-current="isActive(archiveNav.name) ? 'page' : undefined"
+          title="归档通知"
+          @click="goArchive"
         >
-          <NavIcon :name="profileNav.icon" />
-          <span v-if="!collapsed">{{ profileNav.label }}</span>
-        </a>
+          <NavIcon :name="archiveNav.icon" />
+          <span v-if="!collapsed">归档通知</span>
+        </button>
+        <ThemeToggle />
+        <button
+          type="button"
+          class="foot-user"
+          :class="{ 'is-active': isActive('profile') }"
+          :aria-label="profileNav.label"
+          :aria-current="isActive('profile') ? 'page' : undefined"
+          :title="profileNav.label"
+          @click="goProfile"
+        >
+          <UserAvatar
+            :user-id="userStore.user?.id ?? null"
+            :name="displayName"
+            size="md"
+            :avatar="userStore.user?.avatar ?? null"
+          />
+          <span v-if="!collapsed" class="foot-user__name">{{ displayName }}</span>
+        </button>
         <button
           type="button"
           class="text-button logout-button"
@@ -684,12 +736,8 @@ async function handleLogout(): Promise<void> {
         </nav>
 
         <div class="drawer-group" aria-label="最近条目">
-          <div class="recent-group">
-            <p class="recent-title">
-              <NavIcon name="recent" :size="16" />
-              <span>最近活动</span>
-            </p>
-            <p v-if="recentActivities.length === 0" class="recent-empty">暂无相关活动</p>
+          <SegmentedTabs v-model="historyTab" :options="HISTORY_TABS" aria-label="最近条目类型" />
+          <template v-if="historyTab === 'activity'">
             <a
               v-for="activity in recentActivities"
               :key="`drawer-activity-${activity.id}`"
@@ -700,29 +748,41 @@ async function handleLogout(): Promise<void> {
             >
               <span>{{ activity.title }}</span>
             </a>
+          </template>
+          <template v-else-if="historyTab === 'task'">
             <a
-              href="/my-tasks"
+              v-for="task in recentTasks"
+              :key="`drawer-task-${task.id}`"
+              :href="`/tasks/${task.id}`"
               class="drawer-link drawer-link--recent"
-              @click.prevent="goAllActivities"
+              :title="task.title"
+              @click.prevent="goTask(task.id)"
             >
-              <span>查看全部活动</span>
+              <span>{{ task.title }}</span>
             </a>
-          </div>
-        </div>
-
-        <div class="drawer-group" aria-label="最近聊天">
-          <p class="drawer-group__title">最近聊天</p>
-          <p v-if="recentAiHistory.length === 0" class="drawer-history-empty">暂无 AI 历史</p>
-          <HistoryEntry
-            v-for="item in recentAiHistory"
-            :key="`drawer-history-${item.id}`"
-            :conversation="item"
-            @select="goConversation"
-          />
+          </template>
+          <template v-else>
+            <HistoryEntry
+              v-for="item in recentAiHistory"
+              :key="`drawer-history-${item.id}`"
+              :conversation="item"
+              @select="goConversation"
+            />
+          </template>
+          <p
+            v-if="
+              (historyTab === 'activity' && recentActivities.length === 0) ||
+              (historyTab === 'task' && recentTasks.length === 0) ||
+              (historyTab === 'chat' && recentAiHistory.length === 0)
+            "
+            class="drawer-history-empty"
+          >
+            {{ historyEmptyText }}
+          </p>
           <a
-            href="/ai?history=1"
+            :href="historyAllHref"
             class="drawer-link drawer-link--recent"
-            @click.prevent="openHistoryAll"
+            @click.prevent="showAllHistory"
           >
             <span>查看全部</span>
           </a>
@@ -733,6 +793,18 @@ async function handleLogout(): Promise<void> {
         </div>
 
         <div class="drawer-foot">
+          <a
+            :href="archiveNav.path"
+            class="drawer-link"
+            :class="{ 'is-active': isActive(archiveNav.name) }"
+            :aria-label="archiveNav.label"
+            :aria-current="isActive(archiveNav.name) ? 'page' : undefined"
+            @click.prevent="goArchive"
+          >
+            <NavIcon :name="archiveNav.icon" :size="18" />
+            <span class="drawer-link__label">归档通知</span>
+            <span v-if="isActive(archiveNav.name)" class="drawer-current">当前</span>
+          </a>
           <ThemeToggle />
           <a
             :href="profileNav.path"
@@ -1112,7 +1184,7 @@ async function handleLogout(): Promise<void> {
     transition: width 0.2s ease, padding 0.2s ease;
   }
 
-  /* 侧栏主体唯一滚动容器；底部个人区固定可见，分组不互相叠压 */
+  /* 侧栏常态不滚动：隐藏滚动条；视口过矮时才纵向兜底，底部入口仍可达 */
   .sidebar-scroll {
     display: flex;
     flex: 1 1 auto;
@@ -1120,8 +1192,12 @@ async function handleLogout(): Promise<void> {
     gap: var(--app-space-4);
     min-height: 0;
     overflow-y: auto;
-    overscroll-behavior: contain;
-    scrollbar-width: thin;
+    overflow-x: hidden;
+    scrollbar-width: none;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar {
+    display: none;
   }
 
   .sidebar-scroll > * {
@@ -1259,7 +1335,8 @@ async function handleLogout(): Promise<void> {
   }
 
 
-  .app-sidebar.is-collapsed .foot-link {
+  .app-sidebar.is-collapsed .foot-link,
+  .app-sidebar.is-collapsed .foot-user {
     justify-content: center;
     padding: 0;
   }
@@ -1269,13 +1346,7 @@ async function handleLogout(): Promise<void> {
     border-top: 1px solid var(--app-border);
   }
 
-  /* 最近条目：有限量预览 + 查看全部；长标题省略但保留 title 全文 */
-  .sidebar-recent {
-    display: flex;
-    flex-direction: column;
-    gap: var(--app-space-3);
-  }
-
+  /* 最近条目：胶囊切换一组有限量预览 + 查看全部；长标题省略但保留 title 全文 */
   .sidebar-history {
     padding-top: var(--app-space-3);
     border-top: 1px solid var(--app-border);
@@ -1400,32 +1471,23 @@ async function handleLogout(): Promise<void> {
   color: var(--app-text);
 }
 
-.sidebar-history__all {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: var(--app-touch);
-  border-radius: var(--app-radius-sm);
-  color: var(--app-text-muted);
-  text-decoration: none;
-}
-
-.sidebar-history__all:hover,
-.sidebar-history__all:focus-visible {
-  background: var(--app-surface-sunken);
-  color: var(--app-text);
-}
 
 .foot-link {
   display: inline-flex;
   align-items: center;
   gap: var(--app-space-2);
+  width: 100%;
   min-height: var(--app-touch);
   padding: 0 var(--app-space-3);
+  border: 1px solid transparent;
   border-radius: var(--app-radius-sm);
+  background: transparent;
   color: var(--app-text-secondary);
+  font-family: inherit;
   font-size: var(--app-font-aux-lg);
+  text-align: left;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .foot-link:hover,
@@ -1440,6 +1502,43 @@ async function handleLogout(): Promise<void> {
   font-weight: 600;
 }
 
+/* 个人入口：头像 + 名称，折叠态只留头像 */
+.foot-user {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-space-2);
+  width: 100%;
+  min-height: var(--app-touch);
+  padding: 0 var(--app-space-3);
+  border: 1px solid transparent;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  color: var(--app-text-secondary);
+  font-family: inherit;
+  font-size: var(--app-font-aux-lg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.foot-user:hover,
+.foot-user:focus-visible {
+  background: var(--app-surface-sunken);
+  color: var(--app-text);
+}
+
+.foot-user.is-active {
+  background: var(--app-primary-soft);
+  color: var(--app-primary);
+  font-weight: 600;
+}
+
+.foot-user__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .recent-group {
   display: flex;
   flex-direction: column;
@@ -1447,14 +1546,6 @@ async function handleLogout(): Promise<void> {
   min-width: 0;
 }
 
-.recent-title {
-  display: flex;
-  align-items: center;
-  gap: var(--app-space-1);
-  margin: 0 0 2px;
-  font-size: var(--app-font-aux);
-  color: var(--app-text-muted);
-}
 
 .recent-empty {
   margin: 0;

@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /**
- * AI 统一入口（契约 `C-FE-AI@1` / `C-AI-CHAT@1`）。
+ * AI 统一入口（契约 `C-FE-AI@1` / `C-AI-CHAT@1` / `C-AI-PAGE@1`）。
  *
  * - 通知卡复用既有通知 store；通知加载失败不影响问答；
  * - 会话与消息来自后端持久化，刷新后恢复最近一次会话；
  * - 回答只展示服务端返回的可见任务引用，不把客户端推断当作来源；
- * - mock 模式明确标注，不与真实模型结果混淆。
+ * - `@` 面板把任务 / 活动作为会话作用域、把 Library 资料作为指定资料上下文。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -14,16 +14,24 @@ import { storeToRefs } from 'pinia'
 
 import { ApiError } from '../api/client'
 import AgentVoiceButton from '../components/ai/AgentVoiceButton.vue'
+import ContextPicker from '../components/ai/ContextPicker.vue'
 import HistoryEntry from '../components/nav/HistoryEntry.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import LoadingState from '../components/common/LoadingState.vue'
+import SegmentedTabs from '../components/common/SegmentedTabs.vue'
 import { useVoiceComposer } from '../composables/useVoiceComposer'
 import { useAiChatStore } from '../stores/aiChat'
 import { useNotificationsStore } from '../stores/notifications'
 import type { AiCitation, AiCitationKind, NotificationItem } from '../types/models'
 
-const SUGGESTIONS = ['我有哪些临近截止的事务？', '我有权限查看哪些活动？', '我接下来该先处理什么？']
+/** 权限模式（`C-AI-PAGE@1`）：写操作尚未接入，`operate` 只展示不可选 */
+const ACCESS_OPTIONS = [
+  { value: 'analyze', label: '只分析' },
+  { value: 'operate', label: '可操作' }
+]
+/** 指定资料上下文上限（`C-AI-CONTEXT@1`：后端取前 5 条） */
+const RESOURCE_LIMIT = 5
 
 /** 回答来源类型标签（`C-AI-DOC-CONTEXT@1`）：任务 / 资料 */
 const CITATION_KIND_LABELS: Record<AiCitationKind, string> = {
@@ -48,7 +56,7 @@ const {
   historyScopeOnly,
   historyOpen,
   sending,
-  mockMode,
+
   hasMessages,
   usage,
   usageLoading,
@@ -97,13 +105,27 @@ function toggleNoticePane(): void {
 }
 const quotaExhausted = computed<boolean>(() => usage.value !== null && usage.value.remaining <= 0)
 const isScoped = computed<boolean>(() => scopeType.value !== 'general')
-const scopeTargetText = computed<string>(() => {
-  if (scopeType.value === 'general') return '通用助手'
-  if (scopeLabel.value) return scopeLabel.value
-  return scopeType.value === 'activity'
-    ? `活动 #${scopeId.value ?? ''}`
-    : `任务 #${scopeId.value ?? ''}`
+
+/** 当前权限模式；`operate` 不可选，因此只会在 `analyze` */
+const accessMode = ref<'analyze' | 'operate'>('analyze')
+
+const pickerOpen = ref(false)
+/** 已选资料的标题，仅用于 chip 展示；资料本身由后端按 id 校验可见性 */
+const resourceTitles = ref<Record<number, string>>({})
+
+const scopeChip = computed<{ type: 'task' | 'activity'; id: number; label: string } | null>(() => {
+  const type = scopeType.value
+  const id = scopeId.value
+  if (type === 'general' || id === null) return null
+  const label = scopeLabel.value || (type === 'activity' ? `活动 #${id}` : `任务 #${id}`)
+  return { type, id, label }
 })
+const resourceChips = computed<Array<{ id: number; title: string }>>(() =>
+  aiChat.contextResourceIds.map((id) => ({
+    id,
+    title: resourceTitles.value[id] ?? `资料 #${id}`
+  }))
+)
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -234,6 +256,61 @@ async function backToGeneral(): Promise<void> {
   await loadHistory()
 }
 
+/** 选中任务 / 活动作为会话作用域，复用通用的作用域切换流程 */
+async function applyContextScope(
+  type: 'task' | 'activity',
+  id: number,
+  title: string
+): Promise<void> {
+  if (voice.recording.value) voice.stop()
+  pickerOpen.value = false
+  aiChat.setScope(type, id, title)
+  await loadHistory()
+}
+
+function selectTask(id: number, title: string): void {
+  void applyContextScope('task', id, title)
+}
+
+function selectActivity(id: number, title: string): void {
+  void applyContextScope('activity', id, title)
+}
+
+function removeResource(id: number): void {
+  aiChat.contextResourceIds = aiChat.contextResourceIds.filter((item) => item !== id)
+  const next = { ...resourceTitles.value }
+  delete next[id]
+  resourceTitles.value = next
+}
+
+/** 资料 chip 多选：再点同一条视为取消，最多 `RESOURCE_LIMIT` 条 */
+function toggleResource(id: number, title: string): void {
+  const ids = aiChat.contextResourceIds
+  if (ids.includes(id)) {
+    removeResource(id)
+    return
+  }
+  if (ids.length >= RESOURCE_LIMIT) {
+    ElMessage.warning(`最多选择 ${RESOURCE_LIMIT} 条资料`)
+    return
+  }
+  aiChat.contextResourceIds = [...ids, id]
+  resourceTitles.value = { ...resourceTitles.value, [id]: title }
+}
+
+/** 输入 `@` 打开上下文面板；`@` 本身不进入正文，避免被当作无意义字符发送 */
+function onComposerKeydown(event: KeyboardEvent): void {
+  if (event.key !== '@') return
+  event.preventDefault()
+  pickerOpen.value = true
+}
+
+function changeAccessMode(value: string): void {
+  // 「可操作」当前不可用：拒绝该值即不会切换模式
+  if (value === 'operate') return
+  accessMode.value = value as 'analyze' | 'operate'
+}
+
 watch([scopeType, scopeId], () => {
   // 切换目标必须显式停止：晚到尾片仍写回发起时的作用域
   if (voice.recording.value) voice.stop()
@@ -254,6 +331,10 @@ async function loadNotices(): Promise<void> {
 async function sendMessage(text?: string): Promise<void> {
   // 录音中不发送半句 interim；先停止录音再发送
   if (voiceRecording.value) return
+  if (accessMode.value !== 'analyze') {
+    ElMessage.warning('写操作尚未接入，当前只能分析')
+    return
+  }
   if (quotaExhausted.value) {
     ElMessage.warning('今日 AI 问答额度已用完；任务、通知与审批等协作功能仍可正常使用')
     return
@@ -327,11 +408,8 @@ function openCitationLibrary(): void {
   void router.push({ name: 'library' })
 }
 
-function openWorkbench(): void {
-  void router.push({ name: 'workbench' })
-}
-
 onMounted(async () => {
+
   await Promise.allSettled([loadNotices(), aiChat.loadUsage()])
   // `?conversation=` 优先恢复指定会话；失败或缺失时回退最近一条。
   const requested = queryConversationId()
@@ -364,12 +442,6 @@ onUnmounted(() => {
     <header class="app-page-header">
       <div>
         <h1 class="app-page-title">AI 助手</h1>
-        <p class="app-page-subtitle">
-          只读问答：只使用你有权限查看的最近 20 项事务摘要，不执行发布、验收等写操作。
-        </p>
-        <p class="scope-target">
-          当前目标：<strong>{{ scopeTargetText }}</strong>
-        </p>
       </div>
       <div class="app-actions">
         <el-button v-if="isScoped" class="header-button" @click="backToGeneral">
@@ -377,15 +449,6 @@ onUnmounted(() => {
         </el-button>
         <el-button class="header-button" @click="startNewConversation">新对话</el-button>
         <el-button class="header-button" @click="openHistoryDrawer">历史记录</el-button>
-        <el-button class="header-button" @click="openWorkbench">打开工作台</el-button>
-        <el-button
-          class="header-button"
-          :loading="historyLoading"
-          :disabled="sending"
-          @click="loadHistory(true)"
-        >
-          刷新对话
-        </el-button>
       </div>
     </header>
 
@@ -472,21 +535,8 @@ onUnmounted(() => {
 
     <section class="app-section-card chat-card" aria-labelledby="ai-chat-heading">
       <div class="card-head">
-        <div>
-          <h2 id="ai-chat-heading" class="section-title">事务问答</h2>
-          <p class="section-hint">回答下方标注来源；点来源可打开对应任务详情。</p>
-        </div>
-        <el-tag v-if="mockMode" type="info" effect="plain">演示模式</el-tag>
+        <h2 id="ai-chat-heading" class="section-title">事务问答</h2>
       </div>
-
-      <el-alert
-        v-if="mockMode"
-        class="mock-alert"
-        type="info"
-        :closable="false"
-        title="演示模式：回答由本地规则生成，未调用真实模型。"
-        description="真实模型回答需要配置模型服务；演示模式下仍可验证会话、来源与权限边界。"
-      />
 
       <LoadingState v-if="historyLoading" :rows="3" />
       <ErrorState
@@ -496,11 +546,7 @@ onUnmounted(() => {
         retryable
         @retry="() => loadHistory(true)"
       />
-      <EmptyState
-        v-else-if="!hasMessages"
-        title="从一个具体问题开始"
-        description="可以问自己接下来该做什么、哪些事务临近截止，或某个活动下有哪些任务。"
-      />
+      <EmptyState v-else-if="!hasMessages" title="从一个具体问题开始" />
 
       <div v-else ref="messageListRef" class="message-list" aria-live="polite">
         <article
@@ -549,25 +595,10 @@ onUnmounted(() => {
         </article>
       </div>
 
-      <div v-if="!hasMessages && !historyLoading && !historyError" class="suggestions">
-        <el-button
-          v-for="question in SUGGESTIONS"
-          :key="question"
-          class="suggestion-button"
-          :disabled="sending || quotaExhausted || voiceRecording"
-          @click="sendMessage(question)"
-        >
-          {{ question }}
-        </el-button>
-      </div>
-
       <div class="quota-bar">
-        <span v-if="usage" class="quota-text">
-          今日 AI 问答 {{ usage.used }} / {{ usage.limit }} 次，剩余 {{ usage.remaining }} 次
-        </span>
+        <span v-if="usage" class="quota-text">剩余 {{ usage.remaining }} 次</span>
         <span v-else-if="usageLoading" class="quota-text">正在读取 AI 额度…</span>
         <span v-else-if="usageError" class="quota-text quota-error">AI 额度读取失败：{{ usageError }}</span>
-        <span class="quota-hint">额度只限制 AI 问答，任务、通知与审批不受影响</span>
       </div>
       <el-alert
         v-if="quotaExhausted"
@@ -579,35 +610,91 @@ onUnmounted(() => {
         class="quota-alert"
       />
 
-      <div class="composer">
-        <el-input
-          v-model="input"
-          class="composer-input"
-          type="textarea"
-          :rows="2"
-          maxlength="2000"
-          show-word-limit
-          resize="none"
-          :disabled="sending || quotaExhausted || voiceRecording"
-          placeholder="输入问题，例如：我有哪些临近截止的事务？"
-          aria-label="向 AI 助手提问"
-          @keydown.enter.exact.prevent="sendMessage()"
-        />
-        <AgentVoiceButton
-          class="composer-voice"
-          :disabled="!voiceRecording && (sending || quotaExhausted)"
-        />
-        <el-button
-          class="send-button"
-          type="primary"
-          :loading="sending"
-          :disabled="sending || historyLoading || quotaExhausted || voiceRecording || input.trim().length === 0"
-          @click="sendMessage()"
+      <div v-if="scopeChip || resourceChips.length > 0" class="context-chips" aria-label="本轮上下文">
+        <span v-if="scopeChip" class="context-chip context-chip--scope">
+          <span class="context-chip__label">{{ scopeChip.label }}</span>
+          <button
+            type="button"
+            class="context-chip__remove"
+            :aria-label="`移除上下文：${scopeChip.label}`"
+            @click="backToGeneral"
+          >
+            ×
+          </button>
+        </span>
+        <span
+          v-for="chip in resourceChips"
+          :key="`resource-${chip.id}`"
+          class="context-chip context-chip--resource"
         >
-          发送
-        </el-button>
+          <span class="context-chip__label">{{ chip.title }}</span>
+          <button
+            type="button"
+            class="context-chip__remove"
+            :aria-label="`移除资料：${chip.title}`"
+            @click="removeResource(chip.id)"
+          >
+            ×
+          </button>
+        </span>
       </div>
-      <p class="composer-hint">问答只读取你有权限查看的事务；不会替你发布、改期或验收。</p>
+
+      <div class="composer-area">
+        <ContextPicker
+          :open="pickerOpen"
+          @select-task="selectTask"
+          @select-activity="selectActivity"
+          @toggle-resource="toggleResource"
+          @close="pickerOpen = false"
+        />
+        <div class="composer-access">
+          <SegmentedTabs
+            :model-value="accessMode"
+            :options="ACCESS_OPTIONS"
+            :disabled-values="['operate']"
+            ariaLabel="AI 权限"
+            aria-label="AI 权限"
+            @update:model-value="changeAccessMode"
+          />
+        </div>
+        <div class="composer">
+          <button
+            type="button"
+            class="composer-at"
+            aria-label="添加任务、活动或资料上下文"
+            @click="pickerOpen = !pickerOpen"
+          >
+            @
+          </button>
+          <el-input
+            v-model="input"
+            class="composer-input"
+            type="textarea"
+            :rows="2"
+            maxlength="2000"
+            show-word-limit
+            resize="none"
+            :disabled="sending || quotaExhausted || voiceRecording"
+            placeholder="输入问题，例如：我有哪些临近截止的事务？"
+            aria-label="向 AI 助手提问"
+            @keydown="onComposerKeydown"
+            @keydown.enter.exact.prevent="sendMessage()"
+          />
+          <AgentVoiceButton
+            class="composer-voice"
+            :disabled="!voiceRecording && (sending || quotaExhausted)"
+          />
+          <el-button
+            class="send-button"
+            type="primary"
+            :loading="sending"
+            :disabled="sending || historyLoading || quotaExhausted || voiceRecording || input.trim().length === 0"
+            @click="sendMessage()"
+          >
+            发送
+          </el-button>
+        </div>
+      </div>
     </section>
     </div>
 
@@ -790,17 +877,6 @@ onUnmounted(() => {
   color: var(--app-text-secondary);
 }
 
-.scope-target {
-  margin: var(--app-space-1) 0 0;
-  font-size: var(--app-font-aux-lg);
-  line-height: 1.6;
-  color: var(--app-text-secondary);
-}
-
-.scope-target strong {
-  color: var(--app-text);
-  font-weight: 600;
-}
 
 .header-button {
   min-height: var(--app-touch);
@@ -874,9 +950,6 @@ onUnmounted(() => {
   min-height: var(--app-touch);
 }
 
-.mock-alert {
-  margin-top: var(--app-space-3);
-}
 
 .message-list {
   display: flex;
@@ -969,31 +1042,14 @@ onUnmounted(() => {
   border-color: var(--app-border-strong);
 }
 
-.suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--app-space-2);
-  margin-top: var(--app-space-3);
-}
-
-.suggestion-button {
-  min-height: var(--app-touch);
-  white-space: normal;
-}
-
 .quota-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: var(--app-space-2);
   margin-top: var(--app-space-3);
   font-size: var(--app-font-aux-lg);
   color: var(--app-text-secondary);
-}
-
-.quota-hint {
-  color: var(--app-text-muted);
 }
 
 .quota-error {
@@ -1004,13 +1060,92 @@ onUnmounted(() => {
   margin-top: var(--app-space-2);
 }
 
+.context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-space-2);
+  margin-top: var(--app-space-3);
+}
+
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-space-1);
+  max-width: 100%;
+  min-height: var(--app-touch);
+  padding: 0 var(--app-space-2) 0 var(--app-space-3);
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: var(--app-surface-sunken);
+  font-size: var(--app-font-aux-lg);
+  color: var(--app-text);
+}
+
+.context-chip--scope {
+  border-color: var(--el-color-primary-light-7);
+  background: var(--app-primary-soft);
+}
+
+.context-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: var(--app-touch);
+  min-height: var(--app-touch);
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-body);
+  cursor: pointer;
+}
+
+.context-chip__remove:hover {
+  color: var(--app-text);
+  background: var(--app-surface);
+}
+
+.composer-area {
+  position: relative;
+  margin-top: var(--app-space-4);
+  padding-top: var(--app-space-3);
+  border-top: 1px solid var(--app-border);
+}
+
+.composer-access {
+  display: flex;
+  margin-bottom: var(--app-space-2);
+}
+
 .composer {
   display: flex;
   align-items: flex-end;
   gap: var(--app-space-2);
-  margin-top: var(--app-space-4);
-  padding-top: var(--app-space-3);
-  border-top: 1px solid var(--app-border);
+}
+
+.composer-at {
+  flex-shrink: 0;
+  min-width: var(--app-touch);
+  min-height: var(--app-touch);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-body);
+  cursor: pointer;
+}
+
+.composer-at:hover {
+  border-color: var(--app-border-strong);
+  color: var(--app-text);
 }
 
 .composer-input {
@@ -1026,13 +1161,6 @@ onUnmounted(() => {
   flex-shrink: 0;
   min-width: 88px;
   min-height: var(--app-touch);
-}
-
-.composer-hint {
-  margin: var(--app-space-2) 0 0;
-  font-size: var(--app-font-aux);
-  line-height: 1.6;
-  color: var(--app-text-muted);
 }
 
 .history-toolbar {
@@ -1104,18 +1232,13 @@ onUnmounted(() => {
     max-height: 46vh;
   }
 
-  .suggestions {
-    flex-direction: column;
-  }
-
-  .suggestion-button {
-    width: 100%;
-    margin-left: 0;
-  }
-
   .composer {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .composer-at {
+    align-self: flex-start;
   }
 
   .send-button {

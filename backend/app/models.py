@@ -53,6 +53,8 @@ class User(Base):
     # active | legacy_unclaimed | disabled；legacy_unclaimed 为无密码的旧演示账号，不可登录。
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default=text("'active'"))
     platform_admin: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    # 头像（`C-AVATAR-API@1`）：只存本人上传的 data URL；NULL 表示前端用首字母色块。
+    avatar: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(
         Text, nullable=False, default=_now_local, server_default=_NOW_SQL
     )

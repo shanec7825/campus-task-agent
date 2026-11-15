@@ -139,6 +139,8 @@ _USERS_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("password_updated_at", "ALTER TABLE users ADD COLUMN password_updated_at TEXT"),
     ("status", "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"),
     ("platform_admin", "ALTER TABLE users ADD COLUMN platform_admin INTEGER NOT NULL DEFAULT 0"),
+    # 头像（`C-AVATAR-API@1`）：可空，旧行保持 NULL。
+    ("avatar", "ALTER TABLE users ADD COLUMN avatar TEXT"),
 )
 
 # 旧演示账号没有密码 ⇒ legacy_unclaimed（不可登录、不可被同名注册继承）。

@@ -1,9 +1,9 @@
 <script lang="ts">
 /**
- * 统一用户头像（契约 `C-USER-AVATAR@1`）。
+ * 统一用户头像（契约 `C-USER-AVATAR@1` / `C-AVATAR-UI@1`）。
  *
  * 本地生成、按 `user_id` 稳定取色，不请求外部头像服务；`userId === null`
- * 表示尚未分配负责人/成员，用中性形象区分。
+ * 表示尚未分配负责人/成员，用中性形象区分。`avatar` 非空时渲染自定义图片。
  */
 export type UserAvatarSize = 'xs' | 'md'
 </script>
@@ -12,8 +12,13 @@ export type UserAvatarSize = 'xs' | 'md'
 import { computed } from 'vue'
 
 const props = withDefaults(
-  defineProps<{ userId: number | null; name: string; size?: UserAvatarSize }>(),
-  { size: 'xs' }
+  defineProps<{
+    userId: number | null
+    name: string
+    size?: UserAvatarSize
+    avatar?: string | null
+  }>(),
+  { size: 'xs', avatar: null }
 )
 
 const isVacant = computed<boolean>(() => props.userId === null)
@@ -42,7 +47,8 @@ const initial = computed<string>(() => {
     :title="displayName"
     :aria-label="displayName"
   >
-    <span class="avatar__initial" aria-hidden="true">{{ initial }}</span>
+    <img v-if="avatar" class="avatar__image" :src="avatar" alt="" />
+    <span v-else class="avatar__initial" aria-hidden="true">{{ initial }}</span>
   </span>
 </template>
 
@@ -62,6 +68,13 @@ const initial = computed<string>(() => {
   font-weight: 600;
   line-height: 1;
   user-select: none;
+}
+
+.avatar__image {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .avatar--xs {

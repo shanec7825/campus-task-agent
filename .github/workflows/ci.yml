@@ -78,6 +78,8 @@ jobs:
         run: python -m pytest tests/backend/test_v1_archive_precheck.py -q
       - name: Run V1 AI task draft suite
         run: python -m pytest tests/backend/test_v1_task_draft.py -q
+      - name: Run V1 avatar API suite
+        run: python -m pytest tests/backend/test_v1_avatar.py -q
 
   backend-integration:
     name: Backend API and SSE integration

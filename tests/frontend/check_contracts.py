@@ -21,6 +21,15 @@ P2（本轮新增，对应 plan T8 ⑨）：
 10. ``traceText.formatChangeText`` 5 组模板（tsc 编译 + node 实跑，与后端交叉一致）；
 11. 「无本轮新增硬编码色值」：历史 93 行白名单逐条标注「非本轮引入」+ 4 个追溯色零命中。
 
+P3（v1-ui-shell-refine 静态契约收口，按 design.md §2.2 冻结契约）：
+12. ``C-SEGMENTED@1``：``SegmentedTabs.vue`` 的 props/emits/tablist 语义/触控令牌，侧栏与任务大厅消费；
+13. ``C-SIDEBAR@1``：默认展开新键 + 侧栏不滚动 + 三选一历史胶囊 + 底部归档/头像入口；
+14. ``C-TASKHALL-FILTER@1``：范围/状态/类型筛选改为胶囊，``el-radio-group``/``el-radio-button`` 下线；
+15. ``C-LIBRARY-PAGE@1``：下线「我的参考链接」录入与列表，保留三块资料区；
+16. ``C-ARCHIVE-PAGE@1``：``/archive`` 只读页 + 一行空态 + 长条圆角列表；
+17. ``C-AI-PAGE@1``：移除说明性文字与无效按钮，加入只分析/可操作权限胶囊；
+18. ``C-AVATAR-UI@1``：``User.avatar`` / ``updateAvatar`` / ``setAvatar`` / 上传与移除控件。
+
 用法::
 
     python tests/frontend/check_contracts.py
@@ -460,6 +469,8 @@ def main(argv: list[str]) -> int:
 
 
 SRC_DIR: Path = Path(__file__).resolve().parent.parent.parent / "frontend" / "src"
+#: 后端工程根目录（仅用于读取契约引用的路由文本，不参与前端断言）
+BACKEND_DIR: Path = Path(__file__).resolve().parent.parent.parent / "backend"
 
 
 # =========================================================================== #
@@ -2394,7 +2405,7 @@ def _require(
 
 
 def check_nav_groups(rel_layout: str, rel_icon: str, src_dir: Path) -> str:
-    """㉗ `C-NAV-GROUPS@3`：分组导航 + 本地内联 SVG + 折叠保留可访问名称。"""
+    """㉗ `C-SIDEBAR@1`：分组导航 + 本地内联 SVG + 折叠保留可访问名称。"""
     layout = strip_ts_comments(load_text(src_dir / rel_layout))
     icon = load_text(src_dir / rel_icon)
     problems: list[str] = []
@@ -2412,8 +2423,6 @@ def check_nav_groups(rel_layout: str, rel_icon: str, src_dir: Path) -> str:
     for group_label, group_title in (
         ("主导航", "顶部搜索按钮 + New chat 发布 + 主导航"),
         ("管理", "管理者我发布活动 / 发布者后台"),
-        ("最近条目", "最近活动分组"),
-        ("最近聊天", "最近聊天分组"),
         ("底部导航", "移动端底部导航保留主要入口"),
     ):
         _require(problems, layout, f'aria-label="{group_label}"', rel_layout, group_title)
@@ -2433,8 +2442,8 @@ def check_nav_groups(rel_layout: str, rel_icon: str, src_dir: Path) -> str:
     ):
         _require(problems, layout, token, rel_layout, detail)
 
-    _require(problems, layout, '<span>最近活动</span>', rel_layout, "最近活动分组")
-    _require(problems, layout, '>最近聊天<', rel_layout, "最近聊天分组标题")
+    _require(problems, layout, "<SegmentedTabs", rel_layout, "最近条目区改为胶囊分段")
+    _require(problems, layout, 'aria-label="最近条目类型"', rel_layout, "历史胶囊可读名称")
     for token, detail in (
         ('aria-label="搜索"', "顶部搜索按钮"),
         ('aria-label="发布事务"', "New chat 发布入口"),
@@ -2446,13 +2455,13 @@ def check_nav_groups(rel_layout: str, rel_icon: str, src_dir: Path) -> str:
         raise ContractError("；".join(problems))
     return (
         f"{rel_layout}:{icon_import} 复用 {rel_icon} 内联 SVG；"
-        f"library 导航项在第 {layout_line} 行；分组为 主导航/管理/最近条目/最近聊天/底部导航；"
-        "折叠态保留 SVG + aria-label + title + aria-current=\"page\""
+        f"library 导航项在第 {layout_line} 行；分组为 主导航/管理/底部导航，"
+        "最近条目区为三选一胶囊；折叠态保留 SVG + aria-label + title + aria-current=\"page\""
     )
 
 
 def check_library_route(rel_router: str, rel_layout: str, rel_page: str, src_dir: Path) -> str:
-    """㉘ `C-NAV-GROUPS@3`：Library 路由与入口存在，页面组件可解析。"""
+    """㉘ `C-SIDEBAR@1`：Library 路由与入口存在，页面组件可解析。"""
     router_text = strip_ts_comments(load_text(src_dir / rel_router))
     layout = strip_ts_comments(load_text(src_dir / rel_layout))
     page = load_text(src_dir / rel_page)
@@ -2493,42 +2502,83 @@ def check_library_route(rel_router: str, rel_layout: str, rel_page: str, src_dir
 def check_ai_history(
     rel_console: str, rel_layout: str, rel_entry: str, src_dir: Path
 ) -> str:
-    """㉙ `C-AI-HISTORY@3`：完整页历史抽屉 + `?conversation=` 恢复 + 侧栏最近 5 条真实记录。"""
+    """㉙ `C-SIDEBAR@1` / `C-AI-HISTORY@3`：历史胶囊三分组 + `?conversation=` 恢复 + 抽屉。"""
     console = strip_ts_comments(load_text(src_dir / rel_console))
     layout = strip_ts_comments(load_text(src_dir / rel_layout))
     entry = strip_ts_comments(load_text(src_dir / rel_entry))
     problems: list[str] = []
 
-    block_match = re.search(
-        r'<div class="sidebar-group sidebar-history"[^>]*>(.*?)</div>(?=\s*<div class="sidebar-foot")',
-        layout,
-        re.S,
-    )
-    if block_match is None:
-        problems.append(f"{rel_layout} 缺少 `sidebar-history` 分组")
+    if "历史即将接入" in layout:
+        problems.append(f"{rel_layout} AI 历史仍是「历史即将接入」占位")
+
+    for token, detail in (
+        ("HISTORY_TABS", "历史三选一常量"),
+        ("cta_sidebar_history_tab", "历史胶囊持久化键"),
+        ('v-model="historyTab"', "胶囊受控绑定当前分组"),
+        (':options="HISTORY_TABS"', "胶囊渲染三组选项"),
+        ('aria-label="最近条目类型"', "胶囊可读名称"),
+        ("<HistoryEntry", "历史条目复用 HistoryEntry 摘要"),
+        ('v-for="item in recentAiHistory"', "聊天组渲染真实最近会话"),
+        (':conversation="item"', "传入真实会话摘要"),
+        ('@select="goConversation"', "点击条目跳转会话"),
+        ("查看全部", "提供查看全部入口"),
+        ("暂无活动", "活动组空态"),
+        ("暂无任务", "任务组空态"),
+        ("暂无历史", "聊天组空态"),
+        ("name: 'my-tasks'", "活动/任务查看全部跳我的任务"),
+        ("history: '1'", "聊天查看全部打开完整页历史抽屉"),
+    ):
+        _require(problems, layout, token, rel_layout, detail)
+
+    tabs_match = re.search(r"HISTORY_TABS[^=]*=\s*\[(.*?)\]", layout, re.S)
+    if tabs_match is None:
+        problems.append(f"{rel_layout} 未找到 `HISTORY_TABS` 选项数组（C-SIDEBAR@1）")
     else:
-        block = block_match.group(1)
-        block_line = layout.count("\n", 0, block_match.start()) + 1
-        if "历史即将接入" in layout:
-            problems.append(
-                f"{render_location(rel_layout, block_line)} AI 历史仍是「历史即将接入」占位"
+        tabs_body = tabs_match.group(1)
+        for value, label in (("activity", "活动"), ("task", "任务"), ("chat", "聊天")):
+            if not re.search(rf"value:\s*'{value}'", tabs_body) or not re.search(
+                rf"label:\s*'{label}'", tabs_body
+            ):
+                problems.append(
+                    f"{rel_layout} `HISTORY_TABS` 缺少 `{{ value: '{value}', label: '{label}' }}`"
+                )
+
+    default_match = re.search(r"historyTab\s*=\s*ref<[^>]*>\s*\(([^)\n]*)", layout)
+    default_ok = False
+    if default_match is not None:
+        initial = default_match.group(1)
+        if "'activity'" in initial:
+            default_ok = True
+        elif "readHistoryTab" in initial:
+            # 缺省值由 readHistoryTab() 读取持久化状态提供，函数体必须兜底 activity
+            reader = re.search(
+                r"(?:function\s+readHistoryTab\s*\([^)]*\)[^{]*\{"
+                r"|readHistoryTab\s*=\s*\([^)]*\)[^{]*=>\s*\{)",
+                layout,
             )
-        for token, detail in (
-            ("<HistoryEntry", "历史条目复用 HistoryEntry 摘要"),
-            ('v-for="item in recentAiHistory"', "渲染真实最近会话"),
-            (':conversation="item"', "传入真实会话摘要"),
-            ('@select="goConversation"', "点击条目跳转会话"),
-            ("查看全部", "提供查看全部入口"),
-            ("/ai?history=1", "查看全部打开完整页历史抽屉"),
+            if reader is not None:
+                body = layout[reader.start() : reader.start() + 800]
+                default_ok = "return 'activity'" in body
+            else:
+                default_ok = bool(
+                    re.search(
+                        r"readHistoryTab\s*=\s*\([^)]*\)[^;=]*=>\s*'activity'", layout
+                    )
+                )
+    if not default_ok:
+        problems.append(
+            f"{rel_layout} `historyTab` 缺省值不是 `activity`（C-SIDEBAR@1）"
+        )
+    for type_value in ("activity", "task"):
+        if not re.search(
+            rf"name:\s*'my-tasks'\s*,\s*query:\s*\{{\s*type:\s*'{type_value}'\s*\}}", layout
         ):
-            _require(problems, block, token, rel_layout, detail)
-        if '<p v-if="recentAiHistory.length === 0" class="recent-empty">' not in block:
             problems.append(
-                f"{render_location(rel_layout, block_line)} AI 历史空态未按真实列表长度判断"
+                f"{rel_layout} 「{type_value}」的查看全部未跳 `my-tasks` + `type: '{type_value}'`"
             )
 
     _require(problems, layout, "import HistoryEntry", rel_layout, "复用单条摘要组件")
-    _require(problems, layout, "const RECENT_LIMIT = 5", rel_layout, "侧栏最近历史上限 5 条")
+    _require(problems, layout, "RECENT_LIMIT = 3", rel_layout, "侧栏历史区上限 3 条")
     _require(problems, layout, "listConversations(RECENT_LIMIT)", rel_layout, "读取本人全部近期会话")
     _require(problems, layout, "recentAiHistory.value = []", rel_layout, "加载失败只清空该组")
     _require(
@@ -2570,7 +2620,8 @@ def check_ai_history(
     if problems:
         raise ContractError("；".join(problems))
     return (
-        f"{rel_layout} AI 历史渲染最近 5 条真实会话并可跳 /ai?conversation=；"
+        f"{rel_layout} 历史区为活动/任务/聊天三选一胶囊（上限 4 条），"
+        "「查看全部」分别跳 my-tasks?type= 与 /ai?history=1，空态文案分组；"
         f"{rel_console} 抽屉分页/失败重试与 ?conversation= 恢复齐备；"
         f"{rel_entry} 摘要含标题、时间与作用对象"
     )
@@ -2594,6 +2645,33 @@ def check_browse_tabs(rel_tabs: str, rel_hall: str, src_dir: Path) -> str:
     _require(problems, hall, "import HallTabs", rel_hall, "consumers 复用胶囊 tab")
     _require(problems, hall, "<HallTabs", rel_hall, "模板渲染胶囊 tab")
     type_line = _require(problems, hall, "route.query.type", rel_hall, "选择状态来自 query")
+
+    # C-TASKHALL-FILTER@1：桌面 filter-panel 与移动 filterDrawer 的范围/状态/类型
+    # 三组筛选统一改为 SegmentedTabs，值域与 handleFilterChange 逻辑保持不变。
+    _require(problems, hall, "import SegmentedTabs", rel_hall, "筛选复用胶囊分段组件")
+    _require(problems, hall, "const SCOPE_OPTIONS", rel_hall, "范围选项常量")
+    for token, detail in (
+        ('v-model="currentView.scope"', "范围筛选受控"),
+        ('v-model="currentView.status"', "状态筛选受控"),
+        ('v-model="currentView.type"', "类型筛选受控"),
+        ('aria-label="范围"', "范围筛选可读名称"),
+        ('@change="handleFilterChange"', "切换沿用既有筛选处理"),
+    ):
+        _require(problems, hall, token, rel_hall, detail)
+    segmented_count = len(re.findall(r"<SegmentedTabs", hall))
+    if segmented_count < 3:
+        problems.append(
+            f"{rel_hall} 仅渲染 {segmented_count} 处 `<SegmentedTabs`，"
+            "契约要求范围/状态/类型三组筛选均为胶囊分段"
+        )
+    for forbidden, detail in (
+        ("el-radio-group", "范围/状态/类型 el-radio-group"),
+        ("el-radio-button", "旧 el-radio-button 样式"),
+    ):
+        if forbidden in hall:
+            problems.append(f"{rel_hall} 仍包含已移除的{detail}：{forbidden}")
+    if "label: '全部'" not in hall:
+        problems.append(f"{rel_hall} 状态/类型筛选未在首位加入 `{{ value: 'all', label: '全部' }}`")
     if "route.query.type === 'task' ? 'task' : 'activity'" not in hall:
         problems.append(
             f"{rel_hall} `activeType` 缺省值不是 `activity`（契约缺省 activity）"
@@ -2713,7 +2791,7 @@ def check_hover_peek(rel_peek: str, rel_hall: str, src_dir: Path) -> str:
 # 追加到既有 26 项之后（AIW-14 r1 三条前端契约）
 CHECKS = CHECKS + (
     (
-        "㉗ C-NAV-GROUPS@3 分组导航 + 本地内联 SVG + 折叠保留可访问名称",
+        "㉗ C-SIDEBAR@1 分组导航 + 本地内联 SVG + 折叠保留可访问名称",
         lambda: check_nav_groups(
             "layouts/AppLayout.vue", "components/nav/NavIcon.vue", SRC_DIR
         ),
@@ -2728,7 +2806,7 @@ CHECKS = CHECKS + (
         ),
     ),
     (
-        "㉙ C-AI-HISTORY@3 历史抽屉 + ?conversation= 恢复 + 侧栏最近 5 条",
+        "㉙ C-SIDEBAR@1 / C-AI-HISTORY@3 历史三分组胶囊 + ?conversation= 恢复 + 抽屉",
         lambda: check_ai_history(
             "views/AiConsole.vue",
             "layouts/AppLayout.vue",
@@ -2737,7 +2815,7 @@ CHECKS = CHECKS + (
         ),
     ),
     (
-        "㉚ C-BROWSE-TABS@3 胶囊 tab 语义 + ?type= 缺省与持久化键",
+        "㉚ C-BROWSE-TABS@3 / C-TASKHALL-FILTER@1 胶囊 tab 与筛选 + ?type= 缺省与持久化键",
         lambda: check_browse_tabs(
             "components/browse/HallTabs.vue", "views/TaskHall.vue", SRC_DIR
         ),
@@ -2788,10 +2866,14 @@ def check_user_avatar(
     for token, detail in (
         ("name: string", "props.name"),
         ("size?: UserAvatarSize", "props.size 可选 xs|md"),
-        ("{ size: 'xs' }", "默认 size 为 xs"),
+        ("avatar?: string | null", "props.avatar 可空（C-AVATAR-UI@1）"),
+
         ("Math.abs(props.userId ?? 0) % 4", "按 userId 稳定取模取色"),
         ("+ 1}`", "tone 落到 1..4"),
         ("avatar--vacant", "userId === null 使用中性待分配形象"),
+        ('class="avatar__image"', "自定义头像图片分支"),
+        (':src="avatar"', "图片仅取自 avatar prop（本地 data URL）"),
+        ('role="img"', "外层保留 img 语义"),
         (':title="displayName"', "title 为姓名"),
         (':aria-label="displayName"', "aria-label 为姓名"),
         ('aria-hidden="true"', "装饰字母不重复朗读"),
@@ -2800,14 +2882,22 @@ def check_user_avatar(
     ):
         _require(problems, avatar, token, rel_avatar, detail)
 
+    defaults_match = re.search(r"withDefaults\s*\(", avatar)
+    if defaults_match is None:
+        problems.append(f"{rel_avatar} 未使用 withDefaults 声明 props 默认值")
+    else:
+        defaults_window = avatar[defaults_match.start() : defaults_match.start() + 1200]
+        if re.search(r"\bsize\s*:\s*'xs'", defaults_window) is None:
+            problems.append(f"{rel_avatar} 默认值块缺少 `size: 'xs'`（默认 size 为 xs）")
+
     for tone in ("avatar--tone-1", "avatar--tone-2", "avatar--tone-3", "avatar--tone-4"):
         _require(problems, avatar, f".{tone}", rel_avatar, "四组柔和色")
     for pixel in ("width: 18px", "width: 32px"):
         _require(problems, avatar, pixel, rel_avatar, "xs 18px / md 32px")
     if _BARE_HEX_COLOR.search(avatar):
         problems.append(f"{rel_avatar} 出现裸十六进制色值（颜色须组合主题变量）")
-    if re.search(r"https?://|<img\b", avatar):
-        problems.append(f"{rel_avatar} 请求了外部头像（契约要求本地生成）")
+    if re.search(r"https?://", avatar):
+        problems.append(f"{rel_avatar} 请求了外部头像（契约要求本地 data URL）")
 
     for rel_card, card in cards:
         _require(problems, card, "import UserAvatar", rel_card, "卡片主行复用统一头像")
@@ -3211,7 +3301,7 @@ CHECKS = CHECKS + (
         lambda: check_admin_verify_stale("views/AdminConsole.vue", SRC_DIR),
     ),
     (
-        "㊴ C-SHELL-ACTIONS@1 图标折叠/最近分组/New chat 发布/归档导航",
+        "㊴ C-SIDEBAR@1 默认展开/不滚动/底部归档与头像入口",
         lambda: check_shell_actions("layouts/AppLayout.vue", SRC_DIR),
     ),
     (
@@ -3221,7 +3311,7 @@ CHECKS = CHECKS + (
         ),
     ),
     (
-        "㊶ C-AI-THREE-PANE@1 左问答 + 右通知/归档，移除消息入口",
+        "㊶ C-AI-THREE-PANE@1 / C-AI-PAGE@1 左问答 + 右通知/归档，精简头部与权限胶囊",
         lambda: check_ai_three_pane("views/AiConsole.vue", "router/index.ts", SRC_DIR),
     ),
     (
@@ -3269,32 +3359,92 @@ def check_admin_verify_stale(rel_admin: str, src_dir: Path) -> str:
 
 
 def check_shell_actions(rel_layout: str, src_dir: Path) -> str:
-    """㊴ `C-SHELL-ACTIONS@1`：图标折叠、最近分组、New chat 发布、归档通知导航。"""
+    """㊴ `C-SIDEBAR@1`：图标折叠 + 默认展开新键 + 底部归档通知与头像个人入口。"""
     text = strip_ts_comments(load_text(src_dir / rel_layout))
     problems: list[str] = []
     for token, detail in (
         ("sidebar-head__actions", "搜索/折叠置于侧栏右上"),
         ("panel-left", "展开态折叠图标"),
         ("panel-right", "折叠态展开图标"),
+        ("SIDEBAR_COLLAPSED_KEY = 'cta_sidebar_collapsed_v2'", "折叠状态改用 v2 键"),
         ("new-chat-button", "发布入口为 New chat 样式"),
-        ("最近聊天", "最近分组标题改为最近聊天"),
-        ("归档通知", "左侧导航归档入口"),
-        ("icon: 'archive'", "归档图标"),
+        ('class="sidebar-scroll"', "侧栏滚动容器保留"),
+        ('class="foot-user"', "底部头像个人入口"),
+        ('aria-label="归档通知"', "底部归档通知入口可读名称"),
+        ("归档通知", "底部归档通知文案"),
+        ("<ThemeToggle", "主题开关保留在归档入口下方"),
+        ("name: 'archive'", "归档入口跳转目标"),
+        ("name: 'profile'", "头像入口跳转个人主页"),
+        ("<UserAvatar", "底部个人入口复用头像组件"),
+        (':avatar="userStore.user?.avatar ?? null"', "侧栏头像透传给 UserAvatar"),
+        ("RECENT_LIMIT = 3", "历史区条目上限 3"),
     ):
         _require(problems, text, token, rel_layout, detail)
+
+    scroll_match = re.search(r"\.sidebar-scroll\s*\{([^}]*)\}", text)
+    if scroll_match is None:
+        problems.append(f"{rel_layout} 缺少 `.sidebar-scroll` 样式块")
+    else:
+        block = scroll_match.group(1)
+        for property_token, detail in (
+            ("overflow-y: auto", "侧栏可纵向滚动"),
+            ("overflow-x: hidden", "侧栏不横向溢出"),
+            ("scrollbar-width: none", "隐藏滚动条占位"),
+        ):
+            if property_token not in block:
+                problems.append(
+                    f"{rel_layout} `.sidebar-scroll` 缺少 `{property_token}`（{detail}）"
+                )
+    # 隐藏滚动条需同时覆盖 WebKit，避免窄屏出现可见滚动条
+    if re.search(
+        r"\.sidebar-scroll::-webkit-scrollbar\s*\{[^}]*display:\s*none", text
+    ) is None:
+        problems.append(
+            f"{rel_layout} 缺少 `.sidebar-scroll::-webkit-scrollbar {{ display: none; }}`"
+        )
+
     for forbidden, detail in (
         ("sidebar-quick", "旧的搜索/新对话双列"),
-        ("最近任务", "最近任务分组"),
-        (">最近<", "最近总标题"),
-        ("label: '消息'", "消息导航项"),
+        ("label: '我的任务'", "一级导航「我的任务」"),
+        ("isActive('my-tasks')", "「我的任务」高亮分支"),
         (">展开<", "折叠按钮文字"),
         (">收起<", "折叠按钮文字"),
+        (">个人主页<", "文字个人入口"),
     ):
         if forbidden in text:
             problems.append(f"{rel_layout} 仍包含已移除的{detail}：{forbidden}")
+
+    # 归档入口只允许出现在侧栏底部与移动端底部导航，一级导航 mainNav 不得含归档项
+    main_nav_match = re.search(r"const mainNav[\s\S]*?\[([\s\S]*?)\n\s*\]", text)
+    if main_nav_match is None:
+        problems.append(f"{rel_layout} 未找到 `mainNav` 导航数组")
+    else:
+        main_nav = main_nav_match.group(1)
+        if "archive" in main_nav or "归档" in main_nav:
+            problems.append(
+                f"{rel_layout} `mainNav` 仍包含归档入口（归档只保留侧栏底部与移动端底部导航）"
+            )
+
+    # 移动端第三项：同一导航项同时含 name/path/label，不约束键序
+    bottom_ok = any(
+        re.search(r"name:\s*'archive'", item)
+        and re.search(r"path:\s*'/archive'", item)
+        and re.search(r"label:\s*'归档'", item)
+        for item in re.findall(r"\{[^{}]*\}", text)
+    )
+    if not bottom_ok:
+        problems.append(
+            f"{rel_layout} 移动端底部导航缺少 `name: 'archive'` + `path: '/archive'` + "
+            "`label: '归档'` 的归档项"
+        )
+
     if problems:
         raise ContractError("；".join(problems))
-    return f"{rel_layout} 侧栏为图标折叠 + 右上搜索/折叠 + New chat 发布 + 最近活动/最近聊天 + 归档通知"
+    return (
+        f"{rel_layout} 侧栏默认展开（cta_sidebar_collapsed_v2）+ 不滚动；"
+        "右上搜索/折叠 + New chat 发布 + 最近胶囊；"
+        "底部「归档通知」与头像个人入口（UserAvatar 透传 avatar），移动端第 3 项为归档"
+    )
 
 
 def check_global_composer(rel_comp: str, rel_layout: str, src_dir: Path) -> str:
@@ -3320,7 +3470,7 @@ def check_global_composer(rel_comp: str, rel_layout: str, src_dir: Path) -> str:
 
 
 def check_ai_three_pane(rel_ai: str, rel_router: str, src_dir: Path) -> str:
-    """㊶ `C-AI-THREE-PANE@1`：左问答 + 右通知/归档，移除独立消息入口。"""
+    """㊶ `C-AI-THREE-PANE@1` / `C-AI-PAGE@1`：左问答 + 右通知/归档，精简头部并加权限胶囊。"""
     text = strip_ts_comments(load_text(src_dir / rel_ai))
     router = strip_ts_comments(load_text(src_dir / rel_router))
     problems: list[str] = []
@@ -3343,10 +3493,68 @@ def check_ai_three_pane(rel_ai: str, rel_router: str, src_dir: Path) -> str:
     for forbidden in ("openMessages", "查看全部消息"):
         if forbidden in text:
             problems.append(f"{rel_ai} 仍保留已移除的消息入口：{forbidden}")
+
+    # C-AI-PAGE@1：删除说明性文字与无效按钮，保留问答主链路。
+    for forbidden, detail in (
+        ("app-page-subtitle", "只读问答说明副标题"),
+        ("scope-target", "当前目标提示"),
+        ("mockMode", "mock 模式标签/提示"),
+        ("SUGGESTIONS", "建议提问区块"),
+        ("quota-hint", "独立额度提示行"),
+        ("composer-hint", "输入框下方提示"),
+        ("openWorkbench", "打开工作台按钮函数"),
+        ("打开工作台", "打开工作台按钮"),
+        (">刷新对话<", "刷新对话按钮"),
+    ):
+        if forbidden in text:
+            problems.append(f"{rel_ai} 仍保留已移除的{detail}：{forbidden}")
+    for token, detail in (
+        ("AI 助手", "页面标题保留"),
+        ("新对话", "新对话入口保留"),
+        ("历史记录", "历史记录入口保留"),
+        ("ACCESS_OPTIONS", "权限模式选项常量"),
+        ("accessMode", "权限模式状态"),
+        ('aria-label="AI 权限"', "权限胶囊可读名称"),
+        ("<SegmentedTabs", "权限模式用胶囊分段"),
+        ("ContextPicker", "@ 上下文选择面板"),
+        ("contextResourceIds", "指定资料上下文透传"),
+        ("pickerOpen", "@ 面板开关"),
+    ):
+        _require(problems, text, token, rel_ai, detail)
+    # 权限胶囊通过 disabled-values 禁用「可操作」，禁用态语义由 SegmentedTabs 渲染
+    if re.search(r":disabled-values=\"\['operate'\]\"", text) is None:
+        problems.append(
+            f"{rel_ai} 未通过 `:disabled-values=\"['operate']\"` 禁用可操作模式"
+        )
+    if "syncOperateTab" in text or "accessTabsRef" in text:
+        problems.append(f"{rel_ai} 仍保留已移除的 syncOperateTab/accessTabsRef 权限同步逻辑")
+    if re.search(r"event\.preventDefault\(\)", text) is None:
+        problems.append(f"{rel_ai} `@` 触发未阻止输入框默认行为（event.preventDefault()）")
+    if re.search(r"pickerOpen(?:\.value)?\s*=\s*true", text) is None:
+        problems.append(f"{rel_ai} `@` 触发未打开上下文面板（pickerOpen = true）")
+    if re.search(r"剩余\s*\{\{\s*usage\.remaining\s*\}\}\s*次", text) is None:
+        problems.append(f"{rel_ai} 额度未收敛为单行 `剩余 {{{{ usage.remaining }}}} 次`")
+    access_match = re.search(r"ACCESS_OPTIONS[^=]*=\s*\[(.*?)\]", text, re.S)
+    if access_match is None:
+        problems.append(f"{rel_ai} 未找到 `ACCESS_OPTIONS` 选项数组（C-AI-PAGE@1）")
+    else:
+        access_body = access_match.group(1)
+        for value, label in (("analyze", "只分析"), ("operate", "可操作")):
+            if not re.search(rf"value:\s*'{value}'", access_body) or not re.search(
+                rf"label:\s*'{label}'", access_body
+            ):
+                problems.append(
+                    f"{rel_ai} `ACCESS_OPTIONS` 缺少 `{{ value: '{value}', label: '{label}' }}`"
+                )
     _require(problems, router, "redirect: { name: 'ai', query: { panel: 'inbox' } }", rel_router, "旧 /messages 兼容重定向")
     if problems:
         raise ContractError("；".join(problems))
-    return f"{rel_ai} 左问答 + 右通知/归档，归档动作与面板切换齐全；{rel_router} 旧消息路由重定向"
+    return (
+        f"{rel_ai} 左问答 + 右通知/归档，归档动作与面板切换齐全；"
+        "已移除说明副标题/当前目标/mock 提示/建议提问/额度与输入提示/无效按钮；"
+        "权限胶囊为只分析/可操作（可操作禁用），@ 面板与指定资料上下文接线；"
+        f"{rel_router} 旧消息路由重定向"
+    )
 
 
 def check_submission_file_ui(rel_api: str, rel_view: str, src_dir: Path) -> str:
@@ -3790,6 +3998,298 @@ CHECKS = CHECKS + (
             "types/models.ts",
             SRC_DIR,
         ),
+    ),
+)
+
+
+def check_segmented_tabs(
+    rel_tabs: str, rel_layout: str, rel_hall: str, src_dir: Path
+) -> str:
+    """㊼ `C-SEGMENTED@1`：通用胶囊分段控件的 props/emits/tablist 语义与样式令牌。"""
+    tabs = strip_ts_comments(load_text(src_dir / rel_tabs))
+    layout = strip_ts_comments(load_text(src_dir / rel_layout))
+    hall = strip_ts_comments(load_text(src_dir / rel_hall))
+    problems: list[str] = []
+    for token, detail in (
+        ("modelValue", "受控值 prop"),
+        ("options", "选项数组 prop"),
+        ("ariaLabel", "可读名称 prop"),
+        ("defineEmits", "声明事件"),
+        ("'update:modelValue'", "受控更新事件"),
+        ("'change'", "变更事件"),
+        ('class="segmented-tabs"', "容器类名"),
+        ('role="tablist"', "容器 tablist 语义"),
+        (':aria-label="ariaLabel"', "容器可读名称"),
+        ('role="tab"', "选项为 tab"),
+        ('class="segmented-tabs__tab"', "选项类名"),
+        ("segmented-tabs__tab--active", "选中态修饰符"),
+        (":aria-selected=", "选中态可读"),
+        ("ArrowLeft", "左方向键切换"),
+        ("ArrowRight", "右方向键切换"),
+        ("min-height: var(--app-touch)", "触控高度令牌"),
+        ("border-radius: 999px", "胶囊圆角"),
+        ("var(--app-surface-sunken)", "容器底色令牌"),
+        ("var(--app-surface)", "选中态底色令牌"),
+        ("var(--app-shadow-sm)", "选中态阴影令牌"),
+        ("disabledValues?: string[]", "禁用值 prop"),
+        (":disabled=", "选项渲染 disabled 原生属性"),
+        ("aria-disabled", "禁用选项可读禁用态"),
+        ("overflow-x: auto", "窄屏横向滚动"),
+        ("scrollbar-width: none", "隐藏滚动条占位"),
+        ("flex: 0 0 auto", "选项按内容宽度排列"),
+        ("white-space: nowrap", "选项文字不换行"),
+        ("max-width: 768px", "窄屏铺满"),
+    ):
+        _require(problems, tabs, token, rel_tabs, detail)
+    if not _media_blocks(tabs, r"max-width:\s*768px"):
+        problems.append(f"{rel_tabs} 缺少 `@media (max-width: 768px)` 窄屏适配块")
+    _require(problems, layout, "<SegmentedTabs", rel_layout, "侧栏历史区消费胶囊")
+    _require(problems, layout, ':options="HISTORY_TABS"', rel_layout, "历史三组选项")
+    _require(problems, hall, "<SegmentedTabs", rel_hall, "任务大厅筛选消费胶囊")
+    _require(problems, hall, ':options="SCOPE_OPTIONS"', rel_hall, "范围选项")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_tabs} 提供 modelValue/options/ariaLabel + update:modelValue/change；"
+        "tablist/tab/aria-selected 语义、方向键切换与 --app-touch/999px/令牌底色齐备；"
+        f"{rel_layout} 历史胶囊与 {rel_hall} 筛选均复用该组件"
+    )
+
+
+def check_avatar_ui(
+    rel_types: str,
+    rel_api: str,
+    rel_store: str,
+    rel_avatar: str,
+    rel_profile: str,
+    src_dir: Path,
+) -> str:
+    """㊽ `C-AVATAR-UI@1`：User.avatar 类型 + 上传 API + store action + 上传/移除控件。"""
+    types_text = strip_ts_comments(load_text(src_dir / rel_types))
+    api = strip_ts_comments(load_text(src_dir / rel_api))
+    store = strip_ts_comments(load_text(src_dir / rel_store))
+    avatar = strip_ts_comments(load_text(src_dir / rel_avatar))
+    profile = strip_ts_comments(load_text(src_dir / rel_profile))
+    problems: list[str] = []
+
+    user_iface = re.search(r"export interface User\s*\{([^}]*)\}", types_text, re.S)
+    if user_iface is None:
+        problems.append(f"{rel_types} 缺少 `export interface User`（C-AVATAR-UI@1）")
+    elif not re.search(r"\bavatar\s*:\s*string\s*\|\s*null", user_iface.group(1)):
+        problems.append(f"{rel_types} 的 User 缺少 `avatar: string | null`（C-AVATAR-UI@1）")
+
+    _require(problems, api, "export function updateAvatar", rel_api, "导出 updateAvatar")
+    for token, detail in (
+        ("'/api/auth/avatar'", "头像写入端点"),
+        ("'PATCH'", "使用 PATCH 方法"),
+    ):
+        _require(problems, api, token, rel_api, detail)
+
+    for token, detail in (
+        ("setAvatar", "store 头像 action"),
+        ("writeStoredUser", "同步本地缓存用户"),
+    ):
+        _require(problems, store, token, rel_store, detail)
+
+    for token, detail in (
+        ("avatar?: string | null", "UserAvatar avatar prop"),
+        ('class="avatar__image"', "自定义头像图片分支"),
+        (':src="avatar"', "图片仅取自 avatar prop"),
+    ):
+        _require(problems, avatar, token, rel_avatar, detail)
+
+    for token, detail in (
+        ('accept="image/png,image/jpeg,image/webp"', "支持格式白名单"),
+        ("setAvatar(", "上传成功后同步 store"),
+        ("移除", "提供移除动作"),
+    ):
+        _require(problems, profile, token, rel_profile, detail)
+    # 移除路径允许 updateAvatar(null) 或经 applyAvatar(null) 间接写入空值
+    if re.search(r"(?:updateAvatar|applyAvatar)\s*\(\s*null\s*\)", profile) is None:
+        problems.append(
+            f"{rel_profile} 缺少移除路径（`updateAvatar(null)` 或 `applyAvatar(null)`）"
+        )
+    if re.search(r"200\s*\*\s*1024|204800", profile) is None:
+        problems.append(f"{rel_profile} 未在浏览器侧校验头像 ≤ 200KB（C-AVATAR-UI@1）")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_types} User.avatar 可空；{rel_api} 导出 updateAvatar → PATCH /api/auth/avatar；"
+        f"{rel_store} 提供 setAvatar 并写本地缓存；{rel_avatar} 保留 role=img 与图片分支；"
+        f"{rel_profile} 类型/大小前置校验、上传同步与移除动作齐备"
+    )
+
+
+def check_archive_page(rel_router: str, rel_page: str, src_dir: Path) -> str:
+    """㊾ `C-ARCHIVE-PAGE@1`：`/archive` 只读页 + 一行空态 + 长条圆角列表。"""
+    router_text = strip_ts_comments(load_text(src_dir / rel_router))
+    page = strip_ts_comments(load_text(src_dir / rel_page))
+    problems: list[str] = []
+
+    route_line = 0
+    route_match = re.search(
+        r"name:\s*'archive'\s*,\s*path:\s*'/archive'\s*,\s*"
+        r"component:\s*\(\)\s*=>\s*import\('\.\./views/ArchivePage\.vue'\)",
+        router_text,
+    )
+    if route_match is None:
+        problems.append(
+            f"{rel_router} 缺少 archive 路由（name: 'archive' + path: '/archive' + "
+            "component: () => import('../views/ArchivePage.vue')）"
+        )
+    else:
+        route_line = router_text.count("\n", 0, route_match.start()) + 1
+    if re.search(r"archive\s*:\s*'归档通知'", router_text) is None:
+        problems.append(f"{rel_router} 缺少 `PAGE_TITLES.archive = '归档通知'`")
+
+    for token, detail in (
+        ("loadArchived()", "加载既有归档数据"),
+        ('class="archive-item"', "长条列表项"),
+        ("border-radius: 999px", "胶囊圆角"),
+        ("min-height: var(--app-touch)", "触控高度令牌"),
+        ("padding: var(--app-space-2) var(--app-space-4)", "单行内边距令牌"),
+        ("task_id", "读取任务关联"),
+        ("name: 'detail'", "整条跳任务详情"),
+        ("暂无归档", "一行空态"),
+        ("重试", "失败重试"),
+    ):
+        _require(problems, page, token, rel_page, detail)
+    if re.search(r"shortTime\([^)]*created_at", page) is None:
+        problems.append(f"{rel_page} 右侧未用 `shortTime(created_at)` 渲染时间")
+    for forbidden, detail in (
+        ("section-hint", "说明段落"),
+        ("归档箱为空", "空箱解释文案"),
+    ):
+        if forbidden in page:
+            problems.append(f"{rel_page} 仍保留应移除的{detail}：{forbidden}")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_router}:{route_line} 新增 /archive（name=archive）并登记页面标题；"
+        f"{rel_page} 只读渲染 title + shortTime(created_at)，task_id 非空整条跳详情，"
+        "一行空态与失败重试，无说明段落"
+    )
+
+
+def check_library_page_scope(rel_view: str, src_dir: Path) -> str:
+    """㊿ `C-LIBRARY-PAGE@1`：下线「我的参考链接」录入与列表，保留三块资料区。"""
+    view = strip_ts_comments(load_text(src_dir / rel_view))
+    problems: list[str] = []
+
+    for token, detail in (
+        ("AI 引用资料，以及你有权查看的活动 / 任务资料。", "页面副标题"),
+        ('data-testid="library-refs"', "我的引用资料区"),
+        ("我的引用资料", "引用资料标题"),
+        ("活动 / 任务资料", "活动 / 任务资料区"),
+        ("组织资料", "组织资料区"),
+    ):
+        _require(problems, view, token, rel_view, detail)
+
+    for forbidden, detail in (
+        ("我的参考链接", "「我的参考链接」标题"),
+        ("listLibraryLinks", "个人链接列表接口"),
+        ("createLibraryLink", "个人链接新增接口"),
+        ("updateLibraryLink", "个人链接更新接口"),
+        ("/api/library/links", "个人链接端点"),
+        ("添加链接", "个人链接录入按钮"),
+        ("linkLoading", "个人链接加载态"),
+        ("linkError", "个人链接错误态"),
+        ("linkForm", "个人链接表单状态"),
+        ("loadLinks", "个人链接加载函数"),
+    ):
+        if forbidden in view:
+            problems.append(f"{rel_view} 仍保留已下线的{detail}：{forbidden}")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_view} 删除「我的参考链接」录入/列表及其状态、函数与 API import；"
+        "保留我的引用资料（library-refs）/ 活动 / 任务资料 / 组织资料三块，"
+        "副标题为「AI 引用资料，以及你有权查看的活动 / 任务资料。」"
+    )
+
+
+# 追加到既有 46 项之后（v1-ui-shell-refine 前端静态契约收口）
+CHECKS = CHECKS + (
+    (
+        "㊼ C-SEGMENTED@1 胶囊分段控件 props/emits/语义/令牌与消费者",
+        lambda: check_segmented_tabs(
+            "components/common/SegmentedTabs.vue",
+            "layouts/AppLayout.vue",
+            "views/TaskHall.vue",
+            SRC_DIR,
+        ),
+    ),
+    (
+        "㊽ C-AVATAR-UI@1 用户头像类型/API/store 与上传移除控件",
+        lambda: check_avatar_ui(
+            "types/models.ts",
+            "api/auth.ts",
+            "stores/user.ts",
+            "components/common/UserAvatar.vue",
+            "views/Profile.vue",
+            SRC_DIR,
+        ),
+    ),
+    (
+        "㊾ C-ARCHIVE-PAGE@1 归档通知只读页与 /archive 路由",
+        lambda: check_archive_page("router/index.ts", "views/ArchivePage.vue", SRC_DIR),
+    ),
+    (
+        "㊿ C-LIBRARY-PAGE@1 下线个人参考链接并保留三块资料区",
+        lambda: check_library_page_scope("views/LibraryPage.vue", SRC_DIR),
+    ),
+)
+
+
+def check_avatar_api_wrapper(rel_auth: str, backend_dir: Path) -> str:
+    """51 `C-AVATAR-API@1`：头像写入复用 ok() 统一响应包装。"""
+    auth = load_text(backend_dir / rel_auth)
+    problems: list[str] = []
+
+    decorator = re.search(
+        r'@router\.patch\(\s*"(?:/api/auth/avatar|/avatar)"([^)]*)\)', auth
+    )
+    if decorator is None:
+        problems.append(
+            f"{rel_auth} 缺少头像写入路由 "
+            '`@router.patch("/avatar" | "/api/auth/avatar")`（C-AVATAR-API@1）'
+        )
+    elif "response_model" in decorator.group(1):
+        problems.append(
+            f"{rel_auth} 头像写入装饰器仍声明 response_model（应改走 ok() 统一包装）"
+        )
+    if "def update_avatar" not in auth:
+        problems.append(f"{rel_auth} 缺少 `update_avatar` 实现")
+    if (
+        re.search(
+            r"return\s+ok\(\s*UserOut\.model_validate\(\s*current_user\s*\)"
+            r"\.model_dump\(\s*\)\s*\)",
+            auth,
+        )
+        is None
+    ):
+        problems.append(
+            f"{rel_auth} 的 update_avatar 未返回 "
+            "`ok(UserOut.model_validate(current_user).model_dump())`"
+        )
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_auth} PATCH /api/auth/avatar 返回 ok(UserOut.model_validate(current_user)"
+        ".model_dump())，装饰器不再声明 response_model，与统一响应包装一致"
+    )
+
+
+# 追加到既有 50 项之后（C-AVATAR-API@1 修订：ok() 统一响应包装）
+CHECKS = CHECKS + (
+    (
+        "51 C-AVATAR-API@1 头像写入走 ok() 统一响应包装",
+        lambda: check_avatar_api_wrapper("app/routers/auth.py", BACKEND_DIR),
     ),
 )
 

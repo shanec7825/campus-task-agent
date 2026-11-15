@@ -112,6 +112,8 @@ export const useAiChatStore = defineStore('aiChat', {
     scopeId: null as number | null,
     /** 当前目标展示标签；无标签时由界面回退为「活动 #id / 任务 #id」 */
     scopeLabel: '',
+    /** 本轮指定资料上下文（`C-AI-CONTEXT@1`）：由 `@` 面板多选，发送后清空 */
+    contextResourceIds: [] as number[],
     /** 当前选中的会话键：`c<id>` 或 `new<seq>` */
     selectedConversationKey: 'new1',
     conversationSeq: 1,
@@ -296,6 +298,8 @@ export const useAiChatStore = defineStore('aiChat', {
       this.historyLoading = false
       this.historyError = ''
       this.sending = Boolean(this.inflight[nextKey])
+      // 指定资料上下文跟随作用域：换目标后不沿用上一轮的资料选择
+      this.contextResourceIds = []
     },
 
     /**
@@ -507,8 +511,15 @@ export const useAiChatStore = defineStore('aiChat', {
         previous.content === content &&
         previous.conversationId === conversationId
       const requestId = reuse ? previous.requestId : newRequestId()
+      const resourceIds = this.contextResourceIds.slice()
       try {
-        const result = await chat(content, conversationId ?? undefined, requestId, scope)
+        const result = await chat(
+          content,
+          conversationId ?? undefined,
+          requestId,
+          scope,
+          resourceIds.length > 0 ? resourceIds : undefined
+        )
         if (token !== epoch) return false
         const resultKey = conversationKeyOf(result.conversation_id)
         if (convKey === resultKey) {
@@ -542,6 +553,8 @@ export const useAiChatStore = defineStore('aiChat', {
         if (this.scopeKey === key && this.selectedConversationKey === resultKey) {
           this.historyError = ''
         }
+        // 指定资料已随本次问答发出，避免下一条消息误带同一批资料
+        this.contextResourceIds = []
         await this.loadUsage()
         return true
       } catch (err) {
@@ -593,6 +606,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.messages = []
       this.conversationId = null
       this.input = ''
+      this.contextResourceIds = []
       this.historyError = ''
       this.historyLoading = false
       this.historyItems = []

@@ -29,6 +29,8 @@ export interface User {
   role: string
   org: string | null
   credits: number
+  /** 自定义头像 data URL；`null` 表示未设置，由前端派生默认头像 */
+  avatar: string | null
   /** 平台管理员：可建组织/发重置，但不自动获得任何组织业务内容可见性 */
   platform_admin: boolean
 }

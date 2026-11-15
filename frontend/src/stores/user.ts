@@ -71,6 +71,13 @@ export const useUserStore = defineStore('user', {
       writeStoredUser(user)
     },
 
+    /** 更新本人头像（`null` 回退默认头像）：同步内存与本地展示缓存 */
+    setAvatar(avatar: string | null): void {
+      if (!this.user) return
+      this.user = { ...this.user, avatar }
+      writeStoredUser(this.user)
+    },
+
     /** 账号密码登录：成功后同步会话到 store */
     async login(payload: LoginPayload): Promise<LoginOut> {
       const result = await apiLogin(payload)

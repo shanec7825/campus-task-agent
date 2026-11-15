@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import llm_client, prompts
 from app.errors import ApiError
-from app.models import Activity, AiConversation, AiMessage, AiUsageLedger, Task, User
+from app.models import Activity, AiConversation, AiMessage, AiUsageLedger, OrgResource, Task, User
 from app.schemas import (
     AiChatOut,
     AiCitation,
@@ -58,6 +58,8 @@ TITLE_LENGTH = 30
 MAX_DOC_ITEMS = 3
 MAX_DOC_SNIPPET = 300
 MAX_DOC_CONTEXT_CHARS = 1200
+#: 用户 `@` 指定资料（`C-AI-CONTEXT@1`）：最多 5 条，独立预算避免被关键词结果挤掉。
+MAX_PINNED_DOC_ITEMS = 5
 
 ROLE_USER = "user"
 ROLE_ASSISTANT = "assistant"
@@ -422,6 +424,67 @@ def _doc_context(db: Session, user: User, question: str) -> list[_ContextItem]:
     return items
 
 
+def _pinned_doc_context(
+    db: Session,
+    user: User,
+    resource_ids: list[int] | None,
+    *,
+    start_index: int = 0,
+    skip_resource_ids: set[int] | None = None,
+    budget: int = MAX_DOC_CONTEXT_CHARS,
+) -> list[_ContextItem]:
+    """用户 `@` 指定的资料片段（`C-AI-CONTEXT@1`）。
+
+    去重升序取前 5；不属于本人组织、未开放 AI 检索、已归档或正文不可用的 id
+    静默忽略。与关键词检索结果按 ``resource_id`` 去重，整体不超字符预算。
+    """
+    if not resource_ids or budget <= 0:
+        return []
+    wanted = sorted(
+        {item for item in resource_ids if isinstance(item, int) and not isinstance(item, bool)}
+    )[:MAX_PINNED_DOC_ITEMS]
+    if not wanted:
+        return []
+    org_ids = authz.org_ids_for(db, user)
+    if not org_ids:
+        return []
+    rows = db.execute(
+        select(OrgResource).where(
+            OrgResource.id.in_(wanted),
+            OrgResource.org_id.in_(org_ids),
+            OrgResource.allow_student_ai == 1,
+            OrgResource.archived == 0,
+            OrgResource.text_status == "ready",
+        )
+    ).scalars()
+    allowed = {int(row.id): row for row in rows}
+    skipped = skip_resource_ids or set()
+    items: list[_ContextItem] = []
+    used = 0
+    for resource_id in wanted:
+        if resource_id in skipped:
+            continue
+        row = allowed.get(resource_id)
+        if row is None:
+            continue
+        snippet = (row.content_text or row.search_text or "").strip()[:MAX_DOC_SNIPPET]
+        if not snippet:
+            continue
+        if used + len(snippet) > budget:
+            break
+        used += len(snippet)
+        items.append(
+            _ContextItem(
+                ref=f"D{start_index + len(items) + 1}",
+                kind="doc",
+                title=row.title,
+                summary=snippet,
+                resource_id=resource_id,
+            )
+        )
+    return items
+
+
 def _citation(item: _ContextItem) -> AiCitation:
     if item.kind == "doc":
         return AiCitation(
@@ -618,6 +681,7 @@ def chat(
     request_id: str | None = None,
     scope_type: str = SCOPE_GENERAL,
     scope_id: int | None = None,
+    resource_ids: list[int] | None = None,
 ) -> AiChatOut:
     """执行一次只读问答并持久化用户与助手消息。
 
@@ -660,7 +724,19 @@ def chat(
     db.rollback()
 
     items = _visible_context(db, user, normalized_scope_type, normalized_scope_id, text)
-    items.extend(_doc_context(db, user, text))
+    doc_items = _doc_context(db, user, text)
+    items.extend(doc_items)
+    items.extend(
+        _pinned_doc_context(
+            db,
+            user,
+            resource_ids,
+            start_index=len(doc_items),
+            skip_resource_ids={
+                int(item.resource_id) for item in doc_items if item.resource_id is not None
+            },
+        )
+    )
     db.rollback()
 
     try:

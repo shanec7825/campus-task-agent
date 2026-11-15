@@ -22,6 +22,7 @@ import EmptyState from '../components/common/EmptyState.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import HoverPeek from '../components/common/HoverPeek.vue'
 import LoadingState from '../components/common/LoadingState.vue'
+import SegmentedTabs from '../components/common/SegmentedTabs.vue'
 import { STATUS_MAP, statusText } from '../components/task/StatusTag.vue'
 import { formatDeadline, quotaText } from '../components/task/TaskCard.vue'
 import type { Activity, TaskItem } from '../types/models'
@@ -102,6 +103,22 @@ const statusOptions = Object.entries(STATUS_MAP).map(([value, meta]) => ({
 const typeOptions = [
   { value: 'open', label: '公开报名' },
   { value: 'assign', label: '指派' }
+]
+
+/** 胶囊筛选选项（契约 `C-TASKHALL-FILTER@1`）：值域与 `currentView` 一致，首位补「全部」 */
+const SCOPE_OPTIONS: Array<{ value: ScopeValue; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'mine', label: '我的' }
+]
+
+const STATUS_FILTER_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'all', label: '全部' },
+  ...statusOptions
+]
+
+const TYPE_FILTER_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'all', label: '全部' },
+  ...typeOptions
 ]
 
 /** 任务集合 = 活动下第一层任务 + 独立任务；子任务不重复铺满 */
@@ -466,31 +483,33 @@ onBeforeUnmount(() => {
       >
         <div v-if="!isMineVariant" class="filter-row">
           <span class="filter-label">范围</span>
-          <el-radio-group v-model="currentView.scope" class="filter-group" @change="handleFilterChange">
-            <el-radio-button value="all">全部</el-radio-button>
-            <el-radio-button value="mine">我的任务与活动</el-radio-button>
-          </el-radio-group>
+          <SegmentedTabs
+            v-model="currentView.scope"
+            :options="SCOPE_OPTIONS"
+            aria-label="范围"
+            @change="handleFilterChange"
+          />
         </div>
 
         <template v-if="activeType === 'task'">
           <div class="filter-row">
             <span class="filter-label">状态</span>
-            <el-radio-group v-model="currentView.status" class="filter-group" @change="handleFilterChange">
-              <el-radio-button value="all">全部</el-radio-button>
-              <el-radio-button v-for="option in statusOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </el-radio-button>
-            </el-radio-group>
+            <SegmentedTabs
+              v-model="currentView.status"
+              :options="STATUS_FILTER_OPTIONS"
+              aria-label="状态"
+              @change="handleFilterChange"
+            />
           </div>
 
           <div class="filter-row">
             <span class="filter-label">类型</span>
-            <el-radio-group v-model="currentView.type" class="filter-group" @change="handleFilterChange">
-              <el-radio-button value="all">全部</el-radio-button>
-              <el-radio-button v-for="option in typeOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </el-radio-button>
-            </el-radio-group>
+            <SegmentedTabs
+              v-model="currentView.type"
+              :options="TYPE_FILTER_OPTIONS"
+              aria-label="类型"
+              @change="handleFilterChange"
+            />
           </div>
         </template>
 
@@ -619,31 +638,33 @@ onBeforeUnmount(() => {
       <div class="drawer-filters">
         <div v-if="!isMineVariant" class="filter-row">
           <span class="filter-label">范围</span>
-          <el-radio-group v-model="currentView.scope" class="filter-group" @change="handleFilterChange">
-            <el-radio-button value="all">全部</el-radio-button>
-            <el-radio-button value="mine">我的任务与活动</el-radio-button>
-          </el-radio-group>
+          <SegmentedTabs
+            v-model="currentView.scope"
+            :options="SCOPE_OPTIONS"
+            aria-label="范围"
+            @change="handleFilterChange"
+          />
         </div>
 
         <template v-if="activeType === 'task'">
           <div class="filter-row">
             <span class="filter-label">状态</span>
-            <el-radio-group v-model="currentView.status" class="filter-group" @change="handleFilterChange">
-              <el-radio-button value="all">全部</el-radio-button>
-              <el-radio-button v-for="option in statusOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </el-radio-button>
-            </el-radio-group>
+            <SegmentedTabs
+              v-model="currentView.status"
+              :options="STATUS_FILTER_OPTIONS"
+              aria-label="状态"
+              @change="handleFilterChange"
+            />
           </div>
 
           <div class="filter-row">
             <span class="filter-label">类型</span>
-            <el-radio-group v-model="currentView.type" class="filter-group" @change="handleFilterChange">
-              <el-radio-button value="all">全部</el-radio-button>
-              <el-radio-button v-for="option in typeOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </el-radio-button>
-            </el-radio-group>
+            <SegmentedTabs
+              v-model="currentView.type"
+              :options="TYPE_FILTER_OPTIONS"
+              aria-label="类型"
+              @change="handleFilterChange"
+            />
           </div>
         </template>
 
@@ -747,10 +768,6 @@ onBeforeUnmount(() => {
   font-size: var(--app-font-aux-lg, 14px);
 }
 
-.filter-group {
-  flex-wrap: wrap;
-  min-width: 0;
-}
 
 .filter-current {
   display: flex;
@@ -858,21 +875,5 @@ onBeforeUnmount(() => {
     font-size: var(--app-font-body, 15px);
   }
 
-  .filter-group {
-    width: 100%;
-  }
-
-  .filter-group :deep(.el-radio-button) {
-    flex: 1 1 auto;
-  }
-
-  .filter-group :deep(.el-radio-button__inner) {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: var(--app-touch);
-    padding: 0 var(--app-space-3);
-    font-size: var(--app-font-body, 15px);
-  }
 }
 </style>

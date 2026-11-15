@@ -4,7 +4,7 @@
  * 会话由服务端通过同源 Cookie 维护，本模块不读写任何会话令牌。
  */
 import { request } from './client'
-import type { LoginOut, MeOut, PasswordResetIn, RegisterIn } from '../types/models'
+import type { LoginOut, MeOut, PasswordResetIn, RegisterIn, User } from '../types/models'
 
 /** 登录入参（`LoginIn`） */
 export interface LoginPayload {
@@ -35,4 +35,8 @@ export function register(payload: RegisterIn): Promise<LoginOut> {
 /** 凭一次性重置凭据修改密码 */
 export function resetPassword(payload: PasswordResetIn): Promise<{ reset: boolean }> {
   return request<{ reset: boolean }>('POST', '/api/auth/reset-password', payload)
+}
+/** 本人头像写入：`avatar` 为 data URL，`null` 表示移除并回退默认头像 */
+export function updateAvatar(avatar: string | null): Promise<User> {
+  return request<User>('PATCH', '/api/auth/avatar', { avatar })
 }

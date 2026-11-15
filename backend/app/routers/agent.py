@@ -187,6 +187,7 @@ def chat(
             request_id=payload.request_id,
             scope_type=payload.scope_type,
             scope_id=payload.scope_id,
+            resource_ids=payload.resource_ids,
         ).model_dump()
     )
 

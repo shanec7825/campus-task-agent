@@ -103,6 +103,12 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/Profile.vue')
   },
   {
+    // 只读归档箱：侧栏底部入口，不提供取消归档
+    name: 'archive',
+    path: '/archive',
+    component: () => import('../views/ArchivePage.vue')
+  },
+  {
     name: 'publish',
     path: '/publish',
     component: () => import('../views/PublishPage.vue')
@@ -196,6 +202,7 @@ export const PAGE_TITLES: Record<string, string> = {
   messages: '消息',
   publish: '发布任务',
   profile: '个人中心',
+  archive: '归档通知',
   admin: '发布者后台'
 }
 

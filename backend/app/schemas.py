@@ -36,6 +36,15 @@ class UserOut(BaseModel):
     credits: int
     created_at: str | None = None
     platform_admin: bool = False
+    avatar: str | None = None
+
+
+class AvatarIn(BaseModel):
+    """头像写入（`C-AVATAR-API@1`）：``None`` / 空串表示清除；格式校验在路由层。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    avatar: str | None = None
 
 
 class LoginIn(BaseModel):
@@ -901,6 +910,8 @@ class AiChatIn(BaseModel):
     # 会话作用域（`C-AI-SCOPE@1`）：缺省为 general，兼容旧客户端。
     scope_type: Literal["general", "activity", "task"] = "general"
     scope_id: int | None = None
+    # 用户 @ 指定的资料（`C-AI-CONTEXT@1`）：服务层去重、升序取前 5，不可见者静默忽略。
+    resource_ids: list[int] | None = None
 
 
 class AiCitation(BaseModel):
