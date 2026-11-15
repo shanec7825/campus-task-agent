@@ -153,6 +153,8 @@ function handleSelect(): void {
   overflow: hidden;
   flex: 1 1 auto;
   min-width: 0;
+  /* 固定两行标题高度：同列表内标题长短不影响卡片高度（R-06） */
+  min-height: 2.75em;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   color: var(--app-text);
@@ -162,11 +164,14 @@ function handleSelect(): void {
   word-break: break-word;
 }
 
+/* 元信息固定单行，超出以省略号收尾（R-06） */
 .browse-card__meta {
+  overflow: hidden;
   color: var(--app-text-secondary);
   font-size: var(--app-font-aux, 13px);
-  line-height: 1.5;
-  word-break: break-word;
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .browse-card__meta--muted {

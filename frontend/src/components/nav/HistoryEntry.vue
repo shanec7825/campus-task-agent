@@ -24,7 +24,7 @@ const scopeText = computed<string>(() => {
 const updatedText = computed<string>(() => {
   const value = props.conversation.updated_at
   if (!value) return '—'
-  return value.length > 16 ? value.slice(0, 16) : value
+  return value.slice(0, 16).replace('T', ' ')
 })
 </script>
 

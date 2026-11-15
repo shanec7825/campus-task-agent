@@ -22,7 +22,7 @@ const archivedItems = computed<NotificationItem[]>(() => notificationsStore.arch
 
 function shortTime(value: string | null): string {
   if (!value) return '—'
-  return value.length > 16 ? value.slice(0, 16) : value
+  return value.slice(0, 16).replace('T', ' ')
 }
 
 function errorMessage(err: unknown): string {

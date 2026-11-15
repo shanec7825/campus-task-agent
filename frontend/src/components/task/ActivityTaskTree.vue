@@ -30,7 +30,7 @@ function assigneeText(names: string[]): string {
 
 function deadlineText(value: string | null): string {
   if (!value) return '未设置截止'
-  return value.length > 16 ? value.slice(0, 16) : value
+  return value.slice(0, 16).replace('T', ' ')
 }
 </script>
 

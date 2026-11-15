@@ -37,7 +37,7 @@ const publishedAt = computed<string>(() => {
   const raw = props.item.created_at
   if (!raw) return '未知发布时间'
   // 后端时间为 `YYYY-MM-DD HH:MM:SS`，展示到分钟即可
-  return raw.length >= 16 ? raw.slice(0, 16) : raw
+  return raw.slice(0, 16).replace('T', ' ')
 })
 
 const adoptTip = computed<string>(() =>

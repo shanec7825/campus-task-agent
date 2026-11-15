@@ -253,7 +253,7 @@ function close(): void {
 
 function dateText(value: string | null): string {
   if (!value) return '未设置截止'
-  return `截止 ${value.length > 16 ? value.slice(0, 16) : value}`
+  return `截止 ${value.slice(0, 16).replace('T', ' ')}`
 }
 
 onBeforeUnmount(() => {

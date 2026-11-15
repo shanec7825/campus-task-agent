@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /**
- * 活动详情（契约 C-SEMANTIC@1 / R5、R6）。
+ * 活动详情（契约 C-DETAIL-LAYOUT@1 / C-DETAIL-HEADER@1 / C-TASK-GROUPS@1 / C-ACTIVITY-FACTS@1）。
  *
- * 结构顺序固定：`header`（活动名 + 负责人/截止/组织/状态）→ 整体进度 →
- * 任务表格（含展开全部/收起全部）→ 图谱 → 资料 → 操作。整页可被浏览器助手直接阅读：
- * 根节点用 `section.app-page`（`AppLayout` 的 `main#main-content` 是全局唯一 `<main>`），
- * 加载态用 `aria-busy` 表达且不渲染空状态。
+ * 结构顺序固定：`DetailHeader`（活动名、状态与操作）→ 关键指标条 →
+ * `.detail-grid`（主区：任务分组 / 依赖与时间图 / 资料；侧栏：活动属性 / 切换活动 / 进度说明）。
+ * 整页可被浏览器助手直接阅读：根节点用 `section.app-page`（`AppLayout` 的
+ * `main#main-content` 是全局唯一 `<main>`），加载态用 `aria-busy` 表达且不渲染空状态。
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
@@ -16,13 +16,14 @@ import { ApiError } from '../api/client'
 import { createResource, listResources } from '../api/resources'
 import AgentDock from '../components/ai/AgentDock.vue'
 import ActivityInfoSection from '../components/activity/ActivityInfoSection.vue'
-import ActivityTaskTable from '../components/task/ActivityTaskTable.vue'
+import DetailHeader from '../components/detail/DetailHeader.vue'
+import PropertyList, { type PropertyItem } from '../components/detail/PropertyList.vue'
 import TaskGraph from '../components/task/TaskGraph.vue'
+import TaskGroupList from '../components/task/TaskGroupList.vue'
 import ErrorState from '../components/common/ErrorState.vue'
 import LoadingState from '../components/common/LoadingState.vue'
-import UserAvatar from '../components/common/UserAvatar.vue'
 import { useUserStore } from '../stores/user'
-import type { ActivityDetail as ActivityDetailModel, ResourceItem } from '../types/models'
+import type { ActivityDetail as ActivityDetailModel, ActivityTaskNode, ResourceItem } from '../types/models'
 
 const route = useRoute()
 const router = useRouter()
@@ -64,6 +65,15 @@ const resourceForm = ref({
 
 const activityId = computed<number>(() => Number(route.params.id))
 
+/** 侧栏属性用：组织名缺失时按 org_id 从我的组织解析，避免显示「未加入组织」 */
+const infoActivity = computed<ActivityDetailModel | null>(() => {
+  const current = activity.value
+  if (!current) return null
+  if (current.org) return current
+  const hit = userStore.orgs.find((membership) => membership.org_id === current.org_id)
+  return hit?.name ? { ...current, org: hit.name } : current
+})
+
 /** 资料管理权：活动负责人或该活动组织的管理员（后端仍会再校验） */
 const canManageResources = computed<boolean>(() => {
   if (!activity.value || !userStore.user) return false
@@ -91,6 +101,70 @@ const progressText = computed<string>(() => {
   const base = `${progress.percent}% · ${progress.completed_tasks}/${progress.total_tasks} 个任务已完成`
   return progress.cancelled_tasks > 0 ? `${base} · 已取消 ${progress.cancelled_tasks} 个` : base
 })
+
+/** 侧栏进度说明的字段行 */
+const progressItems = computed<PropertyItem[]>(() => {
+  const progress = activity.value?.progress
+  if (!progress) return []
+  return [
+    { label: '整体进度', value: progressText.value },
+    {
+      label: '负责人确认',
+      value: progress.awaiting_owner_confirm ? '待负责人确认' : '无需确认',
+      tone: progress.awaiting_owner_confirm ? 'warning' : 'muted'
+    }
+  ]
+})
+
+/** 指标条：完成率、待处理、已逾期（只统计第一层任务） */
+const stats = computed<{ label: string; value: string; hint: string }[]>(() => {
+  const progress = activity.value?.progress
+  const tasks = activity.value?.tasks ?? []
+  return [
+    {
+      label: '完成率',
+      value: `${progress?.percent ?? 0}%`,
+      hint: `${progress?.completed_tasks ?? 0}/${progress?.total_tasks ?? 0} 个任务已完成`
+    },
+    {
+      label: '待处理',
+      value: String(
+        tasks.filter((task) => task.status !== 'verified' && task.status !== 'cancelled').length
+      ),
+      hint: '未完成且未取消的任务'
+    },
+    {
+      label: '已逾期',
+      value: String(tasks.filter(isTaskOverdue).length),
+      hint: '已过截止且未完成'
+    }
+  ]
+})
+
+function todayStamp(): string {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
+/** 截止早于今天且未完成（verified / cancelled 不计入逾期） */
+function isTaskOverdue(task: ActivityTaskNode): boolean {
+  if (!task.deadline || task.status === 'verified' || task.status === 'cancelled') return false
+  return task.deadline.slice(0, 10) < todayStamp()
+}
+
+function activityStatusText(status: string): string {
+  if (status === 'published') return '进行中'
+  if (status === 'closed') return '已结束'
+  return '未知'
+}
+
+function activityStatusTagType(status: string): 'success' | 'info' | 'warning' {
+  if (status === 'published') return 'success'
+  if (status === 'closed') return 'info'
+  return 'warning'
+}
 
 /** 只有带子任务的第一层任务才参与「展开全部 / 收起全部」 */
 const expandableIds = computed<number[]>(() =>
@@ -143,7 +217,7 @@ function switchActivity(event: Event): void {
 
 function dateText(value: string | null): string {
   if (!value) return '未设置'
-  return value.length > 16 ? value.slice(0, 16) : value
+  return value.slice(0, 16).replace('T', ' ')
 }
 
 
@@ -344,179 +418,203 @@ watch(
     />
 
     <template v-else-if="activity">
-      <!-- 标题区：当前活动负责人 + 活动切换（契约 `C-ACTIVITY-SWITCH@1`） -->
-      <div class="activity-detail__toolbar">
-        <div class="activity-detail__owner">
-          <UserAvatar :user-id="activity.owner_id" :name="activity.owner_name" size="md" />
-          <span class="activity-detail__owner-name">{{ activity.owner_name || '待分配' }}</span>
-        </div>
-        <label class="activity-detail__switch">
-          <span class="activity-detail__switch-label">切换活动</span>
-          <select
-            class="activity-detail__select"
-            :value="String(activityId)"
-            :disabled="switchLoading"
-            @change="switchActivity"
+      <!-- 头部：活动名 + 状态胶囊 + 页面操作（唯一主操作在此活动下新建任务） -->
+      <DetailHeader kicker="活动" :title="activity.title" :subtitle="activity.description">
+        <template #badges>
+          <el-tag
+            :type="activityStatusTagType(activity.status)"
+            effect="light"
+            disable-transitions
           >
-            <option v-for="option in switchOptions" :key="option.id" :value="String(option.id)">
-              {{ option.title }}
-            </option>
-          </select>
-        </label>
-      </div>
-
-      <!-- 与发布活动页共用字段区块（`C-NAV-SHARED-ACTIVITY@2`） -->
-      <ActivityInfoSection :activity="activity" />
-
-      <section class="app-section-card" aria-labelledby="activity-progress-heading">
-        <h2 id="activity-progress-heading" class="section-title">整体进度</h2>
-        <p class="progress-text">{{ progressText }}</p>
-        <p v-if="activity.progress.awaiting_owner_confirm" class="awaiting-hint">
-          下层工作已完成，待负责人确认
-        </p>
-      </section>
-
-      <section class="app-section-card" aria-labelledby="activity-tasks-heading">
-        <div class="section-head">
-          <h2 id="activity-tasks-heading" class="section-title">任务</h2>
-          <button
-            v-if="expandableIds.length > 0"
-            type="button"
-            class="expand-all"
-            :aria-expanded="allExpanded ? 'true' : 'false'"
-            @click="toggleAll"
-          >
-            {{ allExpanded ? '收起全部' : '展开全部' }}
-          </button>
-        </div>
-        <div class="activity-detail__table">
-          <ActivityTaskTable :tasks="activity.tasks" :expanded="expanded" @toggle="toggleTask" />
-        </div>
-      </section>
-
-      <section class="app-section-card" aria-labelledby="activity-graph-heading">
-        <div class="section-head">
-          <h2 id="activity-graph-heading" class="section-title">依赖与时间图</h2>
-          <span class="graph-hint">依赖层级、前置关系与工作区间；缺日期任务归入未排期</span>
-        </div>
-        <TaskGraph
-          :nodes="activity.graph.nodes"
-          :edges="activity.graph.edges"
-          mode="full"
-        />
-      </section>
-
-      <section class="app-section-card" aria-labelledby="activity-resources-heading">
-        <div class="section-head">
-          <h2 id="activity-resources-heading" class="section-title">资料与往期参考</h2>
-          <button
-            v-if="canManageResources"
-            type="button"
-            class="expand-all"
-            @click="openResourceDialog()"
-          >
-            添加资料
-          </button>
-        </div>
-
-        <form class="resource-search" role="search" @submit.prevent="runResourceSearch">
-          <label class="resource-search-label" for="resource-query">检索我权限内的资料</label>
-          <div class="resource-search-row">
-            <input
-              id="resource-query"
-              v-model="resourceQuery"
-              type="search"
-              class="resource-search-input"
-              placeholder="例如：往届推文模板"
-            />
-            <button type="submit" class="expand-all" :disabled="resourceSearching">
-              {{ resourceSearching ? '检索中…' : '检索' }}
-            </button>
-            <button
-              v-if="searchPerformed"
-              type="button"
-              class="expand-all"
-              @click="clearResourceSearch"
-            >
-              清除
-            </button>
-          </div>
-        </form>
-
-        <h3 class="resource-subtitle">本活动资料</h3>
-        <p v-if="resourcesLoading" class="resource-hint">正在加载资料…</p>
-        <p v-else-if="resources.length === 0" class="resource-hint">本活动还没有资料。</p>
-        <ul v-else class="resource-list">
-          <li v-for="resource in resources" :key="resource.id" class="resource-item">
-            <div class="resource-head">
-              <span class="resource-title">{{ resource.title }}</span>
-              <el-tag size="small" effect="plain">v{{ resource.version }}</el-tag>
-              <span class="resource-meta">
-                {{ resource.created_by_name }} · {{ dateText(resource.created_at) }}
-              </span>
-            </div>
-            <p v-if="resource.summary" class="resource-summary">{{ resource.summary }}</p>
-            <div class="resource-actions">
-              <a
-                v-if="isHttpUrl(resource.url)"
-                class="resource-link"
-                :href="resource.url"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                打开原始链接
-              </a>
-              <el-button
-                v-if="canEditResource(resource)"
-                size="small"
-                text
-                type="primary"
-                @click="openResourceDialog(resource)"
-              >
-                更新版本
-              </el-button>
-            </div>
-          </li>
-        </ul>
-
-        <div v-if="searchPerformed" class="resource-search-results">
-          <h3 class="resource-subtitle">检索结果（{{ searchResults.length }}）</h3>
-          <p v-if="searchResults.length === 0" class="resource-hint">
-            权限内没有匹配资料；无权限资料不会出现在这里。
-          </p>
-          <ul v-else class="resource-list">
-            <li v-for="resource in searchResults" :key="resource.id" class="resource-item">
-              <div class="resource-head">
-                <span class="resource-title">{{ resource.title }}</span>
-                <el-tag size="small" effect="plain">v{{ resource.version }}</el-tag>
-                <span class="resource-meta">
-                  {{ resource.activity_title || '未绑定活动' }} · {{ resource.created_by_name }}
-                </span>
-              </div>
-              <p v-if="resource.summary" class="resource-summary">{{ resource.summary }}</p>
-              <div class="resource-actions">
-                <a
-                  v-if="isHttpUrl(resource.url)"
-                  class="resource-link"
-                  :href="resource.url"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  打开原始链接
-                </a>
-              </div>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <section class="app-section-card" aria-label="操作">
-        <div class="app-actions">
+            {{ activityStatusText(activity.status) }}
+          </el-tag>
+        </template>
+        <template #actions>
           <el-button @click="backToHall">返回列表</el-button>
           <el-button type="primary" @click="publishUnderActivity">在此活动下新建任务</el-button>
           <el-button @click="goPublish">发布相关事务</el-button>
+        </template>
+      </DetailHeader>
+
+      <section class="activity-stats" aria-label="活动关键指标">
+        <div v-for="stat in stats" :key="stat.label" class="activity-stat">
+          <span class="activity-stat__label">{{ stat.label }}</span>
+          <span class="activity-stat__value">{{ stat.value }}</span>
+          <span class="activity-stat__hint">{{ stat.hint }}</span>
         </div>
       </section>
+
+      <div class="detail-grid">
+        <div class="detail-grid__main">
+          <section class="app-section-card" aria-labelledby="activity-tasks-heading">
+            <div class="section-head">
+              <h2 id="activity-tasks-heading" class="section-title">任务</h2>
+              <button
+                v-if="expandableIds.length > 0"
+                type="button"
+                class="expand-all"
+                :aria-expanded="allExpanded ? 'true' : 'false'"
+                aria-controls="activity-task-groups"
+                @click="toggleAll"
+              >
+                {{ allExpanded ? '收起全部' : '展开全部' }}
+              </button>
+            </div>
+            <div id="activity-task-groups">
+              <TaskGroupList
+                :tasks="activity.tasks"
+                :expanded="expanded"
+                @toggle="toggleTask"
+              />
+            </div>
+          </section>
+
+          <section class="app-section-card" aria-labelledby="activity-graph-heading">
+            <div class="section-head">
+              <h2 id="activity-graph-heading" class="section-title">依赖与时间图</h2>
+              <span class="graph-hint">依赖层级、前置关系与工作区间；缺日期任务归入未排期</span>
+            </div>
+            <TaskGraph
+              :nodes="activity.graph.nodes"
+              :edges="activity.graph.edges"
+              mode="full"
+            />
+          </section>
+
+          <section class="app-section-card" aria-labelledby="activity-resources-heading">
+            <div class="section-head">
+              <h2 id="activity-resources-heading" class="section-title">资料与往期参考</h2>
+              <button
+                v-if="canManageResources"
+                type="button"
+                class="expand-all"
+                @click="openResourceDialog()"
+              >
+                添加资料
+              </button>
+            </div>
+
+            <form class="resource-search" role="search" @submit.prevent="runResourceSearch">
+              <label class="resource-search-label" for="resource-query">检索我权限内的资料</label>
+              <div class="resource-search-row">
+                <input
+                  id="resource-query"
+                  v-model="resourceQuery"
+                  type="search"
+                  class="resource-search-input"
+                  placeholder="例如：往届推文模板"
+                />
+                <button type="submit" class="expand-all" :disabled="resourceSearching">
+                  {{ resourceSearching ? '检索中…' : '检索' }}
+                </button>
+                <button
+                  v-if="searchPerformed"
+                  type="button"
+                  class="expand-all"
+                  @click="clearResourceSearch"
+                >
+                  清除
+                </button>
+              </div>
+            </form>
+
+            <h3 class="resource-subtitle">本活动资料</h3>
+            <p v-if="resourcesLoading" class="resource-hint">正在加载资料…</p>
+            <p v-else-if="resources.length === 0" class="resource-hint">本活动还没有资料。</p>
+            <ul v-else class="resource-list">
+              <li v-for="resource in resources" :key="resource.id" class="resource-item">
+                <div class="resource-head">
+                  <span class="resource-title">{{ resource.title }}</span>
+                  <el-tag size="small" effect="plain">v{{ resource.version }}</el-tag>
+                  <span class="resource-meta">
+                    {{ resource.created_by_name }} · {{ dateText(resource.created_at) }}
+                  </span>
+                </div>
+                <p v-if="resource.summary" class="resource-summary">{{ resource.summary }}</p>
+                <div class="resource-actions">
+                  <a
+                    v-if="isHttpUrl(resource.url)"
+                    class="resource-link"
+                    :href="resource.url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    打开原始链接
+                  </a>
+                  <el-button
+                    v-if="canEditResource(resource)"
+                    size="small"
+                    text
+                    type="primary"
+                    @click="openResourceDialog(resource)"
+                  >
+                    更新版本
+                  </el-button>
+                </div>
+              </li>
+            </ul>
+
+            <div v-if="searchPerformed" class="resource-search-results">
+              <h3 class="resource-subtitle">检索结果（{{ searchResults.length }}）</h3>
+              <p v-if="searchResults.length === 0" class="resource-hint">
+                权限内没有匹配资料；无权限资料不会出现在这里。
+              </p>
+              <ul v-else class="resource-list">
+                <li v-for="resource in searchResults" :key="resource.id" class="resource-item">
+                  <div class="resource-head">
+                    <span class="resource-title">{{ resource.title }}</span>
+                    <el-tag size="small" effect="plain">v{{ resource.version }}</el-tag>
+                    <span class="resource-meta">
+                      {{ resource.activity_title || '未绑定活动' }} · {{ resource.created_by_name }}
+                    </span>
+                  </div>
+                  <p v-if="resource.summary" class="resource-summary">{{ resource.summary }}</p>
+                  <div class="resource-actions">
+                    <a
+                      v-if="isHttpUrl(resource.url)"
+                      class="resource-link"
+                      :href="resource.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      打开原始链接
+                    </a>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </section>
+        </div>
+
+        <aside class="detail-grid__side" aria-label="活动属性与进度">
+          <section class="app-section-card" aria-labelledby="activity-facts-heading">
+            <h2 id="activity-facts-heading" class="section-title">活动属性</h2>
+            <ActivityInfoSection v-if="infoActivity" :activity="infoActivity" variant="facts" />
+          </section>
+
+          <section class="app-section-card" aria-labelledby="activity-switch-heading">
+            <h2 id="activity-switch-heading" class="section-title">切换活动</h2>
+            <div class="activity-detail__switch">
+              <select
+                class="activity-detail__select"
+                aria-label="切换活动"
+                :value="String(activityId)"
+                :disabled="switchLoading"
+                @change="switchActivity"
+              >
+                <option v-for="option in switchOptions" :key="option.id" :value="String(option.id)">
+                  {{ option.title }}
+                </option>
+              </select>
+            </div>
+          </section>
+
+          <section class="app-section-card" aria-labelledby="activity-progress-heading">
+            <h2 id="activity-progress-heading" class="section-title">进度说明</h2>
+            <PropertyList :items="progressItems" />
+          </section>
+        </aside>
+      </div>
 
       <AgentDock
         :context-label="`活动：${activity.title}`"
@@ -572,20 +670,69 @@ watch(
 
 <style scoped>
 .activity-detail {
-  max-width: 1000px;
+  max-width: var(--app-detail-max);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--app-detail-gap);
 }
 
+.activity-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--app-detail-gap);
+}
+
+.activity-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-1);
+  min-width: 0;
+  padding: var(--app-space-3) var(--app-space-4);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface);
+}
+
+.activity-stat__label {
+  font-size: var(--app-font-label);
+  color: var(--app-text-muted);
+}
+
+.activity-stat__value {
+  font-size: var(--app-font-section-title);
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--app-text);
+}
+
+.activity-stat__hint {
+  font-size: var(--app-font-aux);
+  color: var(--app-text-secondary);
+  word-break: break-word;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--app-sidebar-width);
+  gap: var(--app-detail-gap);
+  align-items: start;
+}
+
+.detail-grid__main,
+.detail-grid__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-detail-gap);
+  min-width: 0;
+}
 
 .section-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--app-space-2);
 }
 
 .section-title {
@@ -595,48 +742,18 @@ watch(
   color: var(--app-text);
 }
 
-.activity-detail .section-title + .progress-text,
-.activity-detail__table {
-  margin-top: 10px;
-}
-
-.activity-detail__toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--app-space-2) var(--app-space-3);
-}
-
-.activity-detail__owner {
-  display: flex;
-  align-items: center;
-  gap: var(--app-space-2);
-  min-width: 0;
-}
-
-.activity-detail__owner-name {
-  font-size: var(--app-font-aux-lg);
-  color: var(--app-text-secondary);
-  word-break: break-word;
-}
-
 .activity-detail__switch {
   display: flex;
   align-items: center;
   gap: var(--app-space-2);
   min-width: 0;
-}
-
-.activity-detail__switch-label {
-  flex-shrink: 0;
-  font-size: var(--app-font-aux);
-  color: var(--app-text-muted);
+  margin-top: var(--app-space-2);
 }
 
 .activity-detail__select {
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: 260px;
+  max-width: 100%;
   min-height: var(--app-touch);
   padding: 0 var(--app-space-2);
   border: 1px solid var(--app-border);
@@ -650,20 +767,6 @@ watch(
 .activity-detail__select:focus-visible {
   outline: 2px solid var(--app-primary);
   outline-offset: 1px;
-}
-
-.progress-text {
-  margin: 10px 0 0;
-  font-size: var(--app-font-body);
-  color: var(--app-text);
-  word-break: break-word;
-}
-
-.awaiting-hint {
-  margin: 8px 0 0;
-  font-size: var(--app-font-aux-lg);
-  color: var(--el-color-warning);
-  word-break: break-word;
 }
 
 .expand-all {
@@ -805,34 +908,38 @@ watch(
   color: var(--app-primary);
 }
 
+@media (max-width: 1080px) {
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 768px) {
   .activity-detail {
-    gap: 12px;
+    gap: var(--app-space-3);
   }
 
-  .activity-detail__switch {
-    width: 100%;
+  .activity-stats {
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+    gap: var(--app-space-2);
   }
 
-  .activity-detail__select {
-    flex: 1 1 auto;
-    max-width: none;
+  .activity-stat {
+    padding: var(--app-space-2) var(--app-space-3);
   }
 
+  .detail-grid {
+    gap: var(--app-space-3);
+  }
+
+  .detail-grid__main,
+  .detail-grid__side {
+    gap: var(--app-space-3);
+  }
 
   .section-head :deep(.expand-all),
   .section-head .expand-all {
     width: 100%;
-  }
-
-  .app-actions {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .app-actions :deep(.el-button) {
-    width: 100%;
-    min-height: var(--app-touch);
   }
 
   .resource-search-input {

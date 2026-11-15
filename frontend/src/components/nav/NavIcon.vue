@@ -21,6 +21,16 @@ export type NavIconName =
   | 'archive'
   | 'panel-left'
   | 'panel-right'
+  | 'chevron-down'
+  | 'chevron-right'
+  | 'task'
+  | 'activity'
+  | 'user'
+  | 'calendar'
+  | 'clock'
+  | 'check'
+  | 'link'
+  | 'flag'
 </script>
 
 <script setup lang="ts">
@@ -35,7 +45,7 @@ withDefaults(defineProps<{ name: NavIconName; size?: number }>(), { size: 20 })
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    stroke-width="1.8"
+    stroke-width="1.6"
     stroke-linecap="round"
     stroke-linejoin="round"
     aria-hidden="true"
@@ -105,6 +115,43 @@ withDefaults(defineProps<{ name: NavIconName; size?: number }>(), { size: 20 })
     <template v-else-if="name === 'theme'">
       <circle cx="12" cy="12" r="4" />
       <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4" />
+    </template>
+    <template v-else-if="name === 'chevron-down'">
+      <path d="M6 9.5l6 6 6-6" />
+    </template>
+    <template v-else-if="name === 'chevron-right'">
+      <path d="M9.5 6l6 6-6 6" />
+    </template>
+    <template v-else-if="name === 'task'">
+      <rect x="4" y="4" width="16" height="16" rx="3" />
+      <path d="M8 12l2.5 2.5L16 9" />
+    </template>
+    <template v-else-if="name === 'activity'">
+      <rect x="3.5" y="7" width="17" height="11" rx="2" />
+      <path d="M12 7v11" />
+    </template>
+    <template v-else-if="name === 'user'">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+    </template>
+    <template v-else-if="name === 'calendar'">
+      <rect x="4" y="5" width="16" height="15" rx="3" />
+      <path d="M8 3v4M16 3v4M4 10h16" />
+    </template>
+    <template v-else-if="name === 'clock'">
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 7.5V12l3 2" />
+    </template>
+    <template v-else-if="name === 'check'">
+      <path d="M5 12.5l4.5 4.5L19 7" />
+    </template>
+    <template v-else-if="name === 'link'">
+      <path d="M10 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.1 1.2" />
+      <path d="M14 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.1-1.2" />
+    </template>
+    <template v-else-if="name === 'flag'">
+      <path d="M6 21V4" />
+      <path d="M6 4.5h10.5l-1.8 3.6 1.8 3.6H6" />
     </template>
   </svg>
 </template>

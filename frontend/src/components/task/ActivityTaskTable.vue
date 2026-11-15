@@ -12,6 +12,7 @@ import { computed, useSlots } from 'vue'
 import type { ActivitySubtaskNode, ActivityTaskNode } from '../../types/models'
 import EmptyState from '../common/EmptyState.vue'
 import UserAvatar from '../common/UserAvatar.vue'
+import NavIcon from '../nav/NavIcon.vue'
 import StatusTag, { statusText } from './StatusTag.vue'
 
 /** 成员列内联展示上限，超出只显示计数 */
@@ -43,7 +44,7 @@ function isExpanded(id: number): boolean {
 
 function dateText(value: string | null): string {
   if (!value) return '—'
-  return value.length > 16 ? value.slice(0, 16) : value
+  return value.slice(0, 16).replace('T', ' ')
 }
 
 function activityLabel(task: ActivityTaskNode): string {
@@ -107,7 +108,10 @@ function completionText(task: ActivityTaskNode): string {
                   :aria-label="`${isExpanded(task.id) ? '收起' : '展开'}「${task.title}」的子任务`"
                   @click="emit('toggle', task.id)"
                 >
-                  <span aria-hidden="true">{{ isExpanded(task.id) ? '▾' : '▸' }}</span>
+                  <NavIcon
+                    :name="isExpanded(task.id) ? 'chevron-down' : 'chevron-right'"
+                    :size="16"
+                  />
                 </button>
                 <router-link
                   :to="{ name: 'detail', params: { id: task.id } }"

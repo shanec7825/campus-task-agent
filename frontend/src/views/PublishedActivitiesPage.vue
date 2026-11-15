@@ -36,7 +36,7 @@ function errorMessage(err: unknown): string {
 
 function dateText(value: string | null): string {
   if (!value) return '未设置'
-  return value.length > 16 ? value.slice(0, 16) : value
+  return value.slice(0, 16).replace('T', ' ')
 }
 
 function goDetail(id: number): void {

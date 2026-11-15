@@ -102,13 +102,14 @@ export function quotaText(task: TaskItem): string {
 /** 截止时间展示：截断到分钟，空值显示「不限」 */
 export function formatDeadline(deadline: string | null): string {
   if (!deadline) return '不限'
-  return deadline.length > 16 ? deadline.slice(0, 16) : deadline
+  return deadline.slice(0, 16).replace('T', ' ')
 }
 </script>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import UserAvatar from '../common/UserAvatar.vue'
 import StatusTag from './StatusTag.vue'
 
 const props = withDefaults(
@@ -209,7 +210,10 @@ const secondaryText = computed<string>(() => {
 <template>
   <el-card class="task-card" shadow="hover" body-class="task-card-body">
     <article class="task-card-content">
-      <h3 class="card-title" :title="task.title">{{ task.title }}</h3>
+      <div class="card-main">
+        <UserAvatar :user-id="task.publisher_id" :name="task.publisher_name" size="md" />
+        <h3 class="card-title" :title="task.title">{{ task.title }}</h3>
+      </div>
 
       <p v-if="activityTitle" class="card-activity">所属活动 · {{ activityTitle }}</p>
 
@@ -251,58 +255,88 @@ const secondaryText = computed<string>(() => {
 
 <style scoped>
 .task-card {
-  height: 100%;
   display: flex;
   flex-direction: column;
+  height: 100%;
+  border-radius: var(--app-radius-sm);
 }
 
 .task-card :deep(.task-card-body) {
   display: flex;
   flex-direction: column;
   height: 100%;
-  gap: 8px;
+  gap: var(--app-space-2);
+  padding: var(--app-space-4);
 }
 
 .task-card-content {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--app-space-2);
   min-width: 0;
 }
 
+/* 主行与浏览卡一致：32px 头像 + 最多两行标题（R-06） */
+.card-main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--app-space-2);
+  min-width: 0;
+}
+
+.card-main > :first-child {
+  flex-shrink: 0;
+}
+
 .card-title {
-  margin: 0;
-  font-size: var(--el-font-size-medium);
-  font-weight: 600;
-  line-height: 1.4;
-  color: var(--app-text);
   display: -webkit-box;
+  overflow: hidden;
+  flex: 1 1 auto;
+  margin: 0;
+  min-width: 0;
+  /* 固定两行标题高度：同列表内标题长短不影响卡片高度（R-06） */
+  min-height: 2.75em;
+  font-size: var(--app-font-card-title, 16px);
+  font-weight: 400;
+  line-height: 22px;
+  color: var(--app-text);
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  overflow: hidden;
   word-break: break-word;
 }
 
+/* 元信息固定单行，超出以省略号收尾（R-06） */
 .card-activity {
+  overflow: hidden;
   margin: 0;
   color: var(--app-text-secondary);
   font-size: var(--app-font-aux, 13px);
-  line-height: 1.5;
-  word-break: break-word;
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .card-deadline {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--app-space-1);
+  overflow: hidden;
   margin: 0;
-  font-size: var(--app-font-body, 15px);
+  font-size: var(--app-font-aux, 13px);
   font-weight: 400;
   color: var(--app-text);
+  white-space: nowrap;
+}
+
+.card-deadline > span:first-child {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
 }
 
 .deadline-near {
+  flex-shrink: 0;
   font-size: var(--app-font-aux, 13px);
   font-weight: 600;
   color: var(--el-color-warning);
@@ -310,17 +344,20 @@ const secondaryText = computed<string>(() => {
 
 .status-line {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
+  overflow: hidden;
 }
 
 .card-secondary {
+  overflow: hidden;
   margin: 0;
   font-size: var(--app-font-aux, 13px);
-  line-height: 1.5;
+  line-height: 20px;
   color: var(--app-text-muted);
-  word-break: break-word;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .apply-reason {

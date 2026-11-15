@@ -64,6 +64,8 @@
   --app-radius-sm: 8px;
   --app-radius-md: 12px;
   --app-radius-lg: 16px;
+  --app-radius-xs: 6px;
+  --app-radius-pill: 999px;
 
   --app-header-height: 60px;
   --app-bottom-nav-height: 60px;
@@ -77,6 +79,15 @@
   --app-space-4: 16px;
   --app-space-5: 24px;
   --app-space-6: 32px;
+
+  /* ---- 详情页规格令牌（契约 C-TOKEN-V2@1） ---- */
+  --app-icon-xs: 14px;
+  --app-icon-sm: 16px;
+  --app-icon-md: 20px;
+  --app-icon-lg: 24px;
+  --app-detail-max: 1200px;
+  --app-sidebar-width: 304px;
+  --app-detail-gap: var(--app-space-5);
 }
 
 html.dark {
@@ -139,6 +150,8 @@ html.dark {
   --app-radius-sm: 8px;
   --app-radius-md: 12px;
   --app-radius-lg: 16px;
+  --app-radius-xs: 6px;
+  --app-radius-pill: 999px;
 
   --app-header-height: 60px;
   --app-bottom-nav-height: 60px;
@@ -152,6 +165,15 @@ html.dark {
   --app-space-4: 16px;
   --app-space-5: 24px;
   --app-space-6: 32px;
+
+  /* ---- 详情页规格令牌（契约 C-TOKEN-V2@1） ---- */
+  --app-icon-xs: 14px;
+  --app-icon-sm: 16px;
+  --app-icon-md: 20px;
+  --app-icon-lg: 24px;
+  --app-detail-max: 1200px;
+  --app-sidebar-width: 304px;
+  --app-detail-gap: var(--app-space-5);
 }
 
 /* ---- 公共类 ---- */

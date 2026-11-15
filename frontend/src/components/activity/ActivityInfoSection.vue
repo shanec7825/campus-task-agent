@@ -1,24 +1,28 @@
 <script setup lang="ts">
 /**
- * 活动字段区块（`C-NAV-SHARED-ACTIVITY@2`）。
+ * 活动字段区块（`C-NAV-SHARED-ACTIVITY@2` / `C-ACTIVITY-FACTS@1`）。
  *
  * 发布活动预览与活动详情共用同一组字段与顺序：名称 → 介绍 → 负责人 / 举办时间 /
  * 截止 / 地点 / 组织 / 状态。只做展示，不持有数据、不发请求；编辑仍由发布页表单负责。
+ * `variant="facts"` 供详情侧栏复用字段，只输出字段 `dl`，不套卡片、不渲染标题与描述。
  */
+import { computed } from 'vue'
+
 import type { Activity } from '../../types/models'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     activity: Activity
     titleTag?: 'h1' | 'h2' | 'h3'
     showProgress?: boolean
+    variant?: 'card' | 'facts'
   }>(),
-  { titleTag: 'h1', showProgress: false }
+  { titleTag: 'h1', showProgress: false, variant: 'card' }
 )
 
 function dateText(value: string | null): string {
   if (!value) return '未设置'
-  return value.length > 16 ? value.slice(0, 16) : value
+  return value.slice(0, 16).replace('T', ' ')
 }
 
 function activityStatusText(status: string): string {
@@ -26,37 +30,38 @@ function activityStatusText(status: string): string {
   if (status === 'closed') return '已结束'
   return '未知'
 }
+
+const facts = computed<{ label: string; value: string }[]>(() => [
+  { label: '负责人', value: props.activity.owner_name || '—' },
+  { label: '举办开始', value: dateText(props.activity.start_time) },
+  { label: '截止', value: dateText(props.activity.deadline) },
+  { label: '地点', value: props.activity.location || '未设置' },
+  { label: '组织', value: props.activity.org || '未加入组织' },
+  { label: '状态', value: activityStatusText(props.activity.status) }
+])
 </script>
 
 <template>
-  <section class="activity-info app-section-card" aria-label="活动信息">
+  <dl
+    v-if="variant === 'facts'"
+    class="activity-info__facts"
+    data-variant="facts"
+    aria-label="活动信息"
+  >
+    <div v-for="fact in facts" :key="fact.label" class="activity-info__fact">
+      <dt>{{ fact.label }}</dt>
+      <dd>{{ fact.value }}</dd>
+    </div>
+  </dl>
+
+  <section v-else class="activity-info app-section-card" aria-label="活动信息">
     <component :is="titleTag" class="activity-info__title">{{ activity.title }}</component>
     <p v-if="activity.description" class="activity-info__desc">{{ activity.description }}</p>
 
     <dl class="activity-info__facts">
-      <div class="activity-info__fact">
-        <dt>负责人</dt>
-        <dd>{{ activity.owner_name || '—' }}</dd>
-      </div>
-      <div class="activity-info__fact">
-        <dt>举办开始</dt>
-        <dd>{{ dateText(activity.start_time) }}</dd>
-      </div>
-      <div class="activity-info__fact">
-        <dt>截止</dt>
-        <dd>{{ dateText(activity.deadline) }}</dd>
-      </div>
-      <div class="activity-info__fact">
-        <dt>地点</dt>
-        <dd>{{ activity.location || '未设置' }}</dd>
-      </div>
-      <div class="activity-info__fact">
-        <dt>组织</dt>
-        <dd>{{ activity.org || '未加入组织' }}</dd>
-      </div>
-      <div class="activity-info__fact">
-        <dt>状态</dt>
-        <dd>{{ activityStatusText(activity.status) }}</dd>
+      <div v-for="fact in facts" :key="fact.label" class="activity-info__fact">
+        <dt>{{ fact.label }}</dt>
+        <dd>{{ fact.value }}</dd>
       </div>
     </dl>
 
@@ -97,6 +102,17 @@ function activityStatusText(status: string): string {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: var(--app-space-2);
   margin: 0;
+}
+
+/* 侧栏事实模式：无卡片外框，字段按单列行式排列 */
+.activity-info__facts[data-variant='facts'] {
+  grid-template-columns: 1fr;
+}
+
+.activity-info__facts[data-variant='facts'] .activity-info__fact {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .activity-info__fact {

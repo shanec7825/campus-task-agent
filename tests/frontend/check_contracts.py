@@ -3125,16 +3125,30 @@ def check_activity_switch(rel_detail: str, src_dir: Path) -> str:
         ("clearResourceSearch()", "切换后清空资料检索"),
         ("if (current !== requestSeq) return", "丢弃晚到旧响应"),
         ("活动列表加载失败", "选项失败只提示不阻塞主体"),
-        ("import ActivityTaskTable", "任务树替换为共用表格"),
-        (
-            '<ActivityTaskTable :tasks="activity.tasks" :expanded="expanded" '
-            '@toggle="toggleTask" />',
-            "表格接入",
-        ),
+        ("import TaskGroupList", "任务区改由 TaskGroupList 承担"),
+        ("<TaskGroupList", "任务分组接入"),
         ("allExpanded", "保留展开全部/收起全部"),
         ("TaskGraph", "保留图谱"),
     ):
         _require(problems, detail, token, rel_detail, detail_text)
+
+    # `<TaskGroupList>` 必须同时绑定 tasks / expanded / toggle，缺失任一即失败
+    group_list = re.search(r"<TaskGroupList\b([\s\S]{0,400}?)(?:/>|>)", detail)
+    if group_list is None:
+        problems.append(
+            f"{rel_detail} 未渲染 `<TaskGroupList ... />`（C-ACTIVITY-SWITCH@1）"
+        )
+    else:
+        for binding, binding_detail in (
+            (":tasks", "任务数据绑定"),
+            (":expanded", "展开态绑定"),
+            ("@toggle", "切换事件绑定"),
+        ):
+            if binding not in group_list.group(1):
+                problems.append(
+                    f"{rel_detail} `<TaskGroupList>` 缺少 `{binding}` {binding_detail}"
+                    "（C-ACTIVITY-SWITCH@1）"
+                )
 
     watch_match = re.search(
         r"watch\(\s*\(\) => route\.params\.id,\s*\(\) => \{(.*?)\}\s*\)", detail, re.S
@@ -3147,7 +3161,7 @@ def check_activity_switch(rel_detail: str, src_dir: Path) -> str:
     return (
         f"{rel_detail}:{replace_line} 切换器走 `router.replace` 保留 from/q，"
         "选项 ≤20 且包含当前活动；切换清空 expanded/资料检索并按序号丢弃旧响应；"
-        "任务区由 ActivityTaskTable 承担"
+        "任务区由 TaskGroupList 承担"
     )
 
 
@@ -3289,7 +3303,7 @@ CHECKS = CHECKS + (
         lambda: check_activity_table("components/task/ActivityTaskTable.vue", SRC_DIR),
     ),
     (
-        "㊱ C-ACTIVITY-SWITCH@1 活动详情切换 router.replace + 状态清理",
+        "㊱ C-ACTIVITY-SWITCH@1 活动详情切换 router.replace + TaskGroupList 接入",
         lambda: check_activity_switch("views/ActivityDetail.vue", SRC_DIR),
     ),
     (
@@ -4285,11 +4299,549 @@ def check_avatar_api_wrapper(rel_auth: str, backend_dir: Path) -> str:
     )
 
 
+# --------------------------------------------------------------------------- #
+# v1-ui-detail-refine：C-TOKEN-V2@1 / C-DETAIL-HEADER@1 / C-PROPERTY-LIST@1 /
+#                     C-TASK-GROUPS@1 / C-DETAIL-LAYOUT@1
+# --------------------------------------------------------------------------- #
+
+#: `C-TOKEN-V2@1`：`:root` 与 `html.dark` 必须同时声明且取值相同的详情令牌
+_DETAIL_TOKENS_V2: tuple[tuple[str, str], ...] = (
+    ("--app-icon-xs", "14px"),
+    ("--app-icon-sm", "16px"),
+    ("--app-icon-md", "20px"),
+    ("--app-icon-lg", "24px"),
+    ("--app-radius-xs", "6px"),
+    ("--app-radius-pill", "999px"),
+    ("--app-detail-max", "1200px"),
+    ("--app-sidebar-width", "304px"),
+    ("--app-detail-gap", "var(--app-space-5)"),
+)
+
+#: `C-TOKEN-V2@1` 不得删除的既有令牌（两套主题各一份）
+_EXISTING_TOKENS_V2: tuple[str, ...] = (
+    "--app-content-max",
+    "--app-space-5",
+    "--app-radius-sm",
+    "--app-border",
+    "--app-text-muted",
+)
+
+#: `C-TASK-GROUPS@1`：分组常量顺序（key → 组名）
+_TASK_GROUP_SEQUENCE: tuple[tuple[str, str], ...] = (
+    ("active", "进行中"),
+    ("review", "待验收"),
+    ("pending", "待开始"),
+    ("done", "已完成"),
+    ("cancelled", "已取消"),
+)
+
+#: `C-TASK-GROUPS@1`：状态 → 分组映射
+_TASK_GROUP_MAPPING: tuple[tuple[str, str], ...] = (
+    ("in_progress", "active"),
+    ("claimed", "active"),
+    ("overdue", "active"),
+    ("submitted", "review"),
+    ("todo", "pending"),
+    ("verified", "done"),
+    ("cancelled", "cancelled"),
+)
+
+
+def _css_rule_body(text: str, selector: str) -> str:
+    """提取选择器第一条 CSS 规则体（含花括号）；无命中或未闭合返回空串。"""
+    match = re.search(rf"(?:^|\n)\s*{re.escape(selector)}\s*\{{", text)
+    if match is None:
+        return ""
+    open_index = text.find("{", match.end() - 1)
+    try:
+        return extract_balanced_braces(text, open_index)
+    except ContractError:
+        return ""
+
+
+def _media_block(text: str, width: int) -> str:
+    """提取 `@media (max-width: <width>px)` 的第一块；无命中返回空串。"""
+    match = re.search(rf"@media\s*\(\s*max-width:\s*{width}px\s*\)\s*\{{", text)
+    if match is None:
+        return ""
+    open_index = text.find("{", match.end() - 1)
+    try:
+        return extract_balanced_braces(text, open_index)
+    except ContractError:
+        return ""
+
+
+def _bracket_block(text: str, open_index: int) -> str:
+    """从 `text[open_index] == '['` 起提取配对的 `[...]` 片段；未闭合返回空串。"""
+    depth = 0
+    for index in range(open_index, len(text)):
+        char = text[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return text[open_index : index + 1]
+    return ""
+
+
+def check_token_v2(rel_theme: str, rel_typography: str, src_dir: Path) -> str:
+    """52 `C-TOKEN-V2@1`：详情新令牌双主题齐备 + 标签字号 + 既有令牌不回归。"""
+    theme = load_text(src_dir / rel_theme)
+    typography = load_text(src_dir / rel_typography)
+    problems: list[str] = []
+
+    for selector in (":root", "html.dark"):
+        body = _css_rule_body(theme, selector)
+        if not body:
+            problems.append(f"{rel_theme} 未找到 `{selector}` 规则块（C-TOKEN-V2@1）")
+            continue
+        for name, value in _DETAIL_TOKENS_V2:
+            if re.search(rf"{re.escape(name)}\s*:\s*{re.escape(value)}\s*;", body) is None:
+                problems.append(
+                    f"{rel_theme} 的 `{selector}` 缺少 `{name}: {value};`（C-TOKEN-V2@1）"
+                )
+        for name in _EXISTING_TOKENS_V2:
+            if re.search(rf"{re.escape(name)}\s*:", body) is None:
+                problems.append(
+                    f"{rel_theme} 的 `{selector}` 删除了既有令牌 `{name}`"
+                    "（C-TOKEN-V2@1 内容冻结）"
+                )
+
+    page_rule = _css_rule_body(theme, ".app-page")
+    if re.search(r"max-width\s*:\s*var\(--app-content-max\)\s*;", page_rule) is None:
+        problems.append(
+            f"{rel_theme} 的 `.app-page` max-width 未保持 `var(--app-content-max)`"
+            "（C-TOKEN-V2@1 内容冻结）"
+        )
+
+    label_line = _require(
+        problems,
+        typography,
+        "--app-font-label: 13px;",
+        rel_typography,
+        "详情属性标签字号令牌",
+    )
+    if re.search(r"\b12px\b", typography):
+        problems.append(f"{rel_typography} 引入 12px 字号（C-TOKEN-V2@1 不引入 12px）")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_theme} `:root` 与 `html.dark` 同时声明 9 个详情令牌且取值一致，"
+        "既有令牌与 `.app-page` 宽度未回归；"
+        f"{rel_typography}:{label_line} 新增 `--app-font-label: 13px;` 且无 12px 字号"
+    )
+
+
+def check_detail_header(rel_path: str, src_dir: Path) -> str:
+    """53 `C-DETAIL-HEADER@1`：props/slots/类名与移动端操作行。"""
+    header = strip_ts_comments(load_text(src_dir / rel_path))
+    problems: list[str] = []
+
+    for token, detail in (
+        ("kicker?: string | null", "kicker 可选 prop"),
+        ("title: string", "title 必填 prop"),
+        ("subtitle?: string | null", "subtitle 可选 prop"),
+        ("kicker: null", "kicker 默认 null"),
+        ("subtitle: null", "subtitle 默认 null"),
+        ('<header class="detail-header">', "根节点为 header"),
+        ('class="detail-header__kicker"', "kicker 类名"),
+        ('class="detail-header__title"', "标题类名"),
+        ("<h1", "标题为 h1"),
+        ('class="detail-header__subtitle"', "副标题类名"),
+        ('<slot name="badges"', "badges 插槽"),
+        ('<slot name="meta"', "meta 插槽"),
+        ('<slot name="actions"', "actions 插槽"),
+        ("font-size: var(--app-font-page-title)", "标题字号令牌"),
+        ("letter-spacing: -0.01em", "标题字距"),
+        ("word-break: break-word", "长标题换行"),
+        ("@media (max-width: 768px)", "移动端断点"),
+        ("min-height: var(--app-touch)", "移动端触控高度"),
+    ):
+        _require(problems, header, token, rel_path, detail)
+
+    if re.search(r"fetch\s*\(|axios\.|/api/", header):
+        problems.append(f"{rel_path} 只展示不请求数据（C-DETAIL-HEADER@1）")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_path} props kicker/title/subtitle（默认 null）+ badges/meta/actions 插槽；"
+        "根节点 `<header class=\"detail-header\">`，标题 var(--app-font-page-title)/"
+        "-0.01em/break-word，768px 下 actions 整行且按钮 var(--app-touch)"
+    )
+
+
+def check_property_list(rel_path: str, src_dir: Path) -> str:
+    """54 `C-PROPERTY-LIST@1`：`PropertyItem` 类型 + label/value 两列 `dl` 结构。"""
+    prop = strip_ts_comments(load_text(src_dir / rel_path))
+    problems: list[str] = []
+
+    for token, detail in (
+        ("export interface PropertyItem", "导出 PropertyItem"),
+        ("label: string", "label 字段"),
+        ("value: string", "value 字段"),
+        ("tone?:", "tone 可选字段"),
+        ("items: PropertyItem[]", "items prop"),
+        ("columns?: 1 | 2", "columns 取值 1|2"),
+        ("columns: 1", "columns 默认 1"),
+        ('class="property-list__item"', "条目类名"),
+        ('class="property-list__label"', "dt 类名"),
+        ("property-list__value", "dd 类名"),
+        ("property-list__value--", "tone 修饰符"),
+        ("grid-template-columns: repeat(2, minmax(0, 1fr))", "两列网格"),
+    ):
+        _require(problems, prop, token, rel_path, detail)
+
+    # `dl` 容器允许追加动态 `:class`（例如 `property-list--cols-${columns}`）
+    if re.search(r"<dl\b[^>]*\bclass=\"property-list\"", prop) is None:
+        problems.append(
+            f'{rel_path} 缺少 `<dl class="property-list">` 容器（C-PROPERTY-LIST@1）'
+        )
+
+    # 两列能力：允许以修饰符规则或 `columns === 2` 比较实现，二者命中其一即可
+    two_columns = re.search(
+        r"\.property-list--cols-2\s*\{[^}]*grid-template-columns\s*:\s*"
+        r"repeat\(2,\s*minmax\(0,\s*1fr\)\)",
+        prop,
+    )
+    if two_columns is None and "columns === 2" not in prop:
+        problems.append(
+            f"{rel_path} 缺少两列实现：`.property-list--cols-2` 规则或 `columns === 2` 分支"
+            "（C-PROPERTY-LIST@1）"
+        )
+
+    for tone in ("default", "muted", "success", "warning", "danger"):
+        if f"'{tone}'" not in prop:
+            problems.append(
+                f"{rel_path} `PropertyItem.tone` 缺少取值 `'{tone}'`（C-PROPERTY-LIST@1）"
+            )
+
+    media = _media_block(prop, 768)
+    if not media:
+        problems.append(f"{rel_path} 缺少 `@media (max-width: 768px)` 单列断点")
+    elif re.search(r"grid-template-columns\s*:\s*(?:minmax\(0,\s*1fr\)|1fr)", media) is None:
+        problems.append(f"{rel_path} 768px 断点下 `grid-template-columns` 未回落单列")
+
+    for token, detail in (
+        ("--el-color-success", "成功色取主题令牌"),
+        ("--el-color-warning", "警告色取主题令牌"),
+        ("--el-color-danger", "危险色取主题令牌"),
+        ("--app-text-muted", "弱化色取主题令牌"),
+    ):
+        _require(problems, prop, token, rel_path, detail)
+
+    if _BARE_HEX_COLOR.search(prop):
+        problems.append(f"{rel_path} 出现裸十六进制色值（tone 必须走主题令牌）")
+    if re.search(r"fetch\s*\(|axios\.|/api/", prop):
+        problems.append(f"{rel_path} 为纯展示组件，不得请求数据（C-PROPERTY-LIST@1）")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_path} `PropertyItem`（label/value/tone 五值）+ items/columns(1|2) props；"
+        "`<dl class=\"property-list\">` → `__item` → `__label` + `__value--{tone}`；"
+        "两列 repeat(2, minmax(0, 1fr))、768px 单列，tone 仅用主题令牌"
+    )
+
+
+def check_task_groups(rel_path: str, src_dir: Path) -> str:
+    """55 `C-TASK-GROUPS@1`：分组常量顺序 + `taskGroupOf` 映射 + 分组 aria 语义。"""
+    tasks = strip_ts_comments(load_text(src_dir / rel_path))
+    problems: list[str] = []
+
+    for token, detail in (
+        ("export type TaskGroupKey", "TaskGroupKey 导出"),
+        ("export interface TaskGroupMeta", "TaskGroupMeta 导出"),
+        ("export const TASK_GROUPS", "分组常量导出"),
+        ("export function taskGroupOf", "状态映射函数导出"),
+        ("tasks: ActivityTaskNode[]", "tasks prop"),
+        ("expanded: number[]", "expanded prop"),
+        ("emptyTitle?: string", "空态标题 prop"),
+        ("emptyDescription?: string", "空态描述 prop"),
+        ("defineEmits", "声明 emit"),
+        ("emit('toggle'", "切换事件"),
+        ("expanded.includes(", "按 expanded 渲染子任务"),
+
+        (":aria-labelledby", "分组 aria-labelledby"),
+        ("aria-expanded", "子任务展开态"),
+        ("aria-controls", "子任务容器关联"),
+        ("task-group-subtasks-", "子任务容器 id 前缀"),
+        ('<ul class="task-group__list">', "条目列表"),
+        ("<h3", "组头标题"),
+        ("EmptyState", "全空回退总空态"),
+        ("UserAvatar", "负责人头像"),
+        ("StatusTag", "状态点"),
+        ('size="xs"', "小尺寸头像"),
+        ("name: 'detail'", "任务标题路由"),
+        ("is-overdue", "逾期样式"),
+        ("未设置", "截止缺失回退"),
+        ("子任务", "子任务计数与徽标"),
+        ("暂无任务", "默认空态标题"),
+        ("可以先发布相关事务", "默认空态描述"),
+    ):
+        _require(problems, tasks, token, rel_path, detail)
+
+    # section 属性可跨行书写（`<section` 后换行再写 `class="task-group"`）
+    if re.search(r"<section\b[^>]*\bclass=\"task-group\"", tasks) is None:
+        problems.append(
+            f'{rel_path} 缺少 `<section class="task-group">` 分组容器（C-TASK-GROUPS@1）'
+        )
+
+    groups_match = re.search(r"export\s+const\s+TASK_GROUPS\b[^=]*=\s*\[", tasks)
+    if groups_match is None:
+        problems.append(f"{rel_path} 无法解析 `TASK_GROUPS` 常量（C-TASK-GROUPS@1）")
+    else:
+        block = _bracket_block(tasks, groups_match.end() - 1)
+        positions: list[int] = []
+        for key, label in _TASK_GROUP_SEQUENCE:
+            key_index = block.find(f"'{key}'")
+            label_index = block.find(f"'{label}'")
+            if key_index < 0 or label_index < 0:
+                problems.append(
+                    f"{rel_path} `TASK_GROUPS` 缺少分组 `{key}`/「{label}」（C-TASK-GROUPS@1）"
+                )
+            else:
+                positions.append(key_index)
+        if len(positions) == len(_TASK_GROUP_SEQUENCE) and positions != sorted(positions):
+            problems.append(
+                f"{rel_path} `TASK_GROUPS` 顺序应为 active → review → pending → "
+                "done → cancelled（C-TASK-GROUPS@1）"
+            )
+
+    try:
+        body, body_line = function_body(tasks, "taskGroupOf")
+    except ContractError:
+        problems.append(f"{rel_path} 未找到 `taskGroupOf()` 定义（C-TASK-GROUPS@1）")
+    else:
+        # 映射允许以对象字面量（`STATUS_GROUP_MAP`）或 switch/if 分支实现：
+        # 优先取含状态键的对象字面量，找不到再回落到函数体本身。
+        mapping_text = ""
+        for literal in re.finditer(
+            r"(?:const|let)\s+[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*\{", tasks
+        ):
+            open_index = tasks.find("{", literal.end() - 1)
+            try:
+                candidate = extract_balanced_braces(tasks, open_index)
+            except ContractError:
+                continue
+            if "in_progress" in candidate:
+                mapping_text = candidate
+                break
+
+        scope = mapping_text or body
+        for status, group in _TASK_GROUP_MAPPING:
+            if (
+                re.search(
+                    rf"{re.escape(status)}[\s\S]{{0,120}}?['\"]{re.escape(group)}['\"]",
+                    scope,
+                )
+                is None
+            ):
+                problems.append(
+                    f"{rel_path}:{body_line} `taskGroupOf` 未把 `{status}` 映射到 "
+                    f"`{group}`（C-TASK-GROUPS@1）"
+                )
+
+    if re.search(r"fetch\s*\(|axios\.|/api/", tasks):
+        problems.append(f"{rel_path} 为只读组件，不得请求或写入任务（C-TASK-GROUPS@1）")
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_path} `TASK_GROUPS` 顺序 active→review→pending→done→cancelled，"
+        "`taskGroupOf` 五条状态映射完整；分组 section 带 aria-labelledby，"
+        "子任务 aria-expanded/aria-controls 指向 task-group-subtasks-<id>，"
+        "全空回退 EmptyState 且默认文案齐备"
+    )
+
+
+def check_detail_layout(rel_activity: str, rel_task: str, src_dir: Path) -> str:
+    """56 `C-DETAIL-LAYOUT@1`：两页 `.detail-grid` 双栏规则 + 1080px 断点。"""
+    problems: list[str] = []
+
+    for rel_path in (rel_activity, rel_task):
+        page = strip_ts_comments(load_text(src_dir / rel_path))
+        for token, detail in (
+            ("max-width: var(--app-detail-max)", "详情页最大宽度令牌"),
+            ('class="detail-grid"', "双栏容器"),
+            ("display: grid", "网格布局"),
+            (
+                "grid-template-columns: minmax(0, 1fr) var(--app-sidebar-width)",
+                "主区 + 固定侧栏",
+            ),
+            ("gap: var(--app-detail-gap)", "栏间距令牌"),
+            ("align-items: start", "顶部对齐"),
+            ("<DetailHeader", "详情头部接入"),
+        ):
+            _require(problems, page, token, rel_path, detail)
+
+        media = _media_block(page, 1080)
+        if not media:
+            problems.append(f"{rel_path} 缺少 `@media (max-width: 1080px)` 断点")
+        elif re.search(r"grid-template-columns\s*:\s*minmax\(0,\s*1fr\)", media) is None:
+            problems.append(f"{rel_path} 1080px 断点下未回落单列 `minmax(0, 1fr)`")
+
+        header_index = page.find("<DetailHeader")
+        grid_index = page.find('class="detail-grid"')
+        if 0 <= grid_index < header_index:
+            problems.append(f"{rel_path} DOM 顺序应为 DetailHeader 在 `.detail-grid` 之前")
+
+    activity = strip_ts_comments(load_text(src_dir / rel_activity))
+    for token, detail in (
+        ("activity-stats", "指标条"),
+        (">切换活动<", "侧栏切换活动"),
+    ):
+        _require(problems, activity, token, rel_activity, detail)
+
+    header_index = activity.find("<DetailHeader")
+    stats_index = activity.find("activity-stats")
+    grid_index = activity.find('class="detail-grid"')
+    if -1 not in (header_index, stats_index, grid_index) and not (
+        header_index < stats_index < grid_index
+    ):
+        problems.append(
+            f"{rel_activity} DOM 顺序应为 DetailHeader → 指标条 → .detail-grid"
+            "（C-DETAIL-LAYOUT@1）"
+        )
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_activity} / {rel_task} 均以 `.detail-grid` 定义 "
+        "minmax(0, 1fr) + var(--app-sidebar-width)、gap var(--app-detail-gap)、"
+        "align-items: start，并在 1080px 回落单列；活动页 DOM 为 "
+        "DetailHeader → activity-stats → .detail-grid，侧栏保留切换活动"
+    )
+
+
+def check_activity_facts(
+    rel_info: str,
+    rel_activity: str,
+    rel_task: str,
+    rel_publish: str,
+    src_dir: Path,
+) -> str:
+    """57 `C-ACTIVITY-FACTS@1`：详情 facts 复用 + 任务侧栏属性面板 + 发布预览保持 card。"""
+    info = strip_ts_comments(load_text(src_dir / rel_info))
+    activity = strip_ts_comments(load_text(src_dir / rel_activity))
+    task = strip_ts_comments(load_text(src_dir / rel_task))
+    publish = strip_ts_comments(load_text(src_dir / rel_publish))
+    problems: list[str] = []
+
+    for token, detail in (
+        ("variant?: 'card' | 'facts'", "variant 可选取值 card|facts"),
+        ("variant: 'card'", "variant 默认 card"),
+        ("activity-info__facts", "facts 字段 dl 类名"),
+        ("app-section-card", "card 分支仍套卡片"),
+    ):
+        _require(problems, info, token, rel_info, detail)
+
+    facts_match = re.search(
+        r"<dl\b[^>]*v-if=\"variant === 'facts'\"[^>]*>([\s\S]*?)</dl>",
+        info,
+    )
+    if facts_match is None:
+        problems.append(
+            f"{rel_info} 未找到 `variant === 'facts'` 的 `<dl class=\"activity-info__facts\">` 分支"
+            "（C-ACTIVITY-FACTS@1）"
+        )
+    else:
+        facts_block = facts_match.group(0)
+        for forbidden, forbidden_detail in (
+            ("activity-info__title", "标题"),
+            ("activity-info__desc", "描述"),
+            ("activity-info__progress", "进度行"),
+            ("app-section-card", "卡片外壳"),
+        ):
+            if forbidden in facts_block:
+                problems.append(
+                    f"{rel_info} facts 分支不应渲染{forbidden_detail} `{forbidden}`"
+                    "（C-ACTIVITY-FACTS@1）"
+                )
+
+    if (
+        re.search(r"<ActivityInfoSection\b[^>]*\bvariant=\"facts\"", activity)
+        is None
+    ):
+        problems.append(
+            f'{rel_activity} 未以 `variant="facts"` 接入 ActivityInfoSection'
+            "（C-ACTIVITY-FACTS@1）"
+        )
+
+    property_line = _require(
+        problems, task, "<PropertyList", rel_task, "任务侧栏属性面板接入"
+    )
+    _require(problems, task, ":items", rel_task, "属性面板数据绑定")
+
+    publish_tags = re.findall(
+        r"<ActivityInfoSection\b([\s\S]{0,300}?)(?:/>|>)", publish
+    )
+    if not publish_tags:
+        problems.append(
+            f"{rel_publish} 未使用 ActivityInfoSection 预览（C-ACTIVITY-FACTS@1）"
+        )
+    for attrs in publish_tags:
+        if re.search(r"\bvariant\b", attrs):
+            problems.append(
+                f"{rel_publish} 的 ActivityInfoSection 传入了 `variant`，"
+                "发布预览须保持默认 card（C-ACTIVITY-FACTS@1）"
+            )
+
+    if problems:
+        raise ContractError("；".join(problems))
+    return (
+        f"{rel_info} 新增 `variant?: 'card' | 'facts'`（默认 'card'），facts 分支只输出 "
+        "`activity-info__facts` 且不含标题/描述/进度/卡片外壳，card 分支仍套 `.app-section-card`；"
+        f"{rel_activity} 以 `variant=\"facts\"` 接入，{rel_task}:{property_line} 以 "
+        "`<PropertyList :items>` 承接侧栏属性；"
+        f"{rel_publish} 未传 variant，发布预览保持 card 行为"
+    )
+
+
 # 追加到既有 50 项之后（C-AVATAR-API@1 修订：ok() 统一响应包装）
 CHECKS = CHECKS + (
     (
         "51 C-AVATAR-API@1 头像写入走 ok() 统一响应包装",
         lambda: check_avatar_api_wrapper("app/routers/auth.py", BACKEND_DIR),
+    ),
+)
+
+
+# 追加到既有 51 项之后（v1-ui-detail-refine 五条结构契约）
+CHECKS = CHECKS + (
+    (
+        "52 C-TOKEN-V2@1 详情令牌双主题齐备 + 标签字号 + 既有令牌不回归",
+        lambda: check_token_v2("styles/theme.css", "styles/typography.css", SRC_DIR),
+    ),
+    (
+        "53 C-DETAIL-HEADER@1 props/slots/类名与移动端操作行",
+        lambda: check_detail_header("components/detail/DetailHeader.vue", SRC_DIR),
+    ),
+    (
+        "54 C-PROPERTY-LIST@1 PropertyItem + label/value dl 结构",
+        lambda: check_property_list("components/detail/PropertyList.vue", SRC_DIR),
+    ),
+    (
+        "55 C-TASK-GROUPS@1 分组常量顺序 + taskGroupOf 映射 + aria",
+        lambda: check_task_groups("components/task/TaskGroupList.vue", SRC_DIR),
+    ),
+    (
+        "56 C-DETAIL-LAYOUT@1 两页 detail-grid 双栏 + 1080px 断点",
+        lambda: check_detail_layout(
+            "views/ActivityDetail.vue", "views/TaskDetail.vue", SRC_DIR
+        ),
+    ),
+    (
+        "57 C-ACTIVITY-FACTS@1 详情 facts 复用 + 发布预览保持 card",
+        lambda: check_activity_facts(
+            "components/activity/ActivityInfoSection.vue",
+            "views/ActivityDetail.vue",
+            "views/TaskDetail.vue",
+            "views/PublishActivityPage.vue",
+            SRC_DIR,
+        ),
     ),
 )
 

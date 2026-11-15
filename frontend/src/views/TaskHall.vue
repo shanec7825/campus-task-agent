@@ -415,7 +415,7 @@ watch(activeType, (next) => {
 
 function dateText(value: string | null): string {
   if (!value) return '未设置'
-  return value.length > 16 ? value.slice(0, 16) : value
+  return value.slice(0, 16).replace('T', ' ')
 }
 
 onMounted(async () => {
@@ -702,6 +702,8 @@ onBeforeUnmount(() => {
 .hall-results__list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* 所有卡片等高：同列表内不因标题/元信息长短出现高度差（R-06） */
+  grid-auto-rows: 1fr;
   gap: var(--app-space-4);
   align-items: stretch;
 }
@@ -740,7 +742,9 @@ onBeforeUnmount(() => {
 }
 
 .peek-item {
+
   height: 100%;
+  min-width: 0;
 }
 
 .filter-mobile-row {
