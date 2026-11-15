@@ -4,7 +4,7 @@
 > **stage40（S1 活动 + 多任务整批原子发布）已完成并推送 `54bc81e`**，CI `43594367179` success。
 > **stage43（V1 S5 预审正文/成果归档/AI 任务树草案）已提交 `41fe2ac`**，CI `43600000028` success；同时修复 stage42 CI 失败（表基线 24→26）。
 > **stage44（UI 壳层改版、Library 收敛与 AI 上下文）已提交 `85805ed` 并推送**，CI `43707123572` success；契约 **51/51**、`vue-tsc` 0 error、`vite build` 成功、`test_v1_avatar.py` **12 passed**。
-> **stage45（详情页信息架构与视觉一致性）已完成并仅本地落盘（未提交）**：统一图标 1.6 线宽与 14/16/20/24 尺寸、详情页 1200px + 1fr/304px 双栏、活动详情「摘要+3 指标+分组任务+属性侧栏」、任务详情「头部+属性侧栏+分区主区」、卡片等高；契约 **57/57**、`vue-tsc` EXIT=0、`npm run build` EXIT=0；独立审查 0 Critical/5 Important 全部修复，6 条 Suggestion 未处置。浏览器验收已完成：1440 活动/任务详情 `840px 304px`、390×844 单列 `343.2px`、两档横向溢出 **0**、按钮 44px，5 张截图在 `codearts_proof/screenshots/stage45/`；验收中修 4 项（全站时间去 `T`、组织名回退、未分配头像、`0/0` 子任务噪音）。计划 `.codeartsdoer/plans/v1-ui-detail-refine/`（本地忽略）。
+> **stage45（详情页信息架构与视觉一致性）已提交 `112b2d2` 并推送**，CI `43710430072` 四 job success：统一图标 1.6 线宽与 14/16/20/24 尺寸、详情页 1200px + 1fr/304px 双栏、活动详情「摘要+3 指标+分组任务+属性侧栏」、任务详情「头部+属性侧栏+分区主区」、卡片等高；契约 **57/57**、`vue-tsc` EXIT=0、`npm run build` EXIT=0；独立审查 0 Critical/5 Important 全部修复，6 条 Suggestion 未处置。浏览器验收已完成：1440 活动/任务详情 `840px 304px`、390×844 单列 `343.2px`、两档横向溢出 **0**、按钮 44px，5 张截图在 `codearts_proof/screenshots/stage45/`；验收中修 4 项（全站时间去 `T`、组织名回退、未分配头像、`0/0` 子任务噪音）。计划 `.codeartsdoer/plans/v1-ui-detail-refine/`（本地忽略）。
 > **S6 部署验收：本机生产形态 14/14 通过**（[报告](../codearts_proof/reports/v1-deploy-acceptance.md)）；远程部署未做（无目标与凭据）。
 > stage42（S3+S4）已推送 `504f1a5`，其 CI `43598431620` 曾失败，已由 `41fe2ac` 修复；S1 `54bc81e`、S2 `1584e9d` CI success。
 > 上一轮已完成 AIW-14 r1/r2/r4、AIW-09 历史增量、AIW-10 文件与预审、AIW-12 额度并发、AIW-13 收口，提交 `15e7e48`，CI `43592712459` 四 job success；未部署。
@@ -15,7 +15,7 @@
 
 ## 1. 当前事实与授权
 
-- 分支 `main`，HEAD `85805ed`；stage45 的 24 个代码修改（含验收后 18 个时间格式化文件）+ 3 个新增组件（`frontend/src/components/detail/DetailHeader.vue`、`frontend/src/components/detail/PropertyList.vue`、`frontend/src/components/task/TaskGroupList.vue`）+ 5 张浏览器截图（`codearts_proof/screenshots/stage45/`）+ 2 份阶段文档修改（`codearts_proof/LOG.md`、本文件）+ 2 份新增记录（`codearts_proof/ai_dialogue/stage45_详情页信息架构与视觉一致性.md`、`codearts_proof/prompts/agent_team_启动指令/2026-11-15_stage45_UI详情页优化_用户原文摘录.md`）仍在工作区，**未提交**（需用户针对提交动作单独授权）。上一阶段提交 `85805ed`（stage44，CI `43707123572` success）。
+- 分支 `main`，HEAD `112b2d2`；stage45 已提交并推送，工作区无未提交代码改动（阶段文档在回填提交中更新）。上一阶段提交 `85805ed`（stage44，CI `43707123572` success）。
 - 本轮用户授权：按用户 V1 需求连续推进 S1 → S6，每阶段验证、独立审查、留痕后提交并推送，检查对应 SHA 的 CI；**最后阶段做部署验收**。部署目标（远程主机/本地生产模式）在 S6 开工前确认；不得用旧 CI 结果代替本次。
 - AIW-11 整个取消的决定继续有效；stage40 只按 V1 P0-1 恢复「整批原子发布」，不恢复其自动推荐、业务动作卡等能力。
 - 缺 D-04（文件格式）、D-05（成就规则）、D-06（真机/真实模型）时只挂起直接相关子任务。
